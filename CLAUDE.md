@@ -57,6 +57,19 @@ The gap is not a property of the constant alone — it scales with overshoot, an
 caps how far a single buy can cross the threshold. Tests enforce the SIGN (the pool must
 never open below the curve close); the magnitude is reported, not asserted.
 
+**Measured fee economics** (`npx hardhat run scripts/economics.js`, real trades through
+a real deployment, so fee rounding is included):
+- Blended creator share: **70.12%** at a 50:50 buy/sell mix, 74.11% at 60:40, 78.56% at
+  70:30. The blend is the honest headline number.
+- Protocol revenue needs **2.34x** the volume under the new model to match the old
+  (0.5 USDC + 90/50 vs 5 USDC + symmetric 30%). Flat across $10k/$100k/$1M, because both
+  models are linear in volume once the launch fee is amortised.
+- A creator on a $100k-lifetime-volume token earns **$704** at 50:50, **$784** at 70:30.
+- A lifetime mix below 50:50 buy is **structurally impossible** — every token sold must
+  have been bought first, so cumulative sell volume can never exceed buy volume.
+- Buy-heavy tokens **graduate before accumulating volume**: at 70:30 the curve hit its
+  67,000 threshold at ~$161k lifetime volume and stopped earning.
+
 Recent changes, all tested:
 - Renamed to `Ballista`
 - Graduation threshold 67,000 USDC (was 69,000)
@@ -76,12 +89,21 @@ Recent changes, all tested:
   state it cannot leave: a curve at `GRADUATION_READY` has buy and sell both closed and
   needs a working router to move on. Accepted consequence: **nothing can launch until a
   router is configured, and no Arc DEX is confirmed yet.**
-- **Creator fee share** — 0.3% of each trade to the token's creator, carved OUT OF the
-  existing 1% fee, never added on top. Treasury keeps 0.7%; trader-facing cost unchanged.
-  Accrue-and-claim via `claimCreatorFees()`, never pushed inside a trade: a creator
-  address that cannot receive USDC (Circle blocklist) would otherwise brick every trade
-  on that token permanently. Keyed by creator, not per-token; per-token attribution
-  lives in `CreatorFeeAccrued`. Rate snapshotted per token and in the economics hash.
+- **Creator fee share, asymmetric** — `creatorBuyFeeBps` 90 and `creatorSellFeeBps` 50:
+  90% of the fee on a buy, 50% on a sell, carved OUT OF the existing 1% fee, never added
+  on top. Trader-facing cost is unchanged; the treasury's share is what shrinks.
+  **Blends to 70% creator over a 50:50 mix** (measured 70.12%), 74% at 60:40, 78% at
+  70:30. Accrue-and-claim via `claimCreatorFees()`, never pushed inside a trade: a
+  creator address that cannot receive USDC (Circle blocklist) would otherwise brick
+  every trade on that token permanently. Keyed by creator, not per-token; per-token
+  attribution lives in `CreatorFeeAccrued`. Both rates snapshotted per token and in the
+  economics hash, so the defaults can move without changing the deal for anyone already
+  launched — which is the point, since 90/50 is a launch promotion.
+- **Launch fee 0.5 USDC** (was 5). Every competitor is at or near free. Not 0.1:
+  `createToken` costs ~0.02 USDC of gas, so at 0.1 the fee barely clears cost and one
+  cooldown-limited wallet could push 8,640 launches/day for ~$1,027. At 0.5 that same
+  wallet pays ~$4,483/day. Noxa earned $12M in fees and still had to stop accepting
+  launches because the feed became unnavigable.
 - **Decaying snipe tax** — buy-side only, decaying to zero over ~5s. Lookup table indexed
   by whole seconds, published as immutable **versions**; a token snapshots only its
   version number, so tables can be retuned without touching live tokens. The table's
@@ -128,6 +150,13 @@ Recent changes, all tested:
 6. Frontend. Needs `tokens.state` (indexer migration 001) to distinguish "still trading"
    from "awaiting graduation" from "graduated" — the old boolean cannot.
 7. ~~P1 (only if the date is safe): decaying snipe tax, creator fee share~~ **Both landed.**
+8. **Redeploy to Arc Testnet.** The deployment at
+   `0x874C80220d7d21ada3c5137335FBFF895F4b1858` predates the fee revision (it carries
+   the 5 USDC launch fee and the symmetric 30% creator share). Superseded, not broken.
+9. **Post-graduation fee capture** via a V3/V4 locker. Probably where the long-term
+   revenue is: measured below, a buy-heavy token graduates at ~$161k of lifetime volume
+   and the curve stops earning entirely after that. Blocked on confirming which Uniswap
+   version Arc actually gets — reporting says v4, no primary source. Separate job.
 
 ---
 
@@ -194,6 +223,12 @@ Recent changes, all tested:
   invented ABI params, wrong decimals, or fabricated functions. Verify against
   actual source before trusting it.
 - Be direct. If an idea is bad, say so and say why. Don't soften it.
+- **Never market the creator split as "90/10".** The blended rate is 70%. Both splits are
+  readable on a verified contract in thirty seconds, and the honest claims — "70% to
+  creators, matching the market leader" and "90% on every buy" — are both true and both
+  market-leading, so there is nothing to gain from the false one. Our whole position is
+  being the launchpad that doesn't misrepresent itself. Push back if I drift toward the
+  90/10 framing later.
 
 ## Stack
 
