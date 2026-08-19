@@ -1,7 +1,21 @@
 # Arc Launch — indexer
 
-Watches `TokenCreated`, `Trade`, and `Graduated` events from the deployed
-`ArcLaunchFactory` contract and keeps the Supabase `tokens`/`trades` tables in sync.
+Watches `TokenCreated`, `Trade`, `GraduationReady`, and `Graduated` events from the
+deployed `Ballista` contract (formerly `ArcLaunchFactory`) and keeps the Supabase
+`tokens`/`trades` tables in sync.
+
+## Migrations
+
+`migrations/` holds schema changes, applied in filename order. Run them against
+Supabase yourself before starting the indexer against a new contract version --
+nothing here applies them automatically.
+
+- `001_add_token_state.sql` — adds `tokens.state`, required by any build that
+  indexes Ballista. Ballista replaced the `graduated` bool with a three-state enum,
+  and a token that has finished its curve but not yet reached a DEX has no correct
+  boolean value. Without this column that state renders as an ordinary tradeable
+  token and users hit an unexplained revert. The old boolean is kept and kept in
+  sync by a trigger, so existing readers keep working.
 
 ## What's verified vs. what isn't
 

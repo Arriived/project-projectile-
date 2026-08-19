@@ -8,8 +8,8 @@ const { getLastProcessedBlock, saveCheckpoint } = require("./recovery");
 // Curve.state values, mirrored from Ballista.sol's CurveState enum. This replaced the
 // old `graduated` bool: a curve that has crossed its threshold but not yet completed
 // the DEX hand-off sits in GRADUATION_READY, which is neither "still trading" nor
-// "graduated". The tokens.graduated column is boolean, so GRADUATION_READY currently
-// collapses to false — see isGraduated() below.
+// "graduated". The boolean tokens.graduated column cannot express that middle state,
+// so tokens.state carries it instead — see stateLabel() and migrations/001.
 const CurveState = Object.freeze({
   ACTIVE: 0,
   GRADUATION_READY: 1,
@@ -21,6 +21,26 @@ const CurveState = Object.freeze({
 // holders at a pool that does not exist.
 function isGraduated(curve) {
   return Number(curve.state) === CurveState.GRADUATED;
+}
+
+// The tokens.state column, which unlike the boolean can express the middle state.
+// See migrations/001_add_token_state.sql.
+const STATE_LABEL = Object.freeze({
+  [CurveState.ACTIVE]: "trading",
+  [CurveState.GRADUATION_READY]: "awaiting_graduation",
+  [CurveState.GRADUATED]: "graduated",
+});
+
+function stateLabel(curve) {
+  const label = STATE_LABEL[Number(curve.state)];
+  if (!label) {
+    // A state the contract has but this indexer doesn't know about. Refuse to
+    // invent a label -- the column is nullable precisely so "unknown" is
+    // representable rather than being rounded to the nearest wrong answer.
+    console.warn(`[warn] unrecognized curve state ${curve.state}; leaving state null`);
+    return null;
+  }
+  return label;
 }
 
 const {
@@ -134,6 +154,7 @@ async function upsertTokenFromChain(tokenAddress) {
       virtual_usdc_reserves: curve.virtualUsdcReserves.toString(),
       virtual_token_reserves: curve.virtualTokenReserves.toString(),
       graduated: isGraduated(curve),
+      state: stateLabel(curve),
     },
     { onConflict: "contract_address" }
   );
@@ -150,6 +171,7 @@ async function updateReservesFromChain(tokenAddress) {
       virtual_usdc_reserves: curve.virtualUsdcReserves.toString(),
       virtual_token_reserves: curve.virtualTokenReserves.toString(),
       graduated: isGraduated(curve),
+      state: stateLabel(curve),
     })
     .eq("contract_address", tokenAddress);
   if (error) throw error;
@@ -201,16 +223,32 @@ async function handleGraduated(log) {
   const tokenAddress = log.args.token;
   const { error } = await supabase
     .from("tokens")
-    .update({ graduated: true, graduated_at: new Date().toISOString() })
+    .update({ graduated: true, state: "graduated", graduated_at: new Date().toISOString() })
     .eq("contract_address", tokenAddress);
   if (error) throw error;
   console.log(`[Graduated] ${tokenAddress}`);
+}
+
+// The curve finished but the DEX hand-off has not completed. Trading is closed in
+// this state, so surfacing it is the whole point of the state column: without it the
+// UI shows a normal buyable token and the user discovers otherwise via a revert.
+async function handleGraduationReady(log) {
+  const tokenAddress = log.args.token;
+  const { error } = await supabase
+    .from("tokens")
+    // Deliberately does not touch `graduated` -- the token is not on a DEX yet. The
+    // migration's trigger keeps the boolean correct regardless.
+    .update({ state: "awaiting_graduation" })
+    .eq("contract_address", tokenAddress);
+  if (error) throw error;
+  console.log(`[GraduationReady] ${tokenAddress}`);
 }
 
 async function dispatchEvent(log) {
   if (log.eventName === "TokenCreated") await handleTokenCreated(log);
   else if (log.eventName === "Trade") await handleTrade(log);
   else if (log.eventName === "Graduated") await handleGraduated(log);
+  else if (log.eventName === "GraduationReady") await handleGraduationReady(log);
 }
 
 // ── Historical catch-up ─────────────────────────────────────────────────
