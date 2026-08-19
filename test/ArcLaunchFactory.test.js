@@ -1,33 +1,29 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
-const fs = require("fs");
-const path = require("path");
 
 const USDC = (n) => ethers.parseUnits(n.toString(), 6);
 const TOKENS = (n) => ethers.parseUnits(n.toString(), 18);
 const ZERO = "0x0000000000000000000000000000000000000000";
-const BURN = "0x000000000000000000000000000000000000dEaD";
 
-function loadArtifact(name) {
-  const p = path.join(__dirname, "..", "artifacts-manual", name + ".json");
-  return JSON.parse(fs.readFileSync(p, "utf8"));
-}
+// Curve.state enum, mirrored from Ballista.sol.
+const GRADUATION_READY = 1n;
+const GRADUATED = 2n;
 
-async function deployByName(name, signer, ...args) {
-  const { abi, bytecode } = loadArtifact(name);
-  const factory = new ethers.ContractFactory(abi, bytecode, signer);
-  const contract = await factory.deploy(...args);
-  await contract.waitForDeployment();
-  return contract;
-}
-
+// Originally this suite loaded hand-built bytecode out of artifacts-manual/ via a
+// local loadArtifact() helper. That directory is a frozen snapshot, so the suite
+// silently kept testing July's ArcLaunchFactory no matter what contracts/ said.
+// Everything now goes through hardhat's own compiled output, which is what makes
+// these tests actually exercise Ballista.sol.
 async function deployFixture() {
   const [owner, treasury, alice, bob] = await ethers.getSigners();
 
-  const usdc = await deployByName("MockUSDC", owner);
-  const factory = await deployByName("ArcLaunchFactory", owner, await usdc.getAddress(), treasury.address);
-  const router = await deployByName("MockRouter", owner);
-  const brokenRouter = await deployByName("MockBrokenRouter", owner);
+  const usdc = await (await ethers.getContractFactory("MockUSDC")).deploy();
+  const factory = await (await ethers.getContractFactory("Ballista")).deploy(
+    await usdc.getAddress(),
+    treasury.address
+  );
+  const router = await (await ethers.getContractFactory("MockRouter")).deploy();
+  const brokenRouter = await (await ethers.getContractFactory("MockBrokenRouter")).deploy();
 
   // Fund alice and bob generously, approve the factory.
   for (const wallet of [alice, bob]) {
@@ -38,86 +34,113 @@ async function deployFixture() {
   return { owner, treasury, alice, bob, usdc, factory, router, brokenRouter };
 }
 
-describe("ArcLaunchFactory", function () {
+// createToken() now pins the economics the creator agreed to. The hash has to be read
+// immediately before the call, or an unrelated admin change lands in between and the
+// create reverts.
+async function createToken(factory, creator, name, symbol, uri = "uri") {
+  return factory
+    .connect(creator)
+    .createToken(name, symbol, uri, await factory.currentEconomicsHash());
+}
+
+describe("Ballista — original ArcLaunchFactory suite", function () {
   describe("createToken", function () {
     it("mints the full fixed supply to the factory, not the creator", async function () {
-      const { factory, alice, usdc } = await deployFixture();
-      const tx = await factory.connect(alice).createToken("Test Cat", "CAT", "ipfs://meta");
-      const receipt = await tx.wait();
+      const { factory, alice } = await deployFixture();
+      const receipt = await (
+        await createToken(factory, alice, "Test Cat", "CAT", "ipfs://meta")
+      ).wait();
       const event = receipt.logs
-        .map((l) => { try { return factory.interface.parseLog(l); } catch { return null; } })
+        .map((l) => {
+          try {
+            return factory.interface.parseLog(l);
+          } catch {
+            return null;
+          }
+        })
         .find((l) => l && l.name === "TokenCreated");
       const tokenAddr = event.args.token;
 
-      const token = new ethers.Contract(tokenAddr, loadArtifact("ArcLaunchToken").abi, alice);
+      const token = await ethers.getContractAt("ArcLaunchToken", tokenAddr);
       expect(await token.balanceOf(await factory.getAddress())).to.equal(TOKENS(1_000_000_000));
       expect(await token.balanceOf(alice.address)).to.equal(0n);
       expect(await token.creator()).to.equal(alice.address);
     });
 
     it("has no mint function reachable from outside the constructor", async function () {
-      const { factory, alice } = await deployFixture();
-      await factory.connect(alice).createToken("Test Cat", "CAT", "ipfs://meta");
-      const abi = loadArtifact("ArcLaunchToken").abi;
-      const hasMint = abi.some((f) => f.type === "function" && f.name === "mint");
+      const token = await ethers.getContractFactory("ArcLaunchToken");
+      const hasMint = token.interface.fragments.some(
+        (f) => f.type === "function" && f.name === "mint"
+      );
       expect(hasMint).to.equal(false);
     });
 
     it("enforces the per-wallet launch cooldown", async function () {
       const { factory, alice } = await deployFixture();
-      await factory.connect(alice).createToken("First", "FIRST", "uri");
-      await expect(
-        factory.connect(alice).createToken("Second", "SECOND", "uri")
-      ).to.be.revertedWith("cooldown: wait before launching again");
+      await createToken(factory, alice, "First", "FIRST");
+      await expect(createToken(factory, alice, "Second", "SECOND")).to.be.revertedWith(
+        "cooldown: wait before launching again"
+      );
     });
 
     it("allows a new launch after the cooldown elapses", async function () {
       const { factory, alice } = await deployFixture();
-      await factory.connect(alice).createToken("First", "FIRST", "uri");
+      await createToken(factory, alice, "First", "FIRST");
       await ethers.provider.send("evm_increaseTime", [3600]);
       await ethers.provider.send("evm_mine");
-      await expect(factory.connect(alice).createToken("Second", "SECOND", "uri")).to.not.be.reverted;
+      await expect(createToken(factory, alice, "Second", "SECOND")).to.not.be.reverted;
     });
 
     it("blocks exact-duplicate symbols", async function () {
       const { factory, alice, bob } = await deployFixture();
-      await factory.connect(alice).createToken("First", "DUPE", "uri");
-      await expect(
-        factory.connect(bob).createToken("Copycat", "DUPE", "uri")
-      ).to.be.revertedWith("symbol already launched");
+      await createToken(factory, alice, "First", "DUPE");
+      await expect(createToken(factory, bob, "Copycat", "DUPE")).to.be.revertedWith(
+        "symbol locked: still within another launch's protection window"
+      );
     });
 
-    it("blocks case-variant duplicate symbols (CAT vs cat)", async function () {
-      const { factory, alice, bob } = await deployFixture();
-      await factory.connect(alice).createToken("First", "CAT", "uri");
-      await expect(
-        factory.connect(bob).createToken("Copycat", "cat", "uri")
-      ).to.be.revertedWith("symbol already launched");
+    // The old suite asserted CAT/cat always collide. Ballista ships lenient by design
+    // (caseSensitiveSymbols = true), so both variants launching is now correct
+    // behavior, and the collision is what the tightened mode buys you. Both halves are
+    // asserted here so the toggle cannot silently flip without a test noticing.
+    it("treats case-variant symbols per the caseSensitiveSymbols toggle", async function () {
+      const lenient = await deployFixture();
+      expect(await lenient.factory.caseSensitiveSymbols()).to.equal(true);
+      await createToken(lenient.factory, lenient.alice, "First", "CAT");
+      await expect(createToken(lenient.factory, lenient.bob, "Copycat", "cat")).to.not.be
+        .reverted;
+
+      const strict = await deployFixture();
+      await strict.factory.connect(strict.owner).setCaseSensitiveSymbols(false);
+      await createToken(strict.factory, strict.alice, "First", "CAT");
+      await expect(createToken(strict.factory, strict.bob, "Copycat", "cat")).to.be.revertedWith(
+        "symbol locked: still within another launch's protection window"
+      );
     });
 
     it("charges the creation fee to treasury", async function () {
       const { factory, alice, treasury, usdc } = await deployFixture();
       const before = await usdc.balanceOf(treasury.address);
-      await factory.connect(alice).createToken("First", "CAT", "uri");
+      await createToken(factory, alice, "First", "CAT");
       const after = await usdc.balanceOf(treasury.address);
       expect(after - before).to.equal(USDC(5));
     });
 
     it("snapshots the current default fees/threshold into the new curve", async function () {
       const { factory, alice } = await deployFixture();
-      await factory.connect(alice).createToken("First", "CAT", "uri");
+      await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
       const curve = await factory.curves(tokenAddr);
       expect(curve.buyFeeBps).to.equal(100);
       expect(curve.sellFeeBps).to.equal(100);
-      expect(curve.graduationThresholdUsdc).to.equal(USDC(69_000));
+      expect(curve.graduationThresholdUsdc).to.equal(USDC(67_000));
     });
   });
 
   describe("fee changes do not retroactively affect live tokens", function () {
     it("a token launched before a fee change keeps its original fee", async function () {
       const { factory, alice, bob, owner, usdc, treasury } = await deployFixture();
-      await factory.connect(alice).createToken("First", "CAT", "uri");
+      await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
 
       // Owner cranks the default fee up for future launches.
@@ -128,8 +151,7 @@ describe("ArcLaunchFactory", function () {
       const treasuryBefore = await usdc.balanceOf(treasury.address);
       await factory.connect(bob).buy(tokenAddr, USDC(1000), 0);
       const treasuryAfter = await usdc.balanceOf(treasury.address);
-      const feeCharged = treasuryAfter - treasuryBefore;
-      expect(feeCharged).to.equal(USDC(10)); // 1% of 1000, not 9%
+      expect(treasuryAfter - treasuryBefore).to.equal(USDC(10)); // 1% of 1000, not 9%
     });
   });
 
@@ -150,7 +172,7 @@ describe("ArcLaunchFactory", function () {
   describe("buy / sell math", function () {
     it("price increases as more is bought", async function () {
       const { factory, alice, bob } = await deployFixture();
-      await factory.connect(alice).createToken("First", "CAT", "uri");
+      await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
 
       const priceBefore = await factory.currentPrice(tokenAddr);
@@ -161,9 +183,9 @@ describe("ArcLaunchFactory", function () {
 
     it("does not let a trader extract more value than they put in via rounding (buy then sell)", async function () {
       const { factory, alice, bob, usdc } = await deployFixture();
-      await factory.connect(alice).createToken("First", "CAT", "uri");
+      await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
-      const token = new ethers.Contract(tokenAddr, loadArtifact("ArcLaunchToken").abi, bob);
+      const token = await ethers.getContractAt("ArcLaunchToken", tokenAddr);
 
       const startBalance = await usdc.balanceOf(bob.address);
       await factory.connect(bob).buy(tokenAddr, USDC(1000), 0);
@@ -180,7 +202,7 @@ describe("ArcLaunchFactory", function () {
 
     it("enforces slippage protection on buy", async function () {
       const { factory, alice, bob } = await deployFixture();
-      await factory.connect(alice).createToken("First", "CAT", "uri");
+      await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
       await expect(
         factory.connect(bob).buy(tokenAddr, USDC(1000), TOKENS(999_999_999))
@@ -191,11 +213,11 @@ describe("ArcLaunchFactory", function () {
   describe("pause", function () {
     it("blocks createToken, buy, and sell while paused", async function () {
       const { factory, owner, alice, bob } = await deployFixture();
-      await factory.connect(alice).createToken("First", "CAT", "uri");
+      await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
 
       await factory.connect(owner).pause();
-      await expect(factory.connect(bob).createToken("X", "X", "uri")).to.be.reverted;
+      await expect(createToken(factory, bob, "X", "X")).to.be.reverted;
       await expect(factory.connect(bob).buy(tokenAddr, USDC(100), 0)).to.be.reverted;
 
       await factory.connect(owner).unpause();
@@ -207,36 +229,50 @@ describe("ArcLaunchFactory", function () {
     it("graduates once the threshold is crossed and disables further curve trading", async function () {
       const { factory, owner, alice, bob, router } = await deployFixture();
       await factory.connect(owner).setRouter(await router.getAddress());
-      await factory.connect(alice).createToken("First", "CAT", "uri");
+      await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
 
-      // Buy enough to blow past the 69,000 USDC threshold in one shot.
+      // Buy enough to blow past the 67,000 USDC threshold in one shot.
       await factory.connect(bob).buy(tokenAddr, USDC(75_000), 0);
 
       const curve = await factory.curves(tokenAddr);
-      expect(curve.graduated).to.equal(true);
+      expect(curve.state).to.equal(GRADUATED);
 
       await expect(factory.connect(bob).buy(tokenAddr, USDC(100), 0)).to.be.revertedWith(
-        "already graduated: trade on the DEX"
+        "curve not open for trading: check DEX or wait for graduation"
       );
     });
 
-    it("reverts the whole graduation if the router returns zero liquidity", async function () {
+    // Behavior deliberately changed: graduation is now decoupled, so a router that
+    // returns zero liquidity no longer unwinds the buy that triggered it. The trade
+    // stands, the curve parks in GRADUATION_READY, and graduate() is what reports the
+    // failure — retryably.
+    it("does not unwind the triggering trade when the router returns zero liquidity", async function () {
       const { factory, owner, alice, bob, brokenRouter } = await deployFixture();
       await factory.connect(owner).setRouter(await brokenRouter.getAddress());
-      await factory.connect(alice).createToken("First", "CAT", "uri");
+      await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
 
-      await expect(factory.connect(bob).buy(tokenAddr, USDC(75_000), 0)).to.be.revertedWith(
-        "graduation failed: router returned no liquidity"
+      await expect(factory.connect(bob).buy(tokenAddr, USDC(75_000), 0)).to.not.be.reverted;
+
+      const curve = await factory.curves(tokenAddr);
+      expect(curve.state).to.equal(GRADUATION_READY);
+
+      await expect(factory.graduate(tokenAddr)).to.be.revertedWith(
+        "graduation attempt failed -- check router and liquidity conditions"
       );
     });
 
     it("fails clearly if no router has been set yet", async function () {
       const { factory, alice, bob } = await deployFixture();
-      await factory.connect(alice).createToken("First", "CAT", "uri");
+      await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
-      await expect(factory.connect(bob).buy(tokenAddr, USDC(75_000), 0)).to.be.revertedWith(
+
+      // The buy still lands; only the graduation step is blocked on the missing router.
+      await expect(factory.connect(bob).buy(tokenAddr, USDC(75_000), 0)).to.not.be.reverted;
+      expect((await factory.curves(tokenAddr)).state).to.equal(GRADUATION_READY);
+
+      await expect(factory.graduate(tokenAddr)).to.be.revertedWith(
         "router not set: no confirmed Arc DEX yet"
       );
     });
@@ -244,9 +280,8 @@ describe("ArcLaunchFactory", function () {
 
   describe("constructor validation", function () {
     it("rejects zero addresses", async function () {
-      const [owner, treasury] = await ethers.getSigners();
-      const { abi, bytecode } = loadArtifact("ArcLaunchFactory");
-      const Factory = new ethers.ContractFactory(abi, bytecode, owner);
+      const [, treasury] = await ethers.getSigners();
+      const Factory = await ethers.getContractFactory("Ballista");
       await expect(Factory.deploy(ZERO, treasury.address)).to.be.reverted;
     });
   });

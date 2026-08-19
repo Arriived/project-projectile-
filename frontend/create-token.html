@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arc Launch — Create a Token</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,620&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<style>
+  :root {
+    --paper: #EEF2EF;
+    --paper-raised: #F7FAF8;
+    --ink: #16241F;
+    --ink-dim: #4B5C54;
+    --rule: #C9D3CD;
+    --seal: #1F6F5C;
+    --seal-dim: #17564A;
+    --brass: #A9793D;
+    --brass-dim: #8A6330;
+    --error: #9C4A3C;
+    --radius: 3px;
+  }
+
+  * { box-sizing: border-box; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--paper);
+    background-image:
+      radial-gradient(circle at 50% 0%, rgba(31,111,92,0.05), transparent 60%),
+      repeating-linear-gradient(0deg, rgba(22,36,31,0.02) 0px, rgba(22,36,31,0.02) 1px, transparent 1px, transparent 3px);
+    color: var(--ink);
+    font-family: 'IBM Plex Sans', sans-serif;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 48px 20px 80px;
+  }
+
+  .wrap { width: 100%; max-width: 560px; }
+
+  .wordmark {
+    text-align: center;
+    margin-bottom: 8px;
+  }
+  .wordmark .mark {
+    font-family: 'Fraunces', serif;
+    font-weight: 620;
+    font-size: 34px;
+    letter-spacing: -0.01em;
+  }
+  .wordmark .mark .dot { color: var(--seal); }
+  .tagline {
+    text-align: center;
+    color: var(--ink-dim);
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 36px;
+  }
+
+  .certificate {
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 40px 40px 32px;
+    position: relative;
+    box-shadow: 0 1px 0 rgba(22,36,31,0.03), 0 12px 32px -20px rgba(22,36,31,0.25);
+  }
+  .certificate::before {
+    content: "";
+    position: absolute;
+    inset: 10px;
+    border: 1px solid rgba(22,36,31,0.08);
+    border-radius: 2px;
+    pointer-events: none;
+  }
+
+  .cert-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 16px;
+    margin-bottom: 28px;
+  }
+  .cert-header h1 {
+    font-family: 'Fraunces', serif;
+    font-weight: 620;
+    font-size: 21px;
+    margin: 0;
+  }
+  .cert-id {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--ink-dim);
+    letter-spacing: 0.03em;
+  }
+
+  fieldset { border: none; padding: 0; margin: 0 0 22px; }
+  label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-dim);
+    margin-bottom: 8px;
+  }
+  .field-hint {
+    font-size: 12px;
+    color: var(--ink-dim);
+    margin-top: 6px;
+    line-height: 1.5;
+  }
+  input[type="text"], textarea {
+    width: 100%;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-size: 15px;
+    color: var(--ink);
+  }
+  input[type="text"]:focus-visible, textarea:focus-visible, button:focus-visible {
+    outline: 2px solid var(--seal);
+    outline-offset: 2px;
+  }
+  textarea { resize: vertical; min-height: 72px; font-size: 14px; }
+  input.symbol-input { font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.04em; text-transform: uppercase; }
+
+  .row { display: flex; gap: 16px; }
+  .row > div { flex: 1; }
+
+  .status-line {
+    font-size: 12px;
+    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 16px;
+  }
+  .status-line.ok { color: var(--seal); }
+  .status-line.warn { color: var(--brass-dim); }
+  .status-line.error { color: var(--error); }
+
+  .fee-block {
+    background: var(--paper);
+    border: 1px dashed var(--rule);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    margin-bottom: 24px;
+  }
+  .fee-block .fee-label { color: var(--ink-dim); font-family: 'IBM Plex Sans', sans-serif; font-size: 12px; }
+
+  button {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 600;
+    font-size: 15px;
+    border: none;
+    border-radius: var(--radius);
+    padding: 15px 20px;
+    width: 100%;
+    cursor: pointer;
+    transition: transform 0.08s ease, background 0.15s ease;
+  }
+  button:active { transform: scale(0.995); }
+  button:disabled { cursor: not-allowed; opacity: 0.6; }
+
+  .btn-primary { background: var(--seal); color: #F7FAF8; }
+  .btn-primary:hover:not(:disabled) { background: var(--seal-dim); }
+  .btn-secondary { background: var(--ink); color: var(--paper-raised); }
+  .btn-secondary:hover:not(:disabled) { background: #24352C; }
+
+  .connected-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--ink-dim);
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .connected-bar .addr { color: var(--ink); }
+  .connected-bar .balance { color: var(--seal); }
+
+  /* Seal */
+  .seal-stage {
+    display: none;
+    text-align: center;
+    padding: 12px 0 4px;
+  }
+  .seal-stage.active { display: block; }
+  .seal {
+    width: 96px;
+    height: 96px;
+    margin: 0 auto 18px;
+    opacity: 0;
+    transform: scale(1.6) rotate(-18deg);
+  }
+  .seal.stamped {
+    animation: stamp-down 0.42s cubic-bezier(.2,.8,.3,1.1) forwards;
+  }
+  @keyframes stamp-down {
+    0% { opacity: 0; transform: scale(1.7) rotate(-18deg); }
+    55% { opacity: 1; transform: scale(0.92) rotate(-2deg); }
+    75% { transform: scale(1.04) rotate(1deg); }
+    100% { opacity: 1; transform: scale(1) rotate(0deg); }
+  }
+  .seal-result-title {
+    font-family: 'Fraunces', serif;
+    font-weight: 620;
+    font-size: 19px;
+    margin: 0 0 6px;
+  }
+  .token-addr-box {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    margin: 16px 0;
+    word-break: break-all;
+  }
+  .explorer-link {
+    display: inline-block;
+    margin-top: 4px;
+    color: var(--seal);
+    font-size: 13px;
+    text-decoration: none;
+    border-bottom: 1px solid var(--seal);
+  }
+  .explorer-link:hover { color: var(--seal-dim); border-color: var(--seal-dim); }
+
+  .footnote {
+    text-align: center;
+    font-size: 11.5px;
+    color: var(--ink-dim);
+    margin-top: 20px;
+    line-height: 1.6;
+  }
+  .footnote a { color: var(--ink-dim); }
+
+  .spinner {
+    width: 13px; height: 13px;
+    border: 2px solid rgba(22,36,31,0.2);
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <div class="wordmark"><span class="mark">Arc Launch<span class="dot">.</span></span></div>
+  <div class="tagline">A record of creation on Arc Testnet</div>
+
+  <div class="certificate">
+
+    <div id="connectedBar" class="connected-bar" style="display:none;">
+      <span>Connected: <span class="addr" id="walletAddr">—</span></span>
+      <span class="balance" id="walletBalance">—</span>
+    </div>
+
+    <div id="preConnect">
+      <div class="cert-header">
+        <h1>Create a token</h1>
+        <span class="cert-id">ARC · TESTNET</span>
+      </div>
+      <p style="color:var(--ink-dim); font-size:14px; line-height:1.6; margin-top:0;">
+        Connect a wallet to launch a token on Arc Testnet. Fixed supply, no team allocation,
+        no admin mint function — the same terms every launch on this contract gets.
+      </p>
+      <button class="btn-secondary" id="connectBtn">Connect wallet</button>
+      <div class="status-line" id="connectStatus"></div>
+    </div>
+
+    <div id="formSection" style="display:none;">
+      <div class="cert-header">
+        <h1>Create a token</h1>
+        <span class="cert-id">ARC · TESTNET</span>
+      </div>
+
+      <fieldset>
+        <label for="tokenName">Token name</label>
+        <input type="text" id="tokenName" maxlength="50" placeholder="e.g. Founders Reserve" autocomplete="off">
+      </fieldset>
+
+      <fieldset>
+        <label for="tokenSymbol">Ticker symbol</label>
+        <input type="text" id="tokenSymbol" class="symbol-input" maxlength="10" placeholder="e.g. FNDR" autocomplete="off">
+        <div class="status-line" id="symbolStatus"></div>
+      </fieldset>
+
+      <fieldset>
+        <label for="tokenDesc">Description <span style="text-transform:none; font-weight:400;">(optional)</span></label>
+        <textarea id="tokenDesc" maxlength="500" placeholder="What is this token for?"></textarea>
+      </fieldset>
+
+      <div class="fee-block">
+        <span class="fee-label">Creation fee</span>
+        <span id="feeAmount">loading…</span>
+      </div>
+
+      <div class="status-line" id="cooldownStatus"></div>
+      <button class="btn-primary" id="createBtn" disabled>Connect wallet to continue</button>
+      <div class="status-line" id="createStatus"></div>
+    </div>
+
+    <div id="sealStage" class="seal-stage">
+      <div class="seal" id="sealSvg">
+        <svg viewBox="0 0 100 100" width="96" height="96" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="50" cy="50" r="46" fill="none" stroke="#A9793D" stroke-width="2.5"/>
+          <circle cx="50" cy="50" r="38" fill="none" stroke="#A9793D" stroke-width="1"/>
+          <path id="sealRingText" d="M 50 12 A 38 38 0 1 1 49.9 12" fill="none"/>
+          <text font-family="IBM Plex Mono, monospace" font-size="7.2" letter-spacing="2.5" fill="#A9793D">
+            <textPath href="#sealRingText" startOffset="2">· ARC LAUNCH · CREATED ON-CHAIN ·</textPath>
+          </text>
+          <text x="50" y="57" text-anchor="middle" font-family="Fraunces, serif" font-weight="620" font-size="22" fill="#A9793D">✓</text>
+        </svg>
+      </div>
+      <p class="seal-result-title">Sealed on-chain</p>
+      <p style="color:var(--ink-dim); font-size:13.5px; margin-top:0;">This token now exists permanently on Arc Testnet.</p>
+      <div class="token-addr-box" id="newTokenAddr">—</div>
+      <a href="#" target="_blank" id="explorerLink" class="explorer-link">View on Arc explorer →</a>
+      <div style="margin-top:24px;">
+        <button class="btn-secondary" id="createAnotherBtn">Create another</button>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="footnote">
+    Contract verified on Arc Testnet's explorer — read the source before you trust this page.<br>
+    Requires a browser wallet (MetaMask or similar) and testnet USDC from
+    <a href="https://faucet.circle.com" target="_blank">faucet.circle.com</a>.
+  </p>
+</div>
+
+<script>
+const FACTORY_ADDRESS = "0x63C4c5b7D7add4dbE9Bf8f155711dd00F566Ec57";
+const USDC_ADDRESS = "0x3600000000000000000000000000000000000000";
+const CHAIN_ID_DEC = 5042002;
+const CHAIN_ID_HEX = "0x" + CHAIN_ID_DEC.toString(16);
+const RPC_URL = "https://rpc.testnet.arc.network";
+const EXPLORER_URL = "https://testnet.arcscan.app";
+
+const FACTORY_ABI = [
+  "function createToken(string name, string symbol, string metadataURI) returns (address)",
+  "function creationFeeUsdc() view returns (uint256)",
+  "function launchCooldown() view returns (uint256)",
+  "function lastLaunchTimestamp(address) view returns (uint256)",
+  "function symbolTaken(bytes32) view returns (bool)",
+  "event TokenCreated(address indexed token, address indexed creator, string name, string symbol, string metadataURI)"
+];
+const ERC20_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+  "function approve(address spender, uint256 amount) returns (bool)"
+];
+
+let provider, signer, userAddress, factory, usdc, requiredFee;
+
+const $ = (id) => document.getElementById(id);
+const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+
+function setStatus(el, text, kind) {
+  el.className = "status-line" + (kind ? " " + kind : "");
+  el.innerHTML = text;
+}
+
+// Same RPC endpoint has proven unreliable elsewhere this session (rate limits,
+// batching issues) — retrying transient failures here too rather than leaving the
+// page stuck on a failed read with no way forward.
+async function withRetry(fn, { retries = 3, baseDelayMs = 800 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      await new Promise((r) => setTimeout(r, baseDelayMs * 2 ** attempt));
+    }
+  }
+}
+
+function toUpperSymbolHash(symbol) {
+  return ethers.keccak256(ethers.toUtf8Bytes(symbol.toUpperCase()));
+}
+
+async function ensureArcNetwork() {
+  const currentChainId = await window.ethereum.request({ method: "eth_chainId" });
+  if (currentChainId === CHAIN_ID_HEX) return;
+  try {
+    await window.ethereum.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: CHAIN_ID_HEX }],
+    });
+  } catch (switchError) {
+    if (switchError.code === 4902) {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: CHAIN_ID_HEX,
+          chainName: "Arc Testnet",
+          nativeCurrency: { name: "USDC", symbol: "USDC", decimals: 18 },
+          rpcUrls: [RPC_URL],
+          blockExplorerUrls: [EXPLORER_URL],
+        }],
+      });
+    } else {
+      throw switchError;
+    }
+  }
+}
+
+async function connectWallet() {
+  if (!window.ethereum) {
+    setStatus($("connectStatus"), "No wallet found. Install MetaMask or another browser wallet extension, then reload this page.", "error");
+    return;
+  }
+  setStatus($("connectStatus"), '<span class="spinner"></span> Connecting…', "warn");
+  try {
+    await window.ethereum.request({ method: "eth_requestAccounts" });
+    await ensureArcNetwork();
+
+    provider = new ethers.BrowserProvider(window.ethereum);
+    signer = await provider.getSigner();
+    userAddress = await signer.getAddress();
+    factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer);
+    usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, signer);
+
+    $("preConnect").style.display = "none";
+    $("formSection").style.display = "block";
+    $("connectedBar").style.display = "flex";
+    $("walletAddr").textContent = short(userAddress);
+    $("createBtn").textContent = "Loading contract details…";
+  } catch (err) {
+    setStatus($("connectStatus"), "Connection failed: " + (err.shortMessage || err.message), "error");
+    return;
+  }
+
+  await loadContractDetails();
+}
+
+async function loadContractDetails() {
+  setStatus($("createStatus"), "", "");
+  $("createBtn").disabled = true;
+  $("createBtn").textContent = "Loading contract details…";
+  try {
+    await withRetry(refreshBalance);
+    await withRetry(loadFee);
+    await withRetry(checkCooldown);
+    if (!$("cooldownStatus").textContent) {
+      $("createBtn").disabled = false;
+    }
+    $("createBtn").textContent = "Create token";
+  } catch (err) {
+    const msg = err.shortMessage || err.reason || err.message || "Unknown error";
+    setStatus($("createStatus"),
+      `Couldn't load contract details: ${msg} — this RPC endpoint is occasionally flaky. ` +
+      `<a href="#" id="retryLoadLink">Try again</a>`, "error");
+    $("createBtn").textContent = "Retry above first";
+    $("retryLoadLink").addEventListener("click", (e) => { e.preventDefault(); loadContractDetails(); });
+  }
+}
+
+async function refreshBalance() {
+  const bal = await usdc.balanceOf(userAddress);
+  $("walletBalance").textContent = Number(ethers.formatUnits(bal, 6)).toFixed(2) + " USDC";
+  return bal;
+}
+
+async function loadFee() {
+  requiredFee = await factory.creationFeeUsdc();
+  $("feeAmount").textContent = ethers.formatUnits(requiredFee, 6) + " USDC";
+}
+
+async function checkCooldown() {
+  const [last, cooldown] = await Promise.all([
+    factory.lastLaunchTimestamp(userAddress),
+    factory.launchCooldown(),
+  ]);
+  const readyAt = Number(last) + Number(cooldown);
+  const now = Math.floor(Date.now() / 1000);
+  const remaining = readyAt - now;
+  if (remaining > 0) {
+    const mins = Math.ceil(remaining / 60);
+    setStatus($("cooldownStatus"), `This wallet can launch again in ~${mins} minute${mins === 1 ? "" : "s"}.`, "warn");
+    $("createBtn").disabled = true;
+  } else {
+    setStatus($("cooldownStatus"), "", "");
+  }
+}
+
+let symbolCheckTimer;
+$("tokenSymbol").addEventListener("input", (e) => {
+  e.target.value = e.target.value.toUpperCase();
+  clearTimeout(symbolCheckTimer);
+  const val = e.target.value.trim();
+  if (!val) { setStatus($("symbolStatus"), "", ""); return; }
+  symbolCheckTimer = setTimeout(async () => {
+    if (!factory) return;
+    try {
+      const taken = await factory.symbolTaken(toUpperSymbolHash(val));
+      if (taken) setStatus($("symbolStatus"), "That symbol is already taken on this contract.", "error");
+      else setStatus($("symbolStatus"), "Available.", "ok");
+    } catch { /* not connected yet — silent */ }
+  }, 350);
+});
+
+async function handleCreate() {
+  const name = $("tokenName").value.trim();
+  const symbol = $("tokenSymbol").value.trim();
+  const description = $("tokenDesc").value.trim();
+
+  if (!name || !symbol) {
+    setStatus($("createStatus"), "Name and symbol are both required.", "error");
+    return;
+  }
+
+  const metadataURI = description
+    ? "data:application/json;base64," + btoa(JSON.stringify({ description }))
+    : "";
+
+  $("createBtn").disabled = true;
+
+  try {
+    const balance = await withRetry(() => usdc.balanceOf(userAddress));
+    $("walletBalance").textContent = Number(ethers.formatUnits(balance, 6)).toFixed(2) + " USDC";
+    if (balance < requiredFee) {
+      setStatus($("createStatus"),
+        `Not enough USDC. Need ${ethers.formatUnits(requiredFee, 6)}, have ${ethers.formatUnits(balance, 6)}. ` +
+        `Get testnet USDC from <a href="https://faucet.circle.com" target="_blank">faucet.circle.com</a>.`, "error");
+      $("createBtn").disabled = false;
+      return;
+    }
+
+    const allowance = await withRetry(() => usdc.allowance(userAddress, FACTORY_ADDRESS));
+    if (allowance < requiredFee) {
+      setStatus($("createStatus"), '<span class="spinner"></span> Approving USDC — confirm in your wallet…', "warn");
+      // Safe to retry: approving the same amount twice is harmless even if a first
+      // attempt secretly succeeded before the rate-limited response reached us.
+      const approveTx = await withRetry(() => usdc.approve(FACTORY_ADDRESS, requiredFee));
+      setStatus($("createStatus"), '<span class="spinner"></span> Waiting for approval to confirm…', "warn");
+      // .wait() just resumes polling for the same already-broadcast transaction — safe
+      // to retry, this never resends anything.
+      await withRetry(() => approveTx.wait());
+    }
+
+    setStatus($("createStatus"), '<span class="spinner"></span> Creating token — confirm in your wallet…', "warn");
+    const tx = await withRetry(() => factory.createToken(name, symbol, metadataURI));
+    setStatus($("createStatus"), '<span class="spinner"></span> Waiting for confirmation…', "warn");
+    const receipt = await withRetry(() => tx.wait());
+
+    const event = receipt.logs
+      .map((log) => { try { return factory.interface.parseLog(log); } catch { return null; } })
+      .find((parsed) => parsed && parsed.name === "TokenCreated");
+
+    if (!event) throw new Error("Transaction confirmed, but the creation event wasn't found in the receipt.");
+
+    showSealed(event.args.token);
+  } catch (err) {
+    const msg = err.shortMessage || err.reason || err.message || "Unknown error";
+    setStatus($("createStatus"),
+      msg.includes("cooldown")
+        ? "This wallet is still on cooldown from a recent launch — wait and try again, or check the cooldown timer above."
+        : "Failed: " + msg + " — this RPC endpoint is occasionally flaky; try again if this looks unrelated to your input.",
+      "error");
+    $("createBtn").disabled = false;
+  }
+}
+
+function showSealed(tokenAddress) {
+  $("formSection").style.display = "none";
+  $("sealStage").classList.add("active");
+  $("newTokenAddr").textContent = tokenAddress;
+  $("explorerLink").href = EXPLORER_URL + "/address/" + tokenAddress;
+  requestAnimationFrame(() => $("sealSvg").classList.add("stamped"));
+}
+
+$("createAnotherBtn").addEventListener("click", async () => {
+  $("sealStage").classList.remove("active");
+  $("sealSvg").classList.remove("stamped");
+  $("formSection").style.display = "block";
+  $("tokenName").value = "";
+  $("tokenSymbol").value = "";
+  $("tokenDesc").value = "";
+  setStatus($("createStatus"), "", "");
+  setStatus($("symbolStatus"), "", "");
+  $("createBtn").disabled = false;
+  await refreshBalance();
+  await checkCooldown();
+});
+
+$("connectBtn").addEventListener("click", connectWallet);
+$("createBtn").addEventListener("click", handleCreate);
+
+if (window.ethereum) {
+  window.ethereum.on("accountsChanged", () => window.location.reload());
+  window.ethereum.on("chainChanged", () => window.location.reload());
+}
+</script>
+</body>
+</html>

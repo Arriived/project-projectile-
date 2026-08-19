@@ -36,7 +36,7 @@ async function fetchAndSanitizeMetadata(metadataURI) {
     const json = await res.json();
     const description =
       typeof json.description === "string"
-        ? stripTags(truncate(json.description, MAX_DESCRIPTION_LENGTH))
+        ? truncate(stripTags(json.description), MAX_DESCRIPTION_LENGTH)
         : null;
 
     let logoUrl = null;

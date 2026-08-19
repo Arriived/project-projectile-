@@ -53,3 +53,22 @@ contract MockBrokenRouter is IDEXRouter {
         return (amountADesired, amountBDesired, 0);
     }
 }
+
+/// @notice Simulates a router that reverts outright — e.g. genuinely out of gas near
+///         the block limit, or a real integration failure. This is the case
+///         _performGraduation's try/catch exists for: unlike MockBrokenRouter (which
+///         "succeeds" with zero liquidity), this never even returns.
+contract MockRevertingRouter is IDEXRouter {
+    function addLiquidity(
+        address,
+        address,
+        uint256,
+        uint256,
+        uint256,
+        uint256,
+        address,
+        uint256
+    ) external pure returns (uint256, uint256, uint256) {
+        revert("MockRevertingRouter: simulated failure");
+    }
+}
