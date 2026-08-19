@@ -25,6 +25,11 @@ async function deployFixture() {
   const router = await (await ethers.getContractFactory("MockRouter")).deploy();
   const brokenRouter = await (await ethers.getContractFactory("MockBrokenRouter")).deploy();
 
+  // createToken() now refuses to launch while router is unset, so every fixture has
+  // to configure one up front. Tests that care about a specific router's behavior
+  // override this with their own setRouter() call.
+  await factory.connect(owner).setRouter(await router.getAddress());
+
   // Fund alice and bob generously, approve the factory.
   for (const wallet of [alice, bob]) {
     await usdc.mint(wallet.address, USDC(1_000_000));
@@ -263,18 +268,29 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       );
     });
 
-    it("fails clearly if no router has been set yet", async function () {
-      const { factory, alice, bob } = await deployFixture();
-      await createToken(factory, alice, "First", "CAT");
-      const tokenAddr = await getLastToken(factory, alice);
-
-      // The buy still lands; only the graduation step is blocked on the missing router.
-      await expect(factory.connect(bob).buy(tokenAddr, USDC(75_000), 0)).to.not.be.reverted;
-      expect((await factory.curves(tokenAddr)).state).to.equal(GRADUATION_READY);
-
-      await expect(factory.graduate(tokenAddr)).to.be.revertedWith(
-        "router not set: no confirmed Arc DEX yet"
+    // Replaces the old "fails clearly if no router has been set yet" test, which
+    // asserted that a token could launch and trade to its threshold with no router
+    // configured, failing only at the graduation step. That is exactly the trap the
+    // launch gate now removes: the failure has been moved forward to createToken(),
+    // where nobody has money in the curve yet.
+    it("refuses to launch at all while no router is configured", async function () {
+      const [owner, treasury, alice] = await ethers.getSigners();
+      const usdc = await (await ethers.getContractFactory("MockUSDC")).deploy();
+      const bare = await (await ethers.getContractFactory("Ballista")).deploy(
+        await usdc.getAddress(),
+        treasury.address
       );
+      await usdc.mint(alice.address, USDC(1_000_000));
+      await usdc.connect(alice).approve(await bare.getAddress(), ethers.MaxUint256);
+
+      await expect(createToken(bare, alice, "First", "CAT")).to.be.revertedWith(
+        "router not set: launches are closed until a DEX is configured"
+      );
+
+      // ...and once a router exists, the same launch goes through unchanged.
+      const router = await (await ethers.getContractFactory("MockRouter")).deploy();
+      await bare.connect(owner).setRouter(await router.getAddress());
+      await expect(createToken(bare, alice, "First", "CAT")).to.not.be.reverted;
     });
   });
 

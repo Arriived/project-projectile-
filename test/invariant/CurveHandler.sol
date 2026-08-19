@@ -32,7 +32,13 @@ contract CurveHandler {
         // Bound to a sane range — an unbounded fuzzer would mostly generate amounts
         // that just revert on "insufficient balance" and waste run budget on that
         // instead of exploring real curve behavior.
-        uint256 usdcIn = 1e6 + (usdcAmountSeed % (5_000e6));
+        //
+        // The ceiling is 20k rather than 5k deliberately. At 5k, with sells pulling
+        // reserves back down, a depth-50 run never accumulated the 67,000 USDC needed
+        // to graduate — measured, not assumed — so the state machine's highest-stakes
+        // transition was never fuzzed at all. 20k reaches the threshold in roughly
+        // seven buys while still leaving most of a run for ordinary trading below it.
+        uint256 usdcIn = 1e6 + (usdcAmountSeed % (20_000e6));
         usdc.mint(address(this), usdcIn);
         usdc.approve(address(factory), usdcIn);
         try factory.buy(token, usdcIn, 0) {

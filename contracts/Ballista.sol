@@ -190,6 +190,18 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         string calldata metadataURI,
         bytes32 expectedEconomicsHash
     ) external nonReentrant whenNotPaused returns (address token) {
+        // No router means nothing to graduate into. Without this check a token can be
+        // launched, trade all the way to its threshold, flip to GRADUATION_READY --
+        // where buy() and sell() are both closed -- and then sit there frozen, with
+        // holders unable to exit, until an owner configures a router. Refusing the
+        // launch outright costs nothing: it surfaces at the moment a creator tries,
+        // when no one has any money in the curve, instead of at 67,000 USDC with
+        // holders trapped. Paired with setRouter()'s zero-address rejection, so a
+        // router that exists at launch cannot later be taken away.
+        require(
+            router != address(0),
+            "router not set: launches are closed until a DEX is configured"
+        );
         require(
             expectedEconomicsHash == currentEconomicsHash(),
             "economics changed since you last checked -- refresh and confirm the new terms"
@@ -570,7 +582,16 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
 
     // ── Admin (should be a multisig, not an EOA, before real funds are involved) ──
 
+    /// @notice Points graduation at a DEX router. Can be swapped to a different
+    ///         non-zero router at any time, but never cleared back to the zero address.
+    /// @dev    Rejecting zero is what makes createToken()'s router check meaningful.
+    ///         If the router could be unset, an owner could configure one, let a batch
+    ///         of tokens launch against it, then clear it -- stranding every one of
+    ///         them at GRADUATION_READY with trading closed and no way out. To halt
+    ///         activity, use pause(); that is reversible and does not trap anyone
+    ///         mid-curve.
     function setRouter(address router_) external onlyOwner {
+        require(router_ != address(0), "router cannot be unset: use pause() to halt instead");
         router = router_;
     }
 

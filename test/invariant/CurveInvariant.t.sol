@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import "forge-std/Test.sol";
 import "../../contracts/Ballista.sol";
 import "../../contracts/mocks/MockUSDC.sol";
+import "../../contracts/mocks/MockRouter.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./CurveHandler.sol";
 
@@ -29,6 +30,12 @@ contract CurveInvariantTest is Test {
 
         usdc = new MockUSDC();
         factory = new Ballista(address(usdc), address(this));
+
+        // createToken() now refuses to launch without a router, so one is required
+        // here. This also means the fuzzer drives curves through a real graduation
+        // rather than parking them at GRADUATION_READY -- graduation is the
+        // highest-stakes transition in the contract, so it should be fuzzed.
+        factory.setRouter(address(new MockRouter()));
 
         usdc.mint(address(this), 1_000e6);
         usdc.approve(address(factory), 1_000e6);

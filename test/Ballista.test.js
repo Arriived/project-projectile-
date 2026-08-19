@@ -13,6 +13,12 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
     const Ballista = await ethers.getContractFactory('Ballista');
     const ballista = await Ballista.deploy(await usdc.getAddress(), treasury.address);
 
+    // createToken() refuses to launch while router is unset, so the fixture has to
+    // configure one. Tests that care about a specific router override this.
+    const FixtureRouter = await ethers.getContractFactory('MockRouter');
+    const fixtureRouter = await FixtureRouter.deploy();
+    await ballista.setRouter(await fixtureRouter.getAddress());
+
     for (const signer of [creator, trader]) {
       await usdc.mint(signer.address, 1_000_000n * ONE_USDC);
       await usdc.connect(signer).approve(await ballista.getAddress(), ethers.MaxUint256);
@@ -27,6 +33,15 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
   async function create(ballista, creator, name, symbol, uri) {
     const hash = await ballista.currentEconomicsHash();
     return ballista.connect(creator).createToken(name, symbol, uri, hash);
+  }
+
+  // create(), plus digging the new token's address back out of the receipt.
+  async function launch(ballista, creator, name, symbol, uri = 'ipfs://a') {
+    const receipt = await (await create(ballista, creator, name, symbol, uri)).wait();
+    const event = receipt.logs
+      .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+      .find((l) => l && l.name === 'TokenCreated');
+    return event.args.token;
   }
 
   it('is actually named Ballista, not ArcLaunchFactory', async function () {
@@ -215,6 +230,69 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
 
       expect(tradeEvent.args.tokenAmount).to.equal(quote.actualTokensIn);
       expect(tradeEvent.args.usdcAmount).to.equal(quote.usdcOutGross - quote.fee);
+    });
+  });
+
+  // A curve that reaches GRADUATION_READY has buy() and sell() both closed and can
+  // only move forward via a successful graduate(). If no router exists at that point,
+  // holders are stuck with no exit. These two rules together make that unreachable:
+  // a token cannot launch without a router, and a router cannot be taken away.
+  describe('router gate — nothing can launch into a state it cannot leave', function () {
+    async function bareDeploy() {
+      const [deployer, treasury, creator] = await ethers.getSigners();
+      const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
+      const ballista = await (await ethers.getContractFactory('Ballista')).deploy(
+        await usdc.getAddress(),
+        treasury.address
+      );
+      await usdc.mint(creator.address, 1_000_000n * ONE_USDC);
+      await usdc.connect(creator).approve(await ballista.getAddress(), ethers.MaxUint256);
+      return { deployer, treasury, creator, usdc, ballista };
+    }
+
+    it('createToken reverts while router is unset', async function () {
+      const { ballista, creator } = await bareDeploy();
+      await expect(create(ballista, creator, 'No Router', 'NRTR', 'ipfs://a')).to.be.revertedWith(
+        'router not set: launches are closed until a DEX is configured'
+      );
+    });
+
+    it('setRouter rejects the zero address, so a configured router cannot be taken away', async function () {
+      const { ballista } = await deployFixture();
+      await expect(ballista.setRouter(ethers.ZeroAddress)).to.be.revertedWith(
+        'router cannot be unset: use pause() to halt instead'
+      );
+    });
+
+    it('setRouter still allows swapping one live router for another', async function () {
+      const { ballista } = await deployFixture();
+      const Replacement = await ethers.getContractFactory('MockRouter');
+      const replacement = await Replacement.deploy();
+      const replacementAddress = await replacement.getAddress();
+
+      await ballista.setRouter(replacementAddress);
+      expect(await ballista.router()).to.equal(replacementAddress);
+    });
+
+    it('only the owner can set the router', async function () {
+      const { ballista, creator } = await deployFixture();
+      const Replacement = await ethers.getContractFactory('MockRouter');
+      const replacement = await Replacement.deploy();
+      await expect(ballista.connect(creator).setRouter(await replacement.getAddress())).to.be
+        .reverted;
+    });
+
+    // The whole point of the gate: a token that exists is always a token that has
+    // somewhere to graduate into, for the entire life of the curve.
+    it('a launched token can always still reach a router, even after an owner tries to clear it', async function () {
+      const { ballista, creator, trader, usdc } = await deployFixture();
+      const tokenAddress = await launch(ballista, creator, 'Safe Coin', 'SAFE');
+
+      await expect(ballista.setRouter(ethers.ZeroAddress)).to.be.reverted;
+
+      await usdc.mint(trader.address, 200_000n * ONE_USDC);
+      await ballista.connect(trader).buy(tokenAddress, 70_000n * ONE_USDC, 0);
+      expect((await ballista.curves(tokenAddress)).state).to.equal(2n); // GRADUATED
     });
   });
 
