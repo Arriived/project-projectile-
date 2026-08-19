@@ -67,7 +67,9 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const tokenAddr = event.args.token;
 
       const token = await ethers.getContractAt("ArcLaunchToken", tokenAddr);
-      expect(await token.balanceOf(await factory.getAddress())).to.equal(TOKENS(1_000_000_000));
+      // 965M = 800M curve supply + 165M LP reserve. Was 1B when the LP reserve was
+      // 200M; the reserve was resized to fit where the curve actually graduates.
+      expect(await token.balanceOf(await factory.getAddress())).to.equal(TOKENS(965_000_000));
       expect(await token.balanceOf(alice.address)).to.equal(0n);
       expect(await token.creator()).to.equal(alice.address);
     });

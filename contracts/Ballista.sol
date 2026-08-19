@@ -32,7 +32,27 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
 
     // ── Token economics (per launched token) ──────────────────────────────
     uint256 public constant CURVE_TOKEN_SUPPLY = 800_000_000e18; // sold via bonding curve
-    uint256 public constant LP_TOKEN_RESERVE = 200_000_000e18; // reserved for DEX pool at graduation
+    /// @notice Tokens reserved for the DEX pool at graduation.
+    /// @dev Sized for where this curve ACTUALLY graduates, not for full depletion.
+    ///
+    ///      The pool receives `LP_TOKEN_RESERVE + tokenReserves` — the reserve plus
+    ///      whatever the curve never sold — which reduces to `TOTAL_TOKEN_SUPPLY - sold`.
+    ///      The split between the two constants cancels out; only the total moves the
+    ///      pool's opening price.
+    ///
+    ///      The Pump.fun-derived 200M was self-consistent at FULL depletion: sell all
+    ///      800M, raise $87,912, and the pool opens just above the curve's last price
+    ///      with no leftovers. But graduation fires at $67,000 — 92.6% of the curve —
+    ///      leaving ~58.9M unsold tokens dumped into a pool sized for zero. That
+    ///      dilution opened the pool ~11.4% BELOW the curve's final price: the last
+    ///      buyer on the curve was instantly down 11%, on a gap predictable enough to
+    ///      position against. 165M sizes the pool for the real graduation point.
+    ///
+    ///      Does not affect the $87,912 depletion ceiling or the $67,000 threshold's
+    ///      margin — those depend on CURVE_TOKEN_SUPPLY and the virtual reserves, none
+    ///      of which move here. Pool depth in USDC is likewise unchanged; the pool
+    ///      still receives the full realUsdcReserves.
+    uint256 public constant LP_TOKEN_RESERVE = 165_000_000e18;
     uint256 public constant TOTAL_TOKEN_SUPPLY = CURVE_TOKEN_SUPPLY + LP_TOKEN_RESERVE;
 
     // ── Bonding curve starting parameters (USDC assumed 6 decimals) ───────
