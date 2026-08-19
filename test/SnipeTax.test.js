@@ -144,7 +144,7 @@ describe('Ballista — decaying snipe tax', function () {
 
     // Treasury receives its snipe share plus the base fee net of the creator carve-out.
     const baseFee = (spend * 100n) / BPS;
-    const creatorCut = (spend * 30n) / BPS;
+    const creatorCut = (spend * 90n) / BPS; // buy side: 0.90%
     expect((await usdc.balanceOf(treasury.address)) - treasuryBefore).to.equal(
       baseFee - creatorCut + expectedToTreasury
     );
@@ -206,7 +206,7 @@ describe('Ballista — decaying snipe tax', function () {
     await ballista.connect(trader).sell(tokenAddress, held, 0);
     const treasuryGot = (await usdc.balanceOf(treasury.address)) - treasuryBefore;
 
-    const creatorShare = (quote.usdcOutGross * 30n) / BPS;
+    const creatorShare = (quote.usdcOutGross * 50n) / BPS; // sell side: 0.50%
     expect(quote.fee).to.equal((quote.usdcOutGross * 100n) / BPS); // 1%, no tax added
     expect(treasuryGot).to.equal(quote.fee - creatorShare);
   });

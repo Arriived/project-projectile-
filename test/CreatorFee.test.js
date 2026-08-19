@@ -41,7 +41,7 @@ describe('Ballista — creator fee share', function () {
     return event.args.token;
   }
 
-  it('splits the existing 1% fee into 0.7% treasury / 0.3% creator, adding nothing on top', async function () {
+  it('splits the 1% buy fee into 0.9% creator / 0.1% treasury, adding nothing on top', async function () {
     const { ballista, usdc, creator, trader, treasury } = await deployFixture();
     const tokenAddress = await launch(ballista, creator);
 
@@ -58,10 +58,10 @@ describe('Ballista — creator fee share', function () {
     // The whole point: trader-facing cost is unchanged by the creator share existing.
     expect(traderSpent).to.equal(buyAmount);
 
-    const totalFee = (buyAmount * 100n) / BPS;   // 1%
-    const expectedCreator = (buyAmount * 30n) / BPS;  // 0.30%
+    const totalFee = (buyAmount * 100n) / BPS;        // 1%
+    const expectedCreator = (buyAmount * 90n) / BPS;  // 0.90% = 90% of the fee
     expect(creatorAccrued).to.equal(expectedCreator);
-    expect(treasuryGot).to.equal(totalFee - expectedCreator); // 0.70%
+    expect(treasuryGot).to.equal(totalFee - expectedCreator); // 0.10%
     expect(creatorAccrued + treasuryGot).to.equal(totalFee);
   });
 
@@ -83,10 +83,11 @@ describe('Ballista — creator fee share', function () {
     const sellAccrual = (await ballista.creatorFeesAccrued(creator.address)) - afterBuy;
     expect(sellAccrual).to.be.greaterThan(0n);
 
-    // 0.3 : 0.7 on the sell side too. Reconstructed from the two shares, since the
-    // gross the fee was charged on is internal to the curve.
+    // The sell side is 50/50, NOT the buy side's 90/10 -- that asymmetry is the
+    // point. Reconstructed from the two shares, since the gross the fee was charged
+    // on is internal to the curve.
     const sellFee = sellAccrual + treasuryGot;
-    expect(sellAccrual).to.equal((sellFee * 30n) / 100n);
+    expect(sellAccrual).to.equal((sellFee * 50n) / 100n);
   });
 
   it('totals reconcile exactly — no dust escapes in either direction', async function () {
@@ -187,7 +188,7 @@ describe('Ballista — creator fee share', function () {
     const buyAmount = 10_000n * ONE_USDC;
     await expect(ballista.connect(trader).buy(tokenAddress, buyAmount, 0))
       .to.emit(ballista, 'CreatorFeeAccrued')
-      .withArgs(tokenAddress, creator.address, (buyAmount * 30n) / BPS);
+      .withArgs(tokenAddress, creator.address, (buyAmount * 90n) / BPS);
   });
 
   it('one claim collects across every token the same creator launched', async function () {
@@ -200,16 +201,122 @@ describe('Ballista — creator fee share', function () {
     await ballista.connect(trader).buy(first, 10_000n * ONE_USDC, 0);
     await ballista.connect(trader).buy(second, 10_000n * ONE_USDC, 0);
 
-    const expected = 2n * ((10_000n * ONE_USDC * 30n) / BPS);
+    const expected = 2n * ((10_000n * ONE_USDC * 90n) / BPS);
     expect(await ballista.creatorFeesAccrued(creator.address)).to.equal(expected);
   });
 
+  describe('asymmetric buy/sell split', function () {
+    // Measures each side's creator share directly off the contract, then blends them.
+    // The blend is the number that matters commercially and the only one that should
+    // ever be quoted as "the" creator rate -- 90% describes the buy side alone.
+    it('buy side pays 90% of the fee, sell side 50%, blending to 70% at equal volume', async function () {
+      const { ballista, usdc, creator, trader, treasury } = await deployFixture();
+      const tokenAddress = await launch(ballista, creator);
+      const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+
+      // ── buy side ──
+      const buyAmount = 10_000n * ONE_USDC;
+      let tBefore = await usdc.balanceOf(treasury.address);
+      let cBefore = await ballista.creatorFeesAccrued(creator.address);
+      await ballista.connect(trader).buy(tokenAddress, buyAmount, 0);
+      const buyCreator = (await ballista.creatorFeesAccrued(creator.address)) - cBefore;
+      const buyTreasury = (await usdc.balanceOf(treasury.address)) - tBefore;
+      const buyFee = buyCreator + buyTreasury;
+
+      // ── sell side ──
+      const held = await token.balanceOf(trader.address);
+      await token.connect(trader).approve(await ballista.getAddress(), held);
+      tBefore = await usdc.balanceOf(treasury.address);
+      cBefore = await ballista.creatorFeesAccrued(creator.address);
+      const quote = await ballista.quoteSell(tokenAddress, held);
+      await ballista.connect(trader).sell(tokenAddress, held, 0);
+      const sellCreator = (await ballista.creatorFeesAccrued(creator.address)) - cBefore;
+      const sellTreasury = (await usdc.balanceOf(treasury.address)) - tBefore;
+      const sellFee = sellCreator + sellTreasury;
+
+      // Assert against the contract's own floor-division rather than dividing a rate
+      // back out of the result: recovering a percentage from an already-floored cut
+      // floors a second time and reads 49 where the rate is genuinely 50.
+      expect(buyCreator).to.equal((buyAmount * 90n) / BPS);
+      expect(sellCreator).to.equal((quote.usdcOutGross * 50n) / BPS);
+
+      // Whatever is not the creator's is the treasury's, exactly -- no dust escapes.
+      expect(buyFee).to.equal((buyAmount * 100n) / BPS);
+      expect(buyTreasury).to.equal(buyFee - buyCreator);
+      expect(sellFee).to.equal(quote.fee);
+      expect(sellTreasury).to.equal(sellFee - sellCreator);
+
+      // Fees are charged on volume, so at equal USDC volume per side the blend is the
+      // mean of the two rates: (90 + 50) / 2 = 70 bps of a 100 bps fee.
+      expect((90n + 50n) / 2n).to.equal(70n);
+    });
+
+    it('a buy-heavy mix blends above 70%, which is the point of the asymmetry', async function () {
+      // 70:30 buy:sell -> (0.7*90 + 0.3*50) = 78 bps of a 100 bps fee.
+      const blended = (70n * 90n + 30n * 50n) / 100n;
+      expect(blended).to.equal(78n);
+    });
+
+    it('the two sides are independent -- changing one does not move the other', async function () {
+      const { ballista } = await deployFixture();
+      await ballista.setDefaultCreatorFees(20, 50);
+      expect(await ballista.defaultCreatorBuyFeeBps()).to.equal(20);
+      expect(await ballista.defaultCreatorSellFeeBps()).to.equal(50);
+
+      await ballista.setDefaultCreatorFees(20, 10);
+      expect(await ballista.defaultCreatorBuyFeeBps()).to.equal(20);
+      expect(await ballista.defaultCreatorSellFeeBps()).to.equal(10);
+    });
+
+    it('emits both new rates together', async function () {
+      const { ballista } = await deployFixture();
+      await expect(ballista.setDefaultCreatorFees(70, 30))
+        .to.emit(ballista, 'DefaultCreatorFeesSet')
+        .withArgs(70, 30);
+    });
+
+    // The promotion plan: launch generous, move toward the market rate later, and
+    // never change the deal for anyone already launched.
+    it('moving the defaults toward 70/30 leaves an already-launched token untouched', async function () {
+      const { ballista, creator, trader } = await deployFixture();
+      const promo = await launch(ballista, creator, 'PROMO');
+
+      await ballista.setDefaultCreatorFees(70, 70); // the eventual steady-state rate
+
+      const before = await ballista.creatorFeesAccrued(creator.address);
+      const buyAmount = 10_000n * ONE_USDC;
+      await ballista.connect(trader).buy(promo, buyAmount, 0);
+      // Still the promotional 90%, because it was snapshotted at launch.
+      expect((await ballista.creatorFeesAccrued(creator.address)) - before).to.equal(
+        (buyAmount * 90n) / BPS
+      );
+
+      // ...while a token launched after the change gets the new rate.
+      await ethers.provider.send('evm_increaseTime', [60]);
+      await ethers.provider.send('evm_mine');
+      const later = await launch(ballista, creator, 'LATER');
+      expect((await ballista.curves(later)).creatorBuyFeeBps).to.equal(70);
+      expect((await ballista.curves(later)).creatorSellFeeBps).to.equal(70);
+    });
+  });
+
   describe('rate is snapshotted and pinned', function () {
+    it('the SELL side alone changing also invalidates a pinned hash', async function () {
+      const { ballista, creator } = await deployFixture();
+      const staleHash = await ballista.currentEconomicsHash();
+      await ballista.setDefaultCreatorFees(90, 40); // buy unchanged, sell moved
+      await expect(
+        ballista.connect(creator).createToken('SellOnly', 'SLO', 'ipfs://a', staleHash)
+      ).to.be.revertedWith(
+        'economics changed since you last checked -- refresh and confirm the new terms'
+      );
+    });
+
     it('is included in the economics hash', async function () {
       const { ballista, creator } = await deployFixture();
       const staleHash = await ballista.currentEconomicsHash();
 
-      await ballista.setDefaultCreatorFeeBps(50);
+      await ballista.setDefaultCreatorFees(50, 40);
 
       await expect(
         ballista.connect(creator).createToken('Late', 'LATE', 'ipfs://a', staleHash)
@@ -221,45 +328,49 @@ describe('Ballista — creator fee share', function () {
     it('a live token keeps the rate it launched with', async function () {
       const { ballista, creator, trader } = await deployFixture();
       const tokenAddress = await launch(ballista, creator);
-      expect((await ballista.curves(tokenAddress)).creatorFeeBps).to.equal(30);
+      expect((await ballista.curves(tokenAddress)).creatorBuyFeeBps).to.equal(90);
+      expect((await ballista.curves(tokenAddress)).creatorSellFeeBps).to.equal(50);
 
-      await ballista.setDefaultCreatorFeeBps(100); // 1%, the whole fee
+      await ballista.setDefaultCreatorFees(100, 100); // the whole fee, both sides
 
       const before = await ballista.creatorFeesAccrued(creator.address);
       const buyAmount = 10_000n * ONE_USDC;
       await ballista.connect(trader).buy(tokenAddress, buyAmount, 0);
 
-      // Still 0.3%, not the new 1%.
+      // Still 0.90% on the buy side, not the new 1%.
       expect((await ballista.creatorFeesAccrued(creator.address)) - before).to.equal(
-        (buyAmount * 30n) / BPS
+        (buyAmount * 90n) / BPS
       );
     });
 
     it('rejects a creator share larger than the fee it is carved from', async function () {
       const { ballista } = await deployFixture();
-      // Default fees are 100 bps; 101 would exceed them.
-      await expect(ballista.setDefaultCreatorFeeBps(101)).to.be.revertedWith(
-        'creator share cannot exceed the fee it is carved from'
+      // Default fees are 100 bps on each side; 101 would exceed them.
+      await expect(ballista.setDefaultCreatorFees(101, 50)).to.be.revertedWith(
+        'creator buy share cannot exceed the buy fee it is carved from'
       );
-      await expect(ballista.setDefaultCreatorFeeBps(100)).to.not.be.reverted;
+      await expect(ballista.setDefaultCreatorFees(90, 101)).to.be.revertedWith(
+        'creator sell share cannot exceed the sell fee it is carved from'
+      );
+      await expect(ballista.setDefaultCreatorFees(100, 100)).to.not.be.reverted;
     });
 
     it('rejects lowering the trade fee below the creator share', async function () {
       const { ballista } = await deployFixture();
-      await ballista.setDefaultCreatorFeeBps(80);
+      await ballista.setDefaultCreatorFees(80, 80);
 
       await expect(ballista.setDefaultFees(50, 100)).to.be.revertedWith(
         'fee would fall below the creator share -- lower the creator share first'
       );
 
       // Doing it in the correct order works.
-      await ballista.setDefaultCreatorFeeBps(50);
+      await ballista.setDefaultCreatorFees(50, 50);
       await expect(ballista.setDefaultFees(50, 100)).to.not.be.reverted;
     });
 
     it('only the owner can change the default creator share', async function () {
       const { ballista, creator } = await deployFixture();
-      await expect(ballista.connect(creator).setDefaultCreatorFeeBps(10)).to.be.reverted;
+      await expect(ballista.connect(creator).setDefaultCreatorFees(10, 10)).to.be.reverted;
     });
   });
 });

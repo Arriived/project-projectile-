@@ -104,7 +104,9 @@ async function main() {
   const curve0 = await ballista.curves(tokenAddress);
   check("curve state ACTIVE", curve0.state === 0n);
   check("creationBlock recorded", curve0.creationBlock === BigInt(createRcpt.blockNumber));
-  check("creatorFeeBps snapshotted at 30", curve0.creatorFeeBps === 30n);
+  check("creator splits snapshotted (buy 90 / sell 50 bps)",
+    curve0.creatorBuyFeeBps === 90n && curve0.creatorSellFeeBps === 50n,
+    `buy ${curve0.creatorBuyFeeBps} / sell ${curve0.creatorSellFeeBps}`);
   check("snipeTaxTreasuryBps snapshotted at 7000", curve0.snipeTaxTreasuryBps === 7000n);
   check("snipeTaxTableVersion snapshotted", curve0.snipeTaxTableVersion === 0n);
 
@@ -190,12 +192,12 @@ async function main() {
     `+${ethers.formatUnits(accruedAfterBuy - accruedBefore, 6)} USDC`);
   check("CreatorFeeAccrued carries this token",
     feeEvents.length === 1 && feeEvents[0].args.token === tokenAddress);
-  check("accrual is exactly 0.30% of the buy",
-    feeEvents.length > 0 && feeEvents[0].args.amount === (spend * 30n) / 10_000n,
+  check("accrual is exactly 0.90% of the buy",
+    feeEvents.length > 0 && feeEvents[0].args.amount === (spend * 90n) / 10_000n,
     feeEvents.length ? `${ethers.formatUnits(feeEvents[0].args.amount, 6)} USDC` : "no event");
 
   const treasuryPaid = usdcTransferTo(buyRcpt, treasuryAddr);
-  const expectedTreasury = (spend * 100n) / 10_000n - (spend * 30n) / 10_000n
+  const expectedTreasury = (spend * 100n) / 10_000n - (spend * 90n) / 10_000n
     + (totalTax * 7000n) / 10_000n;
   check("treasury received base fee minus creator share, plus its tax share",
     treasuryPaid === expectedTreasury,
@@ -228,7 +230,7 @@ async function main() {
   const paidToSeller = usdcTransferTo(sellRcpt, me.address);
 
   const sellPayout = quoteSell.usdcOutGross - quoteSell.fee;
-  const sellCreatorCut = (quoteSell.usdcOutGross * 30n) / 10_000n;
+  const sellCreatorCut = (quoteSell.usdcOutGross * 50n) / 10_000n;
   const sellTreasuryCut = quoteSell.fee - sellCreatorCut;
 
   check("Trade fired, isBuy false", !!sellTrade && sellTrade.args.isBuy === false);
