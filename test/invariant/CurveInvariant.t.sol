@@ -57,7 +57,7 @@ contract CurveInvariantTest is Test {
 
     /// forge-config: default.invariant.runs = 256
     function invariant_factoryHoldsEnoughUsdcToBackItsOwnAccounting() public view {
-        (, , , , uint256 realUsdcReserves, , Ballista.CurveState state, , , , ) =
+        (, , , , uint256 realUsdcReserves, , Ballista.CurveState state, , , , , ) =
             factory.curves(token);
         // Only a COMPLETED graduation moves funds out to the DEX. A curve sitting in
         // GRADUATION_READY still physically holds everything it owes, so it stays
@@ -71,7 +71,7 @@ contract CurveInvariantTest is Test {
     }
 
     function invariant_factoryHoldsEnoughTokenToBackItsOwnAccounting() public view {
-        (, , , , , uint256 tokenReserves, Ballista.CurveState state, , , , ) =
+        (, , , , , uint256 tokenReserves, Ballista.CurveState state, , , , , ) =
             factory.curves(token);
         if (state == Ballista.CurveState.GRADUATED) return;
         assertGe(

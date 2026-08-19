@@ -4,6 +4,13 @@ out = "out"
 libs = ["node_modules"]
 test = "test/invariant"
 
+# Match hardhat.config.js exactly. Without these, forge compiled Ballista unoptimized
+# while Hardhat (and any real deployment) compiled it at 200 runs -- so the invariant
+# fuzzing was exercising different bytecode than the code that actually ships, and hit
+# a stack-too-deep the production build does not have.
+optimizer = true
+optimizer_runs = 200
+
 remappings = [
     "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",
     "forge-std/=lib/forge-std/src/"

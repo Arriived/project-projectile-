@@ -73,6 +73,31 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     uint16 public defaultSellFeeBps = 100; // 1%
     uint16 public constant MAX_FEE_BPS = 1000; // hard ceiling (10%) — enforced per-token at creation, cannot be exceeded by any future admin action on that token
     uint256 public constant BPS_DENOMINATOR = 10_000;
+
+    /// @notice Share of each trade routed to the token's creator, in bps. Carved OUT OF
+    ///         the existing buy/sell fee, never added on top — a trader pays exactly the
+    ///         same total either way, and the treasury's share is what shrinks.
+    /// @dev Defaults-for-new-tokens-only, like the fees above. Capped at both
+    ///      defaultBuyFeeBps and defaultSellFeeBps so the creator's slice can never
+    ///      exceed the fee it is carved out of; see setDefaultCreatorFeeBps and the
+    ///      matching guard in setDefaultFees.
+    uint16 public defaultCreatorFeeBps = 30; // 0.30%
+
+    /// @notice Creator fees waiting to be claimed, by creator address.
+    /// @dev Accrue-and-claim, never push. Transferring to the creator inside
+    ///      buy()/sell() would mean a creator address that reverts on receipt --
+    ///      a contract without a payable fallback, a blocklisted address -- breaks
+    ///      EVERY trade on that token, permanently, for everyone. The creator is an
+    ///      arbitrary address chosen by an untrusted party, so it must never sit on
+    ///      the critical path of somebody else's trade.
+    ///
+    ///      Keyed by creator rather than by (creator, token): one claim collects
+    ///      everything a creator is owed across all their launches instead of one
+    ///      claim per token, and it is one storage slot per creator rather than one
+    ///      per pair. Per-token attribution is not lost -- CreatorFeeAccrued carries
+    ///      the token address on every accrual, which is where the indexer reads it
+    ///      from anyway.
+    mapping(address => uint256) public creatorFeesAccrued;
     uint256 public creationFeeUsdc = 5e6; // 5 USDC, paid by creator at launch — this one IS live/global, since it's charged once at the moment of creation, not something an existing token holder is exposed to
     address public treasury;
 
@@ -136,6 +161,10 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         // the global defaults change to afterwards.
         uint16 buyFeeBps;
         uint16 sellFeeBps;
+        // Carved out of buyFeeBps/sellFeeBps above, never added to them. Snapshotted
+        // for the same reason they are: a creator who launched on the promise of a
+        // 0.3% share must keep it even if the global default later changes.
+        uint16 creatorFeeBps;
         uint256 graduationThresholdUsdc;
         // The block createToken() executed in. Trading opens the NEXT block — see the
         // require() in buy()/sell(). This does not stop a sniper with a bot watching the
@@ -176,6 +205,9 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     event GraduationReady(address indexed token);
     event GraduationAttemptFailed(address indexed token);
     event CaseSensitiveSymbolsSet(bool caseSensitive);
+    event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount);
+    event CreatorFeesClaimed(address indexed creator, uint256 amount);
+    event DefaultCreatorFeeBpsSet(uint16 creatorFeeBps);
 
     constructor(address usdc_, address treasury_) Ownable(msg.sender) {
         require(usdc_ != address(0) && treasury_ != address(0), "zero address");
@@ -199,6 +231,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
             defaultBuyFeeBps,
             defaultSellFeeBps,
             defaultGraduationThresholdUsdc,
+            defaultCreatorFeeBps,
             caseSensitiveSymbols,
             symbolLockDuration
         ));
@@ -269,6 +302,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
             state: CurveState.ACTIVE,
             buyFeeBps: defaultBuyFeeBps,
             sellFeeBps: defaultSellFeeBps,
+            creatorFeeBps: defaultCreatorFeeBps,
             graduationThresholdUsdc: defaultGraduationThresholdUsdc,
             creationBlock: block.number
         });
@@ -372,12 +406,24 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         c.tokenReserves -= q.tokensOut;
         bool crossedThreshold = c.realUsdcReserves >= c.graduationThresholdUsdc;
 
+        // Creator share is carved out of the fee just charged, and only ACCRUED here --
+        // never transferred to the creator inside a trade. Still an effect, so it lands
+        // with the other effects, before any external call.
+        uint256 creatorCut = _creatorCut(q.actualUsdcIn, c.creatorFeeBps, q.actualFee);
+        if (creatorCut > 0) {
+            creatorFeesAccrued[c.creator] += creatorCut;
+            emit CreatorFeeAccrued(token, c.creator, creatorCut);
+        }
+
         // Interactions. Only q.actualUsdcIn is ever pulled from the buyer — if the
         // request was clamped, the excess is simply never taken in the first place,
         // rather than taken and refunded in a separate transfer. One fewer external
         // call, one fewer way for a "refund" step to fail or be forgotten.
         usdc.safeTransferFrom(msg.sender, address(this), q.actualUsdcIn);
-        if (q.actualFee > 0) usdc.safeTransfer(treasury, q.actualFee);
+        // Only the treasury's share leaves the contract; the creator's stays here until
+        // claimed. The two sum to exactly q.actualFee.
+        uint256 treasuryCut = q.actualFee - creatorCut;
+        if (treasuryCut > 0) usdc.safeTransfer(treasury, treasuryCut);
         IERC20(token).safeTransfer(msg.sender, q.tokensOut);
         emit Trade(token, msg.sender, true, q.actualUsdcIn, q.tokensOut);
 
@@ -468,10 +514,17 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         c.realUsdcReserves -= q.usdcOutGross;
         c.tokenReserves += q.actualTokensIn;
 
+        uint256 creatorCut = _creatorCut(q.usdcOutGross, c.creatorFeeBps, q.fee);
+        if (creatorCut > 0) {
+            creatorFeesAccrued[c.creator] += creatorCut;
+            emit CreatorFeeAccrued(token, c.creator, creatorCut);
+        }
+
         // Interactions. Only q.actualTokensIn is ever pulled from the seller — same
         // "never take the excess in the first place" approach as buy().
         IERC20(token).safeTransferFrom(msg.sender, address(this), q.actualTokensIn);
-        if (q.fee > 0) usdc.safeTransfer(treasury, q.fee);
+        uint256 treasuryCut = q.fee - creatorCut;
+        if (treasuryCut > 0) usdc.safeTransfer(treasury, treasuryCut);
         usdc.safeTransfer(msg.sender, usdcOut);
 
         emit Trade(token, msg.sender, false, usdcOut, q.actualTokensIn);
@@ -479,6 +532,38 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
 
     function _ceilDiv(uint256 a, uint256 b) internal pure returns (uint256) {
         return (a + b - 1) / b;
+    }
+
+    /// @dev The creator's slice of a fee that has ALREADY been charged to the trader.
+    ///      Carved out of feeCharged, never added to it, so the trader-facing cost of a
+    ///      trade is identical whether or not a creator share exists.
+    ///
+    ///      Capped at feeCharged so creator + treasury always sum to exactly the fee.
+    ///      That cap should be unreachable -- creatorFeeBps <= buyFeeBps/sellFeeBps is
+    ///      enforced at creation and both are snapshotted -- but reaching it would
+    ///      otherwise underflow and revert, and a reverting buy() is a far worse
+    ///      outcome than a creator being paid a rounding unit less on one trade.
+    function _creatorCut(uint256 tradeAmount, uint16 creatorFeeBps, uint256 feeCharged)
+        internal
+        pure
+        returns (uint256 cut)
+    {
+        if (creatorFeeBps == 0) return 0;
+        cut = (tradeAmount * creatorFeeBps) / BPS_DENOMINATOR;
+        if (cut > feeCharged) cut = feeCharged;
+    }
+
+    /// @notice Withdraw everything you have accrued as a token creator, across all of
+    ///         your launches.
+    /// @dev Pull, not push -- see the note on creatorFeesAccrued. Zeroes before
+    ///      transferring, and nonReentrant on top, so a creator that is a contract
+    ///      cannot re-enter and drain more than it is owed.
+    function claimCreatorFees() external nonReentrant returns (uint256 amount) {
+        amount = creatorFeesAccrued[msg.sender];
+        require(amount > 0, "nothing to claim");
+        creatorFeesAccrued[msg.sender] = 0;
+        usdc.safeTransfer(msg.sender, amount);
+        emit CreatorFeesClaimed(msg.sender, amount);
     }
 
     // ── Graduation ──────────────────────────────────────────────────────
@@ -619,8 +704,28 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     ///         already live keeps the fee it launched with — see the Curve struct note.
     function setDefaultFees(uint16 buyFeeBps_, uint16 sellFeeBps_) external onlyOwner {
         require(buyFeeBps_ <= MAX_FEE_BPS && sellFeeBps_ <= MAX_FEE_BPS, "fee exceeds hard ceiling");
+        // The creator share is carved out of these, so dropping them below it would
+        // invert the relationship. Lower the creator share first, deliberately.
+        require(
+            defaultCreatorFeeBps <= buyFeeBps_ && defaultCreatorFeeBps <= sellFeeBps_,
+            "fee would fall below the creator share -- lower the creator share first"
+        );
         defaultBuyFeeBps = buyFeeBps_;
         defaultSellFeeBps = sellFeeBps_;
+    }
+
+    /// @notice Sets the creator share for tokens created AFTER this call. Tokens
+    ///         already live keep the share they launched with.
+    /// @dev Capped at both current default fees: the creator slice is carved out of the
+    ///      trade fee, so it can never exceed it. Trader-facing cost does not move --
+    ///      raising this shifts revenue from treasury to creators, it does not add a fee.
+    function setDefaultCreatorFeeBps(uint16 creatorFeeBps_) external onlyOwner {
+        require(
+            creatorFeeBps_ <= defaultBuyFeeBps && creatorFeeBps_ <= defaultSellFeeBps,
+            "creator share cannot exceed the fee it is carved from"
+        );
+        defaultCreatorFeeBps = creatorFeeBps_;
+        emit DefaultCreatorFeeBpsSet(creatorFeeBps_);
     }
 
     function setCreationFee(uint256 creationFeeUsdc_) external onlyOwner {

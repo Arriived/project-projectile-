@@ -156,9 +156,16 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       // Bob buys into the OLD token — should still be charged the 1% it launched with,
       // not the new 9% default.
       const treasuryBefore = await usdc.balanceOf(treasury.address);
+      const creatorBefore = await factory.creatorFeesAccrued(alice.address);
       await factory.connect(bob).buy(tokenAddr, USDC(1000), 0);
       const treasuryAfter = await usdc.balanceOf(treasury.address);
-      expect(treasuryAfter - treasuryBefore).to.equal(USDC(10)); // 1% of 1000, not 9%
+      const creatorAfter = await factory.creatorFeesAccrued(alice.address);
+
+      // The 1% fee is now split 0.7% treasury / 0.3% to the creator (alice), so the
+      // total charged is what this test is really about -- it must still be the 1% the
+      // token launched with, not the new 9% default.
+      const totalFee = (treasuryAfter - treasuryBefore) + (creatorAfter - creatorBefore);
+      expect(totalFee).to.equal(USDC(10));
     });
   });
 

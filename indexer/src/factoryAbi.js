@@ -14,7 +14,14 @@ module.exports = [
   // yet. Graduation is decoupled, so a token can sit in this state indefinitely until
   // someone calls graduate() successfully.
   "event GraduationReady(address indexed token)",
-  // NOTE: `state` replaced the old `graduated` bool, and `creationBlock` is new on the
-  // end of the tuple. Both changed in the Ballista rewrite.
-  "function curves(address) view returns (address token, address creator, uint256 virtualTokenReserves, uint256 virtualUsdcReserves, uint256 realUsdcReserves, uint256 tokenReserves, uint8 state, uint16 buyFeeBps, uint16 sellFeeBps, uint256 graduationThresholdUsdc, uint256 creationBlock)",
+  // Creator fee accrual and withdrawal. Accrual carries the token, which is the only
+  // place per-token attribution of creator revenue exists -- creatorFeesAccrued is
+  // keyed by creator alone.
+  "event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount)",
+  "event CreatorFeesClaimed(address indexed creator, uint256 amount)",
+  // NOTE: `state` replaced the old `graduated` bool, `creatorFeeBps` sits between
+  // sellFeeBps and graduationThresholdUsdc, and `creationBlock` is new on the end.
+  // Field ORDER matters -- a mismatch here decodes into wrong values silently, with
+  // no error raised anywhere.
+  "function curves(address) view returns (address token, address creator, uint256 virtualTokenReserves, uint256 virtualUsdcReserves, uint256 realUsdcReserves, uint256 tokenReserves, uint8 state, uint16 buyFeeBps, uint16 sellFeeBps, uint16 creatorFeeBps, uint256 graduationThresholdUsdc, uint256 creationBlock)",
 ];
