@@ -1,61 +1,198 @@
 const hre = require("hardhat");
+const { ethers } = hre;
 
-// Confirmed directly against Circle's own official docs (docs.arc.io/arc/references/
-// contract-addresses) at the time this was written — not a third-party guess. If Arc's
-// mainnet ever launches, this address is testnet-only and MUST be replaced with the
-// real mainnet USDC address before any mainnet deployment; docs.arc.io states mainnet
-// addresses are not published yet as of this writing.
+// Arc Testnet USDC. Verified on-chain by scripts/preflight.js rather than taken on
+// trust: it reports name/symbol USDC with 6 decimals, and the known-good live
+// ArcLaunchFactory deployment returns this exact address from its own usdc().
+// TESTNET ONLY -- Arc mainnet addresses are not published yet. A wrong quote-asset
+// address here is unrecoverable fund loss, not a revert.
 const ARC_TESTNET_USDC = "0x3600000000000000000000000000000000000000";
 
-async function main() {
-  const treasury = process.env.TREASURY_ADDRESS;
-  if (!treasury) {
-    throw new Error(
-      "TREASURY_ADDRESS is not set in .env. This is where creation fees and trading " +
-      "fees get sent — set it deliberately, don't deploy with it blank."
-    );
-  }
+// Resume support: set either of these in the environment to skip that deployment and
+// reuse an existing address, so a halt partway through does not force a full redo.
+const EXISTING_ROUTER = process.env.ROUTER_ADDRESS;
+const EXISTING_BALLISTA = process.env.BALLISTA_ADDRESS;
 
-  const [deployer] = await hre.ethers.getSigners();
-  const network = await hre.ethers.provider.getNetwork();
-  console.log(`Deploying from: ${deployer.address}`);
-  console.log(`Network: ${network.name} (chainId ${network.chainId})`);
-  console.log(`USDC: ${ARC_TESTNET_USDC}`);
-  console.log(`Treasury: ${treasury}`);
+const receipts = [];
 
-  const balance = await hre.ethers.provider.getBalance(deployer.address);
-  console.log(`Deployer USDC balance (native gas token on Arc): ${hre.ethers.formatUnits(balance, 18)}`);
-  if (balance === 0n) {
-    throw new Error(
-      "Deployer wallet has zero balance. Fund it from https://faucet.circle.com " +
-      "(select Arc Testnet) before deploying — gas on Arc is paid in USDC."
-    );
-  }
-
-  console.log("\nDeploying ArcLaunchFactory...");
-  const Factory = await hre.ethers.getContractFactory("ArcLaunchFactory");
-  const factory = await Factory.deploy(ARC_TESTNET_USDC, treasury);
-  await factory.waitForDeployment();
-
-  const factoryAddress = await factory.getAddress();
-  const deployTx = factory.deploymentTransaction();
-  const receipt = await deployTx.wait();
-
-  console.log("\n✅ Deployed successfully.");
-  console.log(`ArcLaunchFactory address: ${factoryAddress}`);
-  console.log(`Deployment block: ${receipt.blockNumber}`);
-  console.log(`Transaction hash: ${receipt.hash}`);
-  console.log(`Explorer: https://testnet.arcscan.app/address/${factoryAddress}`);
+async function record(label, txPromise) {
+  const tx = await txPromise;
+  const receipt = await tx.wait();
+  receipts.push({ label, receipt });
   console.log(
-    "\nNext steps:\n" +
-    `  1. Set FACTORY_ADDRESS=${factoryAddress} in indexer/.env\n` +
-    `  2. Set FACTORY_DEPLOY_BLOCK=${receipt.blockNumber} in indexer/.env\n` +
-    "  3. Verify the contract source on the explorer (separate step — ask me for this next)\n" +
-    "  4. router stays unset until a real Arc DEX exists — that's expected, not a bug"
+    `    tx ${receipt.hash}\n` +
+    `    gas ${receipt.gasUsed.toString()} @ ${ethers.formatUnits(receipt.gasPrice, "gwei")} gwei` +
+    `  =  ${ethers.formatUnits(receipt.gasUsed * receipt.gasPrice, 18)} USDC`
   );
+  return receipt;
+}
+
+async function main() {
+  const net = await ethers.provider.getNetwork();
+  const [deployer] = await ethers.getSigners();
+  const treasury = process.env.TREASURY_ADDRESS;
+
+  if (!treasury || !ethers.isAddress(treasury)) {
+    throw new Error(
+      "TREASURY_ADDRESS is not set (or not an address) in .env. This is where creation " +
+      "and trading fees go -- set it deliberately, don't deploy with it blank."
+    );
+  }
+  if (net.chainId !== 5042002n) {
+    throw new Error(`refusing to deploy: chainId ${net.chainId} is not Arc Testnet (5042002)`);
+  }
+
+  const startBalance = await ethers.provider.getBalance(deployer.address);
+  console.log(`network    ${hre.network.name} (chainId ${net.chainId})`);
+  console.log(`deployer   ${deployer.address}`);
+  console.log(`balance    ${ethers.formatUnits(startBalance, 18)} (Arc native gas is USDC, 18dp here)`);
+  console.log(`usdc       ${ARC_TESTNET_USDC}`);
+  console.log(`treasury   ${treasury}`);
+  if (startBalance === 0n) {
+    throw new Error(
+      "Deployer has zero balance. Fund from https://faucet.circle.com (Arc Testnet) -- " +
+      "gas on Arc is paid in USDC."
+    );
+  }
+
+  // ── 1. Router ────────────────────────────────────────────────────────
+  console.log(`
+================================================================
+  STEP 1 -- MockRouter
+================================================================
+  *** THIS IS A PLACEHOLDER, NOT A REAL DEX. ***
+
+  No Arc DEX has been publicly confirmed as a launch partner. MockRouter
+  accepts addLiquidity() and returns a nonzero liquidity value so that
+  graduation can complete on testnet. It creates NO real pool, provides
+  NO real liquidity, and the LP tokens it "burns" are meaningless.
+
+  Ballista gates createToken() on a router being set, so testnet cannot
+  function at all without one. Replace this the moment a real Arc DEX
+  router is confirmed and verified -- setRouter() accepts any non-zero
+  address, so swapping it is a single owner transaction.
+`);
+
+  let routerAddress = EXISTING_ROUTER;
+  if (routerAddress) {
+    console.log(`  reusing existing router ${routerAddress} (ROUTER_ADDRESS was set)`);
+  } else {
+    const Router = await ethers.getContractFactory("MockRouter");
+    const router = await Router.deploy();
+    const r = await record("MockRouter deploy", Promise.resolve(router.deploymentTransaction()));
+    await router.waitForDeployment();
+    routerAddress = await router.getAddress();
+    console.log(`  MockRouter (PLACEHOLDER)  ${routerAddress}   block ${r.blockNumber}`);
+  }
+
+  // ── 2. Ballista ──────────────────────────────────────────────────────
+  console.log(`\n================================================================\n  STEP 2 -- Ballista\n================================================================`);
+
+  let ballistaAddress = EXISTING_BALLISTA;
+  let deployBlock;
+  if (ballistaAddress) {
+    console.log(`  reusing existing Ballista ${ballistaAddress} (BALLISTA_ADDRESS was set)`);
+  } else {
+    const Ballista = await ethers.getContractFactory("Ballista");
+    const ballista = await Ballista.deploy(ARC_TESTNET_USDC, treasury);
+    const r = await record("Ballista deploy", Promise.resolve(ballista.deploymentTransaction()));
+    await ballista.waitForDeployment();
+    ballistaAddress = await ballista.getAddress();
+    deployBlock = r.blockNumber;
+    console.log(`  Ballista  ${ballistaAddress}   block ${r.blockNumber}`);
+  }
+
+  const ballista = await ethers.getContractAt("Ballista", ballistaAddress);
+
+  // ── 3. Wire the router ───────────────────────────────────────────────
+  console.log(`\n================================================================\n  STEP 3 -- setRouter\n================================================================`);
+  const currentRouter = await ballista.router();
+  if (ethers.getAddress(currentRouter) === ethers.getAddress(routerAddress)) {
+    console.log(`  already set to ${routerAddress}, skipping`);
+  } else {
+    await record("setRouter", ballista.setRouter(routerAddress));
+    console.log(`  router = ${await ballista.router()}`);
+  }
+
+  // ── 4. Snipe tax table ───────────────────────────────────────────────
+  console.log(`\n================================================================\n  STEP 4 -- snipe tax table\n================================================================`);
+  const version = await ballista.activeSnipeTaxTableVersion();
+  const table = await ballista.snipeTaxTable(version);
+  const maxBps = await ballista.snipeTaxTableMaxBps(version);
+  console.log(`  active version   ${version}`);
+  console.log(`  table (bps/sec)  [${table.map((t) => t.toString()).join(", ")}]`);
+  console.log(`  max entry        ${maxBps} bps`);
+  if (table.length === 0) {
+    console.log(`  !! empty table -- no snipe tax would apply. Publish one before launching.`);
+  } else {
+    console.log(`  The constructor publishes this table, so createToken() needs no extra`);
+    console.log(`  publish step -- a version already exists and is active from block 0.`);
+  }
+
+  // ── 5. Post-deploy state ─────────────────────────────────────────────
+  console.log(`\n================================================================\n  DEPLOYED STATE\n================================================================`);
+  const checks = {
+    usdc: await ballista.usdc(),
+    treasury: await ballista.treasury(),
+    owner: await ballista.owner(),
+    router: await ballista.router(),
+    defaultBuyFeeBps: await ballista.defaultBuyFeeBps(),
+    defaultSellFeeBps: await ballista.defaultSellFeeBps(),
+    defaultCreatorFeeBps: await ballista.defaultCreatorFeeBps(),
+    defaultSnipeTaxTreasuryBps: await ballista.defaultSnipeTaxTreasuryBps(),
+    defaultGraduationThresholdUsdc: await ballista.defaultGraduationThresholdUsdc(),
+    creationFeeUsdc: await ballista.creationFeeUsdc(),
+    launchCooldown: await ballista.launchCooldown(),
+    CURVE_TOKEN_SUPPLY: await ballista.CURVE_TOKEN_SUPPLY(),
+    LP_TOKEN_RESERVE: await ballista.LP_TOKEN_RESERVE(),
+    TOTAL_TOKEN_SUPPLY: await ballista.TOTAL_TOKEN_SUPPLY(),
+    MAX_TOTAL_FEE_BPS: await ballista.MAX_TOTAL_FEE_BPS(),
+  };
+  for (const [k, v] of Object.entries(checks)) {
+    console.log(`  ${k.padEnd(30)} ${v}`);
+  }
+
+  if (ethers.getAddress(checks.usdc) !== ethers.getAddress(ARC_TESTNET_USDC)) {
+    throw new Error("deployed usdc address does not match what was passed in");
+  }
+
+  // ── 6. Costs ─────────────────────────────────────────────────────────
+  const endBalance = await ethers.provider.getBalance(deployer.address);
+  console.log(`\n================================================================\n  GAS\n================================================================`);
+  let totalGas = 0n;
+  for (const { label, receipt } of receipts) {
+    totalGas += receipt.gasUsed;
+    console.log(
+      `  ${label.padEnd(20)} ${receipt.gasUsed.toString().padStart(10)} gas   ` +
+      `${ethers.formatUnits(receipt.gasUsed * receipt.gasPrice, 18)} USDC`
+    );
+  }
+  console.log(`  ${"TOTAL".padEnd(20)} ${totalGas.toString().padStart(10)} gas`);
+  console.log(`  balance spent        ${ethers.formatUnits(startBalance - endBalance, 18)} USDC`);
+
+  console.log(`\n================================================================\n  NEXT\n================================================================`);
+  console.log(`  Ballista    ${ballistaAddress}`);
+  console.log(`  MockRouter  ${routerAddress}  (PLACEHOLDER -- not a real DEX)`);
+  console.log(`  explorer    https://testnet.arcscan.app/address/${ballistaAddress}`);
+  console.log(`\n  Verify:`);
+  console.log(`    npx hardhat verify --network arcTestnet ${ballistaAddress} ${ARC_TESTNET_USDC} ${treasury}`);
+  console.log(`    npx hardhat verify --network arcTestnet ${routerAddress}`);
+  if (deployBlock) {
+    console.log(`\n  indexer/.env:`);
+    console.log(`    FACTORY_ADDRESS=${ballistaAddress}`);
+    console.log(`    FACTORY_DEPLOY_BLOCK=${deployBlock}`);
+  }
+  console.log(`\n  Ownership is still the deploying EOA. Multisig transfer is a separate step.`);
 }
 
 main().catch((err) => {
-  console.error("\n❌ Deployment failed:", err.message);
-  process.exit(1);
+  console.error(`\nDEPLOYMENT FAILED: ${err.message}`);
+  if (receipts.length) {
+    console.error(`Completed before failing:`);
+    for (const { label, receipt } of receipts) {
+      console.error(`  ${label}  tx ${receipt.hash}`);
+    }
+    console.error(`Set ROUTER_ADDRESS / BALLISTA_ADDRESS to resume without redeploying.`);
+  }
+  process.exitCode = 1;
 });
