@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "../../contracts/ArcLaunchFactory.sol";
+import "../../contracts/Ballista.sol";
 import "../../contracts/mocks/MockUSDC.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -11,11 +11,18 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 ///         the "thousands of random inputs" a scanner or a human reviewer wouldn't
 ///         think to try by hand.
 contract CurveHandler {
-    ArcLaunchFactory public immutable factory;
+    Ballista public immutable factory;
     MockUSDC public immutable usdc;
     address public immutable token;
 
-    constructor(ArcLaunchFactory factory_, MockUSDC usdc_, address token_) {
+    // Counters, asserted on in the invariant test. Without these, a change that made
+    // every single call revert would still show up as a passing run: fail_on_revert
+    // is false and the try/catch below swallows failures, so "nothing ever executed"
+    // and "everything executed correctly" look identical from the outside.
+    uint256 public buysExecuted;
+    uint256 public sellsExecuted;
+
+    constructor(Ballista factory_, MockUSDC usdc_, address token_) {
         factory = factory_;
         usdc = usdc_;
         token = token_;
@@ -28,7 +35,9 @@ contract CurveHandler {
         uint256 usdcIn = 1e6 + (usdcAmountSeed % (5_000e6));
         usdc.mint(address(this), usdcIn);
         usdc.approve(address(factory), usdcIn);
-        try factory.buy(token, usdcIn, 0) {} catch {}
+        try factory.buy(token, usdcIn, 0) {
+            buysExecuted++;
+        } catch {}
     }
 
     function sell(uint256 pctSeed) external {
@@ -38,6 +47,8 @@ contract CurveHandler {
         uint256 tokensIn = (balance * pct) / 100;
         if (tokensIn == 0) return;
         IERC20(token).approve(address(factory), tokensIn);
-        try factory.sell(token, tokensIn, 0) {} catch {}
+        try factory.sell(token, tokensIn, 0) {
+            sellsExecuted++;
+        } catch {}
     }
 }
