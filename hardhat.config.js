@@ -12,6 +12,13 @@ module.exports = {
     settings: { optimizer: { enabled: true, runs: 200 } },
   },
   networks: {
+    hardhat: {
+      // Arc targets 500ms blocks, so two consecutive blocks genuinely can carry the
+      // same whole-second block.timestamp. The snipe tax decays in whole seconds, so
+      // the tests have to be able to put several blocks inside one second the way the
+      // real chain does -- and to exercise t=0 at all, which is the highest-tax case.
+      allowBlocksWithSameTimestamp: true,
+    },
     arcTestnet: {
       url: ARC_TESTNET_RPC_URL,
       chainId: 5042002,

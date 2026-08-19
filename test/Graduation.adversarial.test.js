@@ -23,6 +23,14 @@ describe('Ballista — graduation state machine adversarial testing', function (
       await ballista.setRouter(await router.getAddress());
     }
 
+
+    // These tests are about steady-state curve economics, not sniping, and they trade
+    // immediately after launch -- which in production is squarely inside the snipe
+    // window. Publishing an empty table disables the tax for this fixture so those
+    // trades model normal post-window trading. The tax has its own suite in
+    // test/SnipeTax.test.js.
+    await ballista.publishSnipeTaxTable([]);
+
     for (const signer of [creator, trader, other]) {
       await usdc.mint(signer.address, 20_000_000n * ONE_USDC);
       await usdc.connect(signer).approve(ballistaAddress, ethers.MaxUint256);

@@ -57,26 +57,31 @@ contract CurveInvariantTest is Test {
 
     /// forge-config: default.invariant.runs = 256
     function invariant_factoryHoldsEnoughUsdcToBackItsOwnAccounting() public view {
-        (, , , , uint256 realUsdcReserves, , Ballista.CurveState state, , , , , ) =
-            factory.curves(token);
-        // Only a COMPLETED graduation moves funds out to the DEX. A curve sitting in
-        // GRADUATION_READY still physically holds everything it owes, so it stays
-        // subject to the invariant rather than being waved through.
-        if (state == Ballista.CurveState.GRADUATED) return;
+        // curves() returns the struct itself now, rather than a flat tuple that had to
+        // be re-counted by hand every time a field was added.
+        Ballista.Curve memory c = factory.curves(token);
+        // Accrued creator fees are a real USDC obligation sitting in the contract, and
+        // unlike curve reserves they are NOT discharged by graduation -- so they are
+        // counted in every state. This test contract is the creator of the only token,
+        // so its accrual is the whole outstanding creator liability.
+        uint256 owed = factory.creatorFeesAccrued(address(this));
+        // Only a COMPLETED graduation moves the curve's own reserves out to the DEX.
+        if (c.state != Ballista.CurveState.GRADUATED) {
+            owed += c.realUsdcReserves;
+        }
         assertGe(
             usdc.balanceOf(address(factory)),
-            realUsdcReserves,
-            "factory's real USDC balance fell below what its own accounting claims to hold"
+            owed,
+            "factory's USDC balance fell below curve reserves plus unclaimed creator fees"
         );
     }
 
     function invariant_factoryHoldsEnoughTokenToBackItsOwnAccounting() public view {
-        (, , , , , uint256 tokenReserves, Ballista.CurveState state, , , , , ) =
-            factory.curves(token);
-        if (state == Ballista.CurveState.GRADUATED) return;
+        Ballista.Curve memory c = factory.curves(token);
+        if (c.state == Ballista.CurveState.GRADUATED) return;
         assertGe(
             IERC20(token).balanceOf(address(factory)),
-            tokenReserves,
+            c.tokenReserves,
             "factory's real token balance fell below what its own accounting claims to hold"
         );
     }

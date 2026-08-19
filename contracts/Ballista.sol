@@ -98,6 +98,55 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     ///      the token address on every accrual, which is where the indexer reads it
     ///      from anyway.
     mapping(address => uint256) public creatorFeesAccrued;
+
+    // ── Snipe tax ───────────────────────────────────────────────────────
+
+    /// @notice Hard ceiling on base fee PLUS snipe tax combined, in bps.
+    /// @dev Strictly below BPS_DENOMINATOR, and that is a correctness requirement, not
+    ///      a policy preference. The clamp branch of _quoteBuy inverts the fee with
+    ///      `_ceilDiv(x * BPS_DENOMINATOR, BPS_DENOMINATOR - feeBps)`. At feeBps ==
+    ///      BPS_DENOMINATOR that divides by zero; above it, the subtraction underflows.
+    ///      Either way EVERY clamped buy during the snipe window reverts -- exactly the
+    ///      buys that finish a launch, at exactly the moment the tax is highest.
+    ///
+    ///      99% was the intended opening rate, but 9900 tax + a 100 bps base fee is
+    ///      10000 on the nose. 9900 as the combined ceiling leaves 98% available at
+    ///      t=0 under the default 1% fee, and 89% if the base fee were ever raised to
+    ///      MAX_FEE_BPS. The deterrent is unchanged in any way that matters.
+    uint16 public constant MAX_TOTAL_FEE_BPS = 9900;
+
+    /// @notice Buy-side tax during the first seconds after launch, in bps, indexed by
+    ///         whole seconds elapsed since the token was created. Past the end of the
+    ///         table the tax is zero, so the table's length IS the window length.
+    /// @dev Published as immutable versions rather than mutated in place. A token
+    ///      snapshots only the version number it launched under (one slot), and reads
+    ///      that version forever -- so the owner can retune the table for new launches
+    ///      without ever changing the terms of a token already trading, and without
+    ///      paying to copy the whole array into every Curve.
+    ///
+    ///      A table, not exponential math: the window is a handful of seconds, so there
+    ///      are only a few discrete points. A table is cheaper, exact, and cannot be
+    ///      subtly wrong the way a fixed-point decay curve can.
+    ///
+    ///      Arc targets 500ms blocks, so a 5-second window is roughly ten blocks --
+    ///      enough for per-second granularity to be meaningful, and confirmation that
+    ///      the block-0 restriction alone only delays a sniper by half a second.
+    mapping(uint32 => uint16[]) private _snipeTaxTables;
+
+    /// @notice Highest entry in a published table, cached so createToken can check the
+    ///         combined-fee ceiling without walking the array on every launch.
+    mapping(uint32 => uint16) public snipeTaxTableMaxBps;
+
+    /// @notice Version new launches snapshot. Existing tokens keep their own.
+    uint32 public activeSnipeTaxTableVersion;
+    uint32 private _nextSnipeTaxTableVersion;
+
+    /// @notice Share of collected snipe tax sent to treasury, in bps. The remainder goes
+    ///         into the curve's realUsdcReserves without releasing any tokens.
+    /// @dev Deliberately never routed to the creator: a creator sniping their own launch
+    ///      would recover part of their own tax, weakening the deterrent for precisely
+    ///      the person with the most advance knowledge of the launch.
+    uint16 public defaultSnipeTaxTreasuryBps = 7000; // 70% treasury / 30% curve
     uint256 public creationFeeUsdc = 5e6; // 5 USDC, paid by creator at launch — this one IS live/global, since it's charged once at the moment of creation, not something an existing token holder is exposed to
     address public treasury;
 
@@ -172,9 +221,25 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         // the specific unfairness of someone buying and selling inside the same block the
         // token was created in, before anyone else could possibly have seen it exists.
         uint256 creationBlock;
+        /// The snipe tax decays in SECONDS, which creationBlock cannot express.
+        uint256 creationTimestamp;
+        uint32 snipeTaxTableVersion;
+        uint16 snipeTaxTreasuryBps;
     }
 
-    mapping(address => Curve) public curves;
+    /// @dev Private with an explicit struct getter below, rather than a public mapping.
+    ///      Solidity's auto-generated getter returns the struct as a flat 14-value
+    ///      tuple, which overflows the stack in the ABI encoder and fails to compile.
+    ///      Returning `Curve memory` is one value instead of fourteen, which sidesteps
+    ///      it without turning on viaIR -- and gives callers named fields rather than a
+    ///      positional tuple they have to keep in sync by hand.
+    mapping(address => Curve) private _curves;
+
+    /// @notice Full curve state for a token. Reverts nothing for an unknown token --
+    ///         callers should check `token` on the result, as the internal code does.
+    function curves(address token) external view returns (Curve memory) {
+        return _curves[token];
+    }
     IERC20 public immutable usdc;
 
     /// @dev Return value of _quoteBuy. Pulling this computation into its own struct +
@@ -188,6 +253,16 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         uint256 newVirtualToken;
         uint256 actualUsdcIn; // may be less than the usdcIn requested, if clamped
         uint256 actualFee;
+    }
+
+    /// @dev How a fee already charged is divided up. Computed in its own function for
+    ///      the same reason BuyQuote exists: buy() with this inlined exceeds Solidity's
+    ///      local-slot limit and fails to compile.
+    struct FeeSplit {
+        uint256 creatorCut;      // accrued to the creator, carved out of the base fee
+        uint256 treasuryCut;     // total actually transferred out to treasury
+        uint256 curveCut;        // snipe tax share retained in the curve
+        uint256 snipeToTreasury; // snipe tax share within treasuryCut, for the event
     }
 
     /// @dev Mirror of BuyQuote for sell() — same stack-depth reasoning.
@@ -208,11 +283,88 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount);
     event CreatorFeesClaimed(address indexed creator, uint256 amount);
     event DefaultCreatorFeeBpsSet(uint16 creatorFeeBps);
+    event SnipeTaxTablePublished(uint32 indexed version, uint16[] table, uint16 maxBps);
+    event DefaultSnipeTaxTreasuryBpsSet(uint16 treasuryBps);
+    event SnipeTaxCollected(address indexed token, address indexed buyer, uint256 toTreasury, uint256 toCurve);
 
     constructor(address usdc_, address treasury_) Ownable(msg.sender) {
         require(usdc_ != address(0) && treasury_ != address(0), "zero address");
         usdc = IERC20(usdc_);
         treasury = treasury_;
+
+        // Opening table: ~98% at t=0 decaying to nothing by t=5. Modelled on Pons V2,
+        // with t=0 capped by MAX_TOTAL_FEE_BPS. Tunable via publishSnipeTaxTable().
+        uint16[] memory opening = new uint16[](5);
+        opening[0] = 9800; // 98%
+        opening[1] = 2500; // 25%
+        opening[2] = 300;  // 3%
+        opening[3] = 100;  // 1%
+        opening[4] = 0;
+        _publishSnipeTaxTable(opening);
+    }
+
+    // ── Snipe tax ───────────────────────────────────────────────────────
+
+    /// @notice Publishes a new snipe tax table and makes it active for FUTURE launches.
+    ///         Tokens already trading keep the version they launched under.
+    /// @param table Tax in bps indexed by whole seconds since launch; length sets the
+    ///        window. An empty table disables the tax entirely for new launches.
+    function publishSnipeTaxTable(uint16[] calldata table)
+        external
+        onlyOwner
+        returns (uint32 version)
+    {
+        uint16[] memory copied = new uint16[](table.length);
+        for (uint256 i = 0; i < table.length; i++) {
+            copied[i] = table[i];
+        }
+        return _publishSnipeTaxTable(copied);
+    }
+
+    function _publishSnipeTaxTable(uint16[] memory table) internal returns (uint32 version) {
+        uint16 maxBps = 0;
+        for (uint256 i = 0; i < table.length; i++) {
+            if (table[i] > maxBps) maxBps = table[i];
+        }
+        // Checked here as well as at creation so a table that could never be launched
+        // under is rejected at publish time, where the mistake is visible, rather than
+        // silently bricking every subsequent createToken call.
+        require(
+            uint256(maxBps) + uint256(MAX_FEE_BPS) <= uint256(MAX_TOTAL_FEE_BPS) ||
+                uint256(maxBps) + uint256(defaultBuyFeeBps) <= uint256(MAX_TOTAL_FEE_BPS),
+            "snipe tax plus base fee would exceed the combined ceiling"
+        );
+
+        version = _nextSnipeTaxTableVersion++;
+        _snipeTaxTables[version] = table;
+        snipeTaxTableMaxBps[version] = maxBps;
+        activeSnipeTaxTableVersion = version;
+        emit SnipeTaxTablePublished(version, table, maxBps);
+    }
+
+    /// @notice The full tax table for a published version.
+    function snipeTaxTable(uint32 version) external view returns (uint16[] memory) {
+        return _snipeTaxTables[version];
+    }
+
+    /// @notice Snipe tax in bps that a buy on this token would pay right now.
+    function currentSnipeTaxBps(address token) external view returns (uint16) {
+        Curve storage c = _curves[token];
+        require(c.token == token, "unknown token");
+        return _snipeTaxBps(c);
+    }
+
+    function _snipeTaxBps(Curve storage c) internal view returns (uint16) {
+        uint16[] storage table = _snipeTaxTables[c.snipeTaxTableVersion];
+        uint256 elapsed = block.timestamp - c.creationTimestamp;
+        if (elapsed >= table.length) return 0;
+        return table[elapsed];
+    }
+
+    function setDefaultSnipeTaxTreasuryBps(uint16 treasuryBps_) external onlyOwner {
+        require(treasuryBps_ <= BPS_DENOMINATOR, "split cannot exceed 100%");
+        defaultSnipeTaxTreasuryBps = treasuryBps_;
+        emit DefaultSnipeTaxTreasuryBpsSet(treasuryBps_);
     }
 
     // ── Launch ──────────────────────────────────────────────────────────
@@ -232,6 +384,8 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
             defaultSellFeeBps,
             defaultGraduationThresholdUsdc,
             defaultCreatorFeeBps,
+            activeSnipeTaxTableVersion,
+            defaultSnipeTaxTreasuryBps,
             caseSensitiveSymbols,
             symbolLockDuration
         ));
@@ -254,6 +408,13 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         require(
             router != address(0),
             "router not set: launches are closed until a DEX is configured"
+        );
+        // The snapshotted base fee and tax table must together stay inside the range
+        // the clamp path can invert, for the whole life of this token.
+        require(
+            uint256(defaultBuyFeeBps) + uint256(snipeTaxTableMaxBps[activeSnipeTaxTableVersion])
+                <= uint256(MAX_TOTAL_FEE_BPS),
+            "base fee plus snipe tax would exceed the combined ceiling"
         );
         require(
             expectedEconomicsHash == currentEconomicsHash(),
@@ -292,7 +453,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         );
         token = address(newToken);
 
-        curves[token] = Curve({
+        _curves[token] = Curve({
             token: token,
             creator: msg.sender,
             virtualTokenReserves: INITIAL_VIRTUAL_TOKEN_RESERVES,
@@ -304,7 +465,10 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
             sellFeeBps: defaultSellFeeBps,
             creatorFeeBps: defaultCreatorFeeBps,
             graduationThresholdUsdc: defaultGraduationThresholdUsdc,
-            creationBlock: block.number
+            creationBlock: block.number,
+            creationTimestamp: block.timestamp,
+            snipeTaxTableVersion: activeSnipeTaxTableVersion,
+            snipeTaxTreasuryBps: defaultSnipeTaxTreasuryBps
         });
 
         emit TokenCreated(token, msg.sender, name, symbol, metadataURI);
@@ -389,30 +553,42 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     }
 
     function buy(address token, uint256 usdcIn, uint256 minTokensOut) external nonReentrant whenNotPaused {
-        Curve storage c = curves[token];
+        Curve storage c = _curves[token];
         require(c.token == token, "unknown token");
         require(c.state == CurveState.ACTIVE, "curve not open for trading: check DEX or wait for graduation");
         require(block.number > c.creationBlock, "trading opens next block");
         require(usdcIn > 0, "zero amount");
 
-        BuyQuote memory q = _quoteBuy(usdcIn, c.buyFeeBps, c.virtualUsdcReserves, c.virtualTokenReserves, c.tokenReserves);
+        // Snipe tax rides on top of the base fee for the purposes of the curve math:
+        // the trader pays it, and the curve releases tokens only for what is left after
+        // BOTH. MAX_TOTAL_FEE_BPS, enforced at creation, is what keeps this sum inside
+        // the range the clamp path can invert.
+        uint16 taxBps = _snipeTaxBps(c);
+        BuyQuote memory q = _quoteBuy(usdcIn, c.buyFeeBps + taxBps, c.virtualUsdcReserves, c.virtualTokenReserves, c.tokenReserves);
 
         require(q.tokensOut >= minTokensOut, "slippage exceeded");
+
+        FeeSplit memory f = _splitBuyFee(c, q.actualUsdcIn, q.actualFee);
 
         // Effects before interactions: all state finalized before any external call fires.
         c.virtualUsdcReserves = q.newVirtualUsdc;
         c.virtualTokenReserves = q.newVirtualToken;
-        c.realUsdcReserves += (q.actualUsdcIn - q.actualFee);
+        // The curve keeps the post-fee amount PLUS its share of the snipe tax. That
+        // share adds USDC without releasing any tokens and without moving the virtual
+        // reserves, so it raises the floor under holders rather than buying anything.
+        // It counts toward graduation, which is intended.
+        c.realUsdcReserves += (q.actualUsdcIn - q.actualFee) + f.curveCut;
         c.tokenReserves -= q.tokensOut;
         bool crossedThreshold = c.realUsdcReserves >= c.graduationThresholdUsdc;
 
-        // Creator share is carved out of the fee just charged, and only ACCRUED here --
-        // never transferred to the creator inside a trade. Still an effect, so it lands
-        // with the other effects, before any external call.
-        uint256 creatorCut = _creatorCut(q.actualUsdcIn, c.creatorFeeBps, q.actualFee);
-        if (creatorCut > 0) {
-            creatorFeesAccrued[c.creator] += creatorCut;
-            emit CreatorFeeAccrued(token, c.creator, creatorCut);
+        // Creator share is only ACCRUED here -- never transferred to the creator inside
+        // a trade. Still an effect, so it lands with the other effects.
+        if (f.creatorCut > 0) {
+            creatorFeesAccrued[c.creator] += f.creatorCut;
+            emit CreatorFeeAccrued(token, c.creator, f.creatorCut);
+        }
+        if (taxBps > 0) {
+            emit SnipeTaxCollected(token, msg.sender, f.snipeToTreasury, f.curveCut);
         }
 
         // Interactions. Only q.actualUsdcIn is ever pulled from the buyer — if the
@@ -420,10 +596,9 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         // rather than taken and refunded in a separate transfer. One fewer external
         // call, one fewer way for a "refund" step to fail or be forgotten.
         usdc.safeTransferFrom(msg.sender, address(this), q.actualUsdcIn);
-        // Only the treasury's share leaves the contract; the creator's stays here until
-        // claimed. The two sum to exactly q.actualFee.
-        uint256 treasuryCut = q.actualFee - creatorCut;
-        if (treasuryCut > 0) usdc.safeTransfer(treasury, treasuryCut);
+        // Only treasury's share leaves the contract. The creator's stays until claimed
+        // and the curve's stays as reserves; all three sum to exactly q.actualFee.
+        if (f.treasuryCut > 0) usdc.safeTransfer(treasury, f.treasuryCut);
         IERC20(token).safeTransfer(msg.sender, q.tokensOut);
         emit Trade(token, msg.sender, true, q.actualUsdcIn, q.tokensOut);
 
@@ -497,7 +672,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     }
 
     function sell(address token, uint256 tokensIn, uint256 minUsdcOut) external nonReentrant whenNotPaused {
-        Curve storage c = curves[token];
+        Curve storage c = _curves[token];
         require(c.token == token, "unknown token");
         require(c.state == CurveState.ACTIVE, "curve not open for trading: check DEX or wait for graduation");
         require(block.number > c.creationBlock, "trading opens next block");
@@ -553,6 +728,34 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         if (cut > feeCharged) cut = feeCharged;
     }
 
+    /// @dev Divides a buy's total fee into creator / treasury / curve shares.
+    ///
+    ///      The base fee is what the token launched with; everything above it inside
+    ///      actualFee is snipe tax. Deriving the tax as a REMAINDER rather than
+    ///      recomputing it from actualUsdcIn is what guarantees the three shares sum to
+    ///      exactly actualFee -- computing both independently would let a rounding unit
+    ///      escape, and on the clamp path actualFee is an inverted, ceiling-rounded
+    ///      figure that does not match a naive recomputation anyway.
+    function _splitBuyFee(
+        Curve storage c,
+        uint256 actualUsdcIn,
+        uint256 actualFee
+    ) internal view returns (FeeSplit memory f) {
+        uint256 baseFee = (actualUsdcIn * c.buyFeeBps) / BPS_DENOMINATOR;
+        if (baseFee > actualFee) baseFee = actualFee;
+        uint256 snipeTax = actualFee - baseFee;
+
+        // Creator is paid out of the BASE fee only. Routing any snipe tax to the creator
+        // would refund part of their own tax when they snipe their own launch.
+        f.creatorCut = _creatorCut(actualUsdcIn, c.creatorFeeBps, baseFee);
+
+        if (snipeTax > 0) {
+            f.snipeToTreasury = (snipeTax * c.snipeTaxTreasuryBps) / BPS_DENOMINATOR;
+            f.curveCut = snipeTax - f.snipeToTreasury;
+        }
+        f.treasuryCut = (baseFee - f.creatorCut) + f.snipeToTreasury;
+    }
+
     /// @notice Withdraw everything you have accrued as a token creator, across all of
     ///         your launches.
     /// @dev Pull, not push -- see the note on creatorFeesAccrued. Zeroes before
@@ -583,7 +786,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     ///      there's no trade to protect on that path).
     function _performGraduation(address token) internal returns (bool success) {
         if (router == address(0)) return false;
-        Curve storage c = curves[token];
+        Curve storage c = _curves[token];
 
         uint256 tokenLiquidity = LP_TOKEN_RESERVE + c.tokenReserves; // reserve + any curve dust
         uint256 usdcLiquidity = c.realUsdcReserves;
@@ -629,7 +832,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     ///         Anyone can call this. Ballista's own frontend, backend, or indexer
     ///         being down does not block a token from eventually reaching the DEX.
     function graduate(address token) external nonReentrant {
-        Curve storage c = curves[token];
+        Curve storage c = _curves[token];
         require(c.token == token, "unknown token");
         require(c.state == CurveState.GRADUATION_READY, "not ready to graduate");
         require(router != address(0), "router not set: no confirmed Arc DEX yet");
@@ -644,16 +847,18 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     ///         function buy() itself uses, so a frontend price preview and the actual
     ///         execution can never silently diverge into two different math paths.
     function quoteBuy(address token, uint256 usdcIn) external view returns (BuyQuote memory) {
-        Curve storage c = curves[token];
+        Curve storage c = _curves[token];
         require(c.token == token, "unknown token");
         require(c.state == CurveState.ACTIVE, "curve not open for trading: check DEX or wait for graduation");
-        return _quoteBuy(usdcIn, c.buyFeeBps, c.virtualUsdcReserves, c.virtualTokenReserves, c.tokenReserves);
+        // Includes the snipe tax, or a preview shown during the window would promise
+        // far more tokens than the trade actually delivers.
+        return _quoteBuy(usdcIn, c.buyFeeBps + _snipeTaxBps(c), c.virtualUsdcReserves, c.virtualTokenReserves, c.tokenReserves);
     }
 
     /// @notice Mirror of quoteBuy for sell() — same "exact same math as execution"
     ///         guarantee.
     function quoteSell(address token, uint256 tokensIn) external view returns (SellQuote memory) {
-        Curve storage c = curves[token];
+        Curve storage c = _curves[token];
         require(c.token == token, "unknown token");
         require(c.state == CurveState.ACTIVE, "curve not open for trading: check DEX or wait for graduation");
         return _quoteSell(tokensIn, c.sellFeeBps, c.virtualUsdcReserves, c.virtualTokenReserves, c.realUsdcReserves);
@@ -661,13 +866,13 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
 
     /// @notice Current spot price of `token`, in USDC (6 decimals) per whole token.
     function currentPrice(address token) external view returns (uint256) {
-        Curve storage c = curves[token];
+        Curve storage c = _curves[token];
         require(c.token == token, "unknown token");
         return (c.virtualUsdcReserves * 1e18) / c.virtualTokenReserves;
     }
 
     function graduationProgressBps(address token) external view returns (uint256) {
-        Curve storage c = curves[token];
+        Curve storage c = _curves[token];
         require(c.token == token, "unknown token");
         if (c.realUsdcReserves >= c.graduationThresholdUsdc) return BPS_DENOMINATOR;
         return (c.realUsdcReserves * BPS_DENOMINATOR) / c.graduationThresholdUsdc;

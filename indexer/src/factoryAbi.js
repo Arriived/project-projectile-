@@ -19,9 +19,14 @@ module.exports = [
   // keyed by creator alone.
   "event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount)",
   "event CreatorFeesClaimed(address indexed creator, uint256 amount)",
-  // NOTE: `state` replaced the old `graduated` bool, `creatorFeeBps` sits between
-  // sellFeeBps and graduationThresholdUsdc, and `creationBlock` is new on the end.
-  // Field ORDER matters -- a mismatch here decodes into wrong values silently, with
-  // no error raised anywhere.
-  "function curves(address) view returns (address token, address creator, uint256 virtualTokenReserves, uint256 virtualUsdcReserves, uint256 realUsdcReserves, uint256 tokenReserves, uint8 state, uint16 buyFeeBps, uint16 sellFeeBps, uint16 creatorFeeBps, uint256 graduationThresholdUsdc, uint256 creationBlock)",
+  "event SnipeTaxCollected(address indexed token, address indexed buyer, uint256 toTreasury, uint256 toCurve)",
+  // curves() returns the Curve STRUCT now, not a flat tuple. Solidity's auto-getter
+  // flattened it, but at 15 fields that overflowed the ABI encoder's stack, so the
+  // mapping is private behind an explicit struct getter. ethers still surfaces named
+  // fields, so `curve.state` and friends keep working unchanged.
+  //
+  // Field order still matters -- a mismatch decodes into wrong values silently, with no
+  // error raised anywhere. Copied verbatim from the compiled artifact; verify with:
+  //   node -e "...Interface(abi).getFunction('curves').format('full')"
+  "function curves(address token) view returns ((address token, address creator, uint256 virtualTokenReserves, uint256 virtualUsdcReserves, uint256 realUsdcReserves, uint256 tokenReserves, uint8 state, uint16 buyFeeBps, uint16 sellFeeBps, uint16 creatorFeeBps, uint256 graduationThresholdUsdc, uint256 creationBlock, uint256 creationTimestamp, uint32 snipeTaxTableVersion, uint16 snipeTaxTreasuryBps))",
 ];

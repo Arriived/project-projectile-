@@ -30,6 +30,13 @@ async function deployFixture() {
   // override this with their own setRouter() call.
   await factory.connect(owner).setRouter(await router.getAddress());
 
+  // These tests are about steady-state curve economics, not sniping, and they trade
+  // immediately after launch -- which in production is squarely inside the snipe
+  // window. Publishing an empty table disables the tax for this fixture so those
+  // trades model normal post-window trading. The tax has its own suite in
+  // test/SnipeTax.test.js.
+  await factory.connect(owner).publishSnipeTaxTable([]);
+
   // Fund alice and bob generously, approve the factory.
   for (const wallet of [alice, bob]) {
     await usdc.mint(wallet.address, USDC(1_000_000));
