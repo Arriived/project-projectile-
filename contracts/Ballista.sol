@@ -147,7 +147,18 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     ///      would recover part of their own tax, weakening the deterrent for precisely
     ///      the person with the most advance knowledge of the launch.
     uint16 public defaultSnipeTaxTreasuryBps = 7000; // 70% treasury / 30% curve
-    uint256 public creationFeeUsdc = 5e6; // 5 USDC, paid by creator at launch — this one IS live/global, since it's charged once at the moment of creation, not something an existing token holder is exposed to
+    /// @notice Charged to the creator at launch. Live/global rather than snapshotted:
+    ///         it is paid once at creation, so no existing holder is ever exposed to a
+    ///         change in it.
+    /// @dev 0.5 USDC, down from 5. We were the most expensive launchpad to launch on;
+    ///      every competitor is at or near free. Deliberately NOT 0.1: createToken costs
+    ///      ~0.023 USDC of gas, so at 0.1 the fee is barely above cost, and one wallet
+    ///      running the 10s cooldown flat out could push 8,640 launches/day for roughly
+    ///      $1,060 -- affordable for anyone motivated. Noxa earned $12M in fees and
+    ///      still had to stop accepting launches because the feed became unnavigable;
+    ///      revenue from spam does not offset an unusable discovery feed. 0.5 keeps this
+    ///      ~10x cheaper than before while staying meaningfully costly to abuse.
+    uint256 public creationFeeUsdc = 5e5;
     address public treasury;
 
     // ── Anti-spam ───────────────────────────────────────────────────────

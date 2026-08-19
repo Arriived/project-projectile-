@@ -137,7 +137,8 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const before = await usdc.balanceOf(treasury.address);
       await createToken(factory, alice, "First", "CAT");
       const after = await usdc.balanceOf(treasury.address);
-      expect(after - before).to.equal(USDC(5));
+      // 0.5 USDC, down from 5 -- see the note on creationFeeUsdc in Ballista.sol.
+      expect(after - before).to.equal(ethers.parseUnits("0.5", 6));
     });
 
     it("snapshots the current default fees/threshold into the new curve", async function () {
