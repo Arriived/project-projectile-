@@ -5,24 +5,23 @@ const { activateRouter } = require('./routerHelper');
 const ONE_USDC = 1_000_000n;
 const SCALE = 1_000_000n; // fixed-point scale for the measured ratio; SCALE == 1.0
 
-// The number this file exists to pin down: when a curve graduates, does the DEX pool
-// open above or below the price the last curve buyer just paid?
+// When a curve graduates, does the DEX pool open above or below the price the last
+// curve buyer just paid?
 //
-// pool price   = usdcLiquidity / tokenLiquidity   (from the Graduated event)
-// curve price  = virtualUsdcReserves / virtualTokenReserves  (marginal, at close)
+//   pool price  = usdcLiquidity / tokenLiquidity        (from the Graduated event)
+//   curve price = virtualUsdcReserves / virtualTokenReserves  (marginal, at close)
 //
-// Both are computed from raw reserves in BigInt rather than through currentPrice(),
-// which divides down to roughly three significant figures -- enough rounding noise to
-// swamp the few-percent signal being measured.
+// Both from raw reserves in BigInt rather than currentPrice(), which divides down to
+// roughly three significant figures -- enough rounding noise to swamp a few-percent
+// signal.
 function gapBps(usdcLiquidity, tokenLiquidity, virtualUsdc, virtualToken) {
   const ratio = (usdcLiquidity * virtualToken * SCALE) / (tokenLiquidity * virtualUsdc);
-  return Number(ratio - SCALE) / Number(SCALE) * 10_000;
+  return (Number(ratio - SCALE) / Number(SCALE)) * 10_000;
 }
 
-describe('Ballista — graduation price gap', function () {
+describe('Ballista — graduation gap and the dual trigger', function () {
   async function deployFixture() {
     const [deployer, treasury, creator, trader] = await ethers.getSigners();
-
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const ballista = await (await ethers.getContractFactory('Ballista')).deploy(
       await usdc.getAddress(),
@@ -30,162 +29,241 @@ describe('Ballista — graduation price gap', function () {
     );
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());
+    await ballista.publishSnipeTaxTable([]); // steady-state economics, not sniping
+    await ballista.setLaunchCooldown(0);
 
-    // These tests are about steady-state curve economics, not sniping, and they trade
-    // immediately after launch -- which in production is squarely inside the snipe
-    // window. Publishing an empty table disables the tax for this fixture so those
-    // trades model normal post-window trading. The tax has its own suite in
-    // test/SnipeTax.test.js.
-    await ballista.publishSnipeTaxTable([]);
-
-    for (const signer of [creator, trader]) {
-      await usdc.mint(signer.address, 10_000_000n * ONE_USDC);
-      await usdc.connect(signer).approve(await ballista.getAddress(), ethers.MaxUint256);
+    for (const s of [creator, trader]) {
+      await usdc.mint(s.address, 10_000_000n * ONE_USDC);
+      await usdc.connect(s).approve(await ballista.getAddress(), ethers.MaxUint256);
     }
     return { deployer, treasury, creator, trader, usdc, ballista };
   }
 
   async function launch(ballista, creator, symbol) {
     const hash = await ballista.currentEconomicsHash();
-    const receipt = await (
+    const rc = await (
       await ballista.connect(creator).createToken('Gap Test', symbol, 'ipfs://a', hash)
     ).wait();
-    const event = receipt.logs
+    return rc.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
-      .find((l) => l && l.name === 'TokenCreated');
-    return event.args.token;
+      .find((l) => l && l.name === 'TokenCreated').args.token;
   }
 
-  // Drives a token to graduation and returns the measured gap plus the inputs it was
-  // derived from. `finalBuy` controls how far past the threshold the triggering trade
-  // overshoots, which is the main thing besides LP_TOKEN_RESERVE that moves the gap.
-  async function graduateAndMeasure(ballista, creator, trader, symbol, approachUsdc, finalBuy) {
-    const tokenAddress = await launch(ballista, creator, symbol);
-
-    await ballista.connect(trader).buy(tokenAddress, approachUsdc, 0);
-    const beforeFinal = await ballista.curves(tokenAddress);
-    expect(beforeFinal.state).to.equal(0n); // still ACTIVE -- the approach must not graduate
-
-    const receipt = await (await ballista.connect(trader).buy(tokenAddress, finalBuy, 0)).wait();
-    const graduated = receipt.logs
+  function findEvent(ballista, rc, name) {
+    return rc.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
-      .find((l) => l && l.name === 'Graduated');
-    expect(graduated, 'expected this buy to graduate the token').to.not.be.undefined;
+      .find((l) => l && l.name === name);
+  }
 
-    // Virtual reserves are NOT zeroed by graduation, so the curve's closing price is
-    // still readable afterwards.
+  // Drives a token to graduation and measures the gap. `approach` is a first buy that
+  // must NOT graduate; `finalBuy` is the one that crosses.
+  async function graduateAndMeasure(ballista, creator, trader, symbol, approach, finalBuy) {
+    const tokenAddress = await launch(ballista, creator, symbol);
+    if (approach > 0n) {
+      await ballista.connect(trader).buy(tokenAddress, approach, 0);
+      expect((await ballista.curves(tokenAddress)).state, 'approach must not graduate').to.equal(0n);
+    }
+    const rc = await (await ballista.connect(trader).buy(tokenAddress, finalBuy, 0)).wait();
+    const grad = findEvent(ballista, rc, 'Graduated');
+    expect(grad, 'expected this buy to graduate').to.not.be.undefined;
+
     const curve = await ballista.curves(tokenAddress);
     return {
       gap: gapBps(
-        graduated.args.usdcLiquidity,
-        graduated.args.tokenLiquidity,
-        curve.virtualUsdcReserves,
-        curve.virtualTokenReserves
+        grad.args.usdcLiquidity, grad.args.tokenLiquidity,
+        curve.virtualUsdcReserves, curve.virtualTokenReserves
       ),
-      usdcLiquidity: graduated.args.usdcLiquidity,
-      tokenLiquidity: graduated.args.tokenLiquidity,
+      usdcLiquidity: grad.args.usdcLiquidity,
+      tokenLiquidity: grad.args.tokenLiquidity,
+      tokenAddress,
     };
   }
 
-  it('opens the DEX pool ABOVE the curve closing price, by under 5%', async function () {
-    const { ballista, creator, trader } = await deployFixture();
-
-    // Approach 67,000 tightly: 67,000 gross nets 66,330 after the 1% fee, leaving the
-    // curve just short, then a small final buy crosses. Minimal overshoot isolates the
-    // effect of LP_TOKEN_RESERVE from the effect of a sloppy final trade.
-    const { gap, usdcLiquidity, tokenLiquidity } = await graduateAndMeasure(
-      ballista, creator, trader, 'GAPA', 67_000n * ONE_USDC, 700n * ONE_USDC
-    );
-
-    console.log(`        measured gap (tight graduation): ${(gap / 100).toFixed(2)}%`);
-    console.log(`        pool: ${(Number(usdcLiquidity) / 1e6).toFixed(0)} USDC / ` +
-                `${(Number(tokenLiquidity) / 1e18).toFixed(0)} tokens`);
-
-    expect(gap).to.be.greaterThan(0, 'pool must not open below the curve close');
-    expect(gap).to.be.lessThan(500, 'pool must not open more than 5% above the curve close');
+  it('the new constants are exactly as derived', async function () {
+    const { ballista } = await deployFixture();
+    expect(await ballista.INITIAL_VIRTUAL_USDC_RESERVES()).to.equal(2_667n * ONE_USDC);
+    expect(await ballista.INITIAL_VIRTUAL_TOKEN_RESERVES()).to.equal(1_075_000_000n * 10n ** 18n);
+    expect(await ballista.CURVE_TOKEN_SUPPLY()).to.equal(807_000_000n * 10n ** 18n);
+    expect(await ballista.LP_TOKEN_RESERVE()).to.equal(193_000_000n * 10n ** 18n);
+    expect(await ballista.TOTAL_TOKEN_SUPPLY()).to.equal(1_000_000_000n * 10n ** 18n);
+    expect(await ballista.defaultGraduationThresholdUsdc()).to.equal(8_000n * ONE_USDC);
   });
 
-  // The gap is NOT a fixed property of LP_TOKEN_RESERVE -- it scales with how far the
-  // triggering buy overshoots the threshold, because overshoot sells more of the curve
-  // and leaves fewer unsold tokens to dilute the pool. The +2.4% above is the tight
-  // case; a whale crossing the threshold in one oversized buy lands far higher.
-  //
-  // The property actually worth enforcing is the SIGN. Positive means the pool opens at
-  // or above the curve's close, so the last curve buyer is never instantly underwater --
-  // which is the failure the resize existed to remove. The magnitude is a spread traders
-  // can position against, and is reported here rather than asserted to a number, since
-  // any bound would be arbitrary.
-  it('never opens the pool below the curve close, at any overshoot', async function () {
+  it('opens the DEX pool ABOVE the curve close, by under 5%', async function () {
     const { ballista, creator, trader } = await deployFixture();
+    // 8,000 gross nets 7,920 after the 1% fee -- just short. A small second buy crosses.
+    const r = await graduateAndMeasure(
+      ballista, creator, trader, 'GAPA', 8_000n * ONE_USDC, 100n * ONE_USDC
+    );
+    console.log(`        measured gap (tight graduation): ${(r.gap / 100).toFixed(3)}%`);
+    console.log(`        pool: ${(Number(r.usdcLiquidity) / 1e6).toFixed(2)} USDC / ` +
+                `${(Number(r.tokenLiquidity) / 1e18).toFixed(0)} tokens`);
+    expect(r.gap).to.be.greaterThan(0, 'pool must not open below the curve close');
+    expect(r.gap).to.be.lessThan(500, 'pool must not open more than 5% above the close');
+  });
 
+  it('the gap stays positive across the whole overshoot range', async function () {
+    const { ballista, creator, trader } = await deployFixture();
     const cases = [
-      ['tight        ', 67_000n, 700n],
-      ['moderate     ', 60_000n, 12_000n],
-      ['heavy        ', 50_000n, 30_000n],
-      ['near-depletion', 50_000n, 60_000n],
+      ['tight        ', 8_000n, 100n],
+      ['moderate     ', 6_000n, 3_000n],
+      ['heavy        ', 4_000n, 6_000n],
+      ['single buy   ', 0n, 12_000n],
+      ['massive      ', 0n, 500_000n],
     ];
-
     const measured = [];
     for (const [label, approach, final] of cases) {
-      // Same creator launches all four, so the per-wallet cooldown has to elapse.
       await ethers.provider.send('evm_increaseTime', [60]);
       await ethers.provider.send('evm_mine');
-
-      const { gap } = await graduateAndMeasure(
-        ballista, creator, trader,
-        'OVS' + measured.length,
-        approach * ONE_USDC,
-        final * ONE_USDC
+      const r = await graduateAndMeasure(
+        ballista, creator, trader, 'OVS' + measured.length, approach * ONE_USDC, final * ONE_USDC
       );
-      measured.push([label, gap]);
-      expect(gap, `${label.trim()} overshoot opened the pool BELOW the curve close`)
-        .to.be.greaterThan(0);
+      measured.push([label, r.gap]);
+      expect(r.gap, `${label.trim()} opened the pool BELOW the curve close`).to.be.greaterThan(0);
     }
-
     console.log('        gap by overshoot:');
-    for (const [label, gap] of measured) {
-      console.log(`          ${label}  ${(gap / 100).toFixed(2)}%`);
-    }
+    for (const [label, gap] of measured) console.log(`          ${label}  ${(gap / 100).toFixed(3)}%`);
   });
 
-  it('pool USDC depth is the full realUsdcReserves, unchanged by the reserve resize', async function () {
+  it('measures the real launch-to-graduation price multiple', async function () {
     const { ballista, creator, trader } = await deployFixture();
-    const tokenAddress = await launch(ballista, creator, 'GAPC');
+    const tokenAddress = await launch(ballista, creator, 'MULT');
+    const c0 = await ballista.curves(tokenAddress);
 
-    await ballista.connect(trader).buy(tokenAddress, 67_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(tokenAddress, 8_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(tokenAddress, 100n * ONE_USDC, 0);
+    const c1 = await ballista.curves(tokenAddress);
+
+    // Computed from raw reserves, NOT currentPrice(): on this curve currentPrice()
+    // returns 2 at launch, so a ratio taken from it is dominated by truncation and
+    // reads ~19.5x for a curve whose real multiple is 16x. See the report.
+    const SC = 1_000_000n;
+    const startScaled = (c0.virtualUsdcReserves * SC * 10n ** 18n) / c0.virtualTokenReserves;
+    const endScaled = (c1.virtualUsdcReserves * SC * 10n ** 18n) / c1.virtualTokenReserves;
+    const multiple = Number(endScaled) / Number(startScaled);
+    console.log(`        launch->graduation price multiple: ${multiple.toFixed(3)}x`);
+    console.log(`        (currentPrice() view reads ${await ballista.currentPrice(tokenAddress)} vs ` +
+                `${c0.virtualUsdcReserves * 10n ** 18n / c0.virtualTokenReserves} at launch -- lossy)`);
+    expect(multiple).to.be.greaterThan(15);
+    expect(multiple).to.be.lessThan(17);
+  });
+
+  describe('dual graduation trigger', function () {
+    it('the depletion ceiling sits ABOVE the threshold, so the threshold is reachable', async function () {
+      const { ballista, creator, trader } = await deployFixture();
+      const tokenAddress = await launch(ballista, creator, 'CEIL');
+      // One enormous buy: clamps to the entire remaining supply and graduates.
+      const rc = await (
+        await ballista.connect(trader).buy(tokenAddress, 1_000_000n * ONE_USDC, 0)
+      ).wait();
+      const grad = findEvent(ballista, rc, 'Graduated');
+      const ceiling = grad.args.usdcLiquidity;
+      console.log(`        depletion ceiling: ${(Number(ceiling) / 1e6).toFixed(2)} USDC`);
+      // Derivation says $8,030.85 against an $8,000 threshold.
+      expect(ceiling).to.be.greaterThan(8_000n * ONE_USDC);
+      expect(ceiling).to.be.lessThan(8_100n * ONE_USDC);
+    });
+
+    it('PROVES THE DEPLETION ARM FIRES: an unreachable threshold still graduates', async function () {
+      const { ballista, creator, trader } = await deployFixture();
+      // Threshold far beyond anything the curve can ever accumulate. Without the
+      // depletion arm this token would be permanently stuck: no tokens left to sell,
+      // threshold unreachable, holders trapped, forever.
+      await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+      const tokenAddress = await launch(ballista, creator, 'DEPL');
+
+      const rc = await (
+        await ballista.connect(trader).buy(tokenAddress, 1_000_000n * ONE_USDC, 0)
+      ).wait();
+
+      const curve = await ballista.curves(tokenAddress);
+      expect(curve.tokenReserves).to.equal(0n);
+      expect(curve.state, 'depletion must graduate even with the threshold unreachable')
+        .to.equal(2n);
+      expect(findEvent(ballista, rc, 'Graduated')).to.not.be.undefined;
+    });
+
+    it('the old permanently-stuck scenario is now impossible', async function () {
+      const { ballista, creator, trader } = await deployFixture();
+      await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+      const tokenAddress = await launch(ballista, creator, 'STUCK');
+
+      await ballista.connect(trader).buy(tokenAddress, 1_000_000n * ONE_USDC, 0);
+      // Fully depleted AND graduated -- there is no state where tokenReserves is zero
+      // and the curve is still ACTIVE waiting for a threshold it can never reach.
+      const curve = await ballista.curves(tokenAddress);
+      expect(curve.tokenReserves).to.equal(0n);
+      expect(curve.state).to.not.equal(0n);
+    });
+
+    it('a clamped buy ALWAYS graduates -- the clamp takes every remaining token', async function () {
+      const { ballista, creator, trader } = await deployFixture();
+      const tokenAddress = await launch(ballista, creator, 'CLMP');
+      const huge = 1_000_000n * ONE_USDC;
+
+      const quote = await ballista.quoteBuy(tokenAddress, huge);
+      expect(quote.actualUsdcIn, 'expected the clamp path').to.be.lessThan(huge);
+      expect(quote.tokensOut).to.equal((await ballista.curves(tokenAddress)).tokenReserves);
+
+      await ballista.connect(trader).buy(tokenAddress, huge, 0);
+      expect((await ballista.curves(tokenAddress)).state).to.equal(2n);
+    });
+
+    it('graduationProgressBps reaches 100% and reflects whichever arm is closer', async function () {
+      const { ballista, creator, trader } = await deployFixture();
+      const tokenAddress = await launch(ballista, creator, 'PROG');
+      expect(await ballista.graduationProgressBps(tokenAddress)).to.equal(0n);
+
+      await ballista.connect(trader).buy(tokenAddress, 4_000n * ONE_USDC, 0);
+      const mid = await ballista.graduationProgressBps(tokenAddress);
+      expect(mid).to.be.greaterThan(0n);
+      expect(mid).to.be.lessThan(10_000n);
+
+      await ballista.connect(trader).buy(tokenAddress, 8_000n * ONE_USDC, 0);
+      expect(await ballista.graduationProgressBps(tokenAddress)).to.equal(10_000n);
+    });
+
+    it('sell() needs no depletion handling: a sell can never see a depleted ACTIVE curve', async function () {
+      const { ballista, creator, trader } = await deployFixture();
+      const tokenAddress = await launch(ballista, creator, 'SELL');
+      const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+      await token.connect(trader).approve(await ballista.getAddress(), ethers.MaxUint256);
+
+      // Deplete in one buy; the same transaction graduates it.
+      await ballista.connect(trader).buy(tokenAddress, 1_000_000n * ONE_USDC, 0);
+      expect((await ballista.curves(tokenAddress)).tokenReserves).to.equal(0n);
+
+      // Trading is closed, so no sell can push tokenReserves back above zero.
+      await expect(
+        ballista.connect(trader).sell(tokenAddress, 1_000n * 10n ** 18n, 0)
+      ).to.be.revertedWith('curve not open for trading: check DEX or wait for graduation');
+    });
+  });
+
+  it('the pool receives the full realUsdcReserves', async function () {
+    const { ballista, creator, trader } = await deployFixture();
+    const tokenAddress = await launch(ballista, creator, 'DEPTH');
+    await ballista.connect(trader).buy(tokenAddress, 8_000n * ONE_USDC, 0);
     const before = await ballista.curves(tokenAddress);
 
-    const receipt = await (
-      await ballista.connect(trader).buy(tokenAddress, 700n * ONE_USDC, 0)
-    ).wait();
-    const graduated = receipt.logs
-      .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
-      .find((l) => l && l.name === 'Graduated');
-
-    // Everything the curve collected goes to the pool -- the resize moved tokens, not USDC.
-    expect(graduated.args.usdcLiquidity).to.be.greaterThan(before.realUsdcReserves);
-    expect(graduated.args.usdcLiquidity).to.be.greaterThan(67_000n * ONE_USDC);
+    const rc = await (await ballista.connect(trader).buy(tokenAddress, 100n * ONE_USDC, 0)).wait();
+    const grad = findEvent(ballista, rc, 'Graduated');
+    expect(grad.args.usdcLiquidity).to.be.greaterThan(before.realUsdcReserves);
+    expect(grad.args.usdcLiquidity).to.be.greaterThanOrEqual(8_000n * ONE_USDC);
   });
 
   it('pool tokens are the LP reserve plus whatever the curve never sold', async function () {
     const { ballista, creator, trader } = await deployFixture();
-    const tokenAddress = await launch(ballista, creator, 'GAPD');
-
-    await ballista.connect(trader).buy(tokenAddress, 67_000n * ONE_USDC, 0);
+    const tokenAddress = await launch(ballista, creator, 'PTOK');
+    await ballista.connect(trader).buy(tokenAddress, 8_000n * ONE_USDC, 0);
     const before = await ballista.curves(tokenAddress);
 
-    const receipt = await (
-      await ballista.connect(trader).buy(tokenAddress, 700n * ONE_USDC, 0)
-    ).wait();
-    const graduated = receipt.logs
-      .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
-      .find((l) => l && l.name === 'Graduated');
-
+    const rc = await (await ballista.connect(trader).buy(tokenAddress, 100n * ONE_USDC, 0)).wait();
+    const grad = findEvent(ballista, rc, 'Graduated');
     const lpReserve = await ballista.LP_TOKEN_RESERVE();
-    expect(lpReserve).to.equal(165_000_000n * 10n ** 18n);
-    // tokenReserves at the moment of graduation is the leftover; it is zeroed after,
-    // so this reconstructs it from the event rather than reading it back.
-    expect(graduated.args.tokenLiquidity).to.be.greaterThan(lpReserve);
-    expect(graduated.args.tokenLiquidity).to.be.lessThan(before.tokenReserves + lpReserve);
+
+    expect(lpReserve).to.equal(193_000_000n * 10n ** 18n);
+    expect(grad.args.tokenLiquidity).to.be.greaterThan(lpReserve);
+    expect(grad.args.tokenLiquidity).to.be.lessThan(before.tokenReserves + lpReserve);
   });
 });

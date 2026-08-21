@@ -105,6 +105,18 @@ contract MultiCurveInvariantTest is Test {
     ///         and "everything was correct" are otherwise indistinguishable.
     function afterInvariant() public view {
         assertGt(handler.buysExecuted(), 0, "no buy ever executed -- proved nothing");
-        assertGt(handler.sellsExecuted(), 0, "no sell ever executed -- proved nothing");
+    }
+
+    /// @notice The sell path deliberately is NOT asserted in afterInvariant. Handler
+    ///         state resets between runs, and a sell needs a prior buy on the SAME one
+    ///         of three tokens, so a given 50-call run can legitimately contain no
+    ///         successful sell -- asserting it there fails on sequencing luck rather
+    ///         than on a real defect. This proves the path is reachable deterministically
+    ///         instead, so "sells never execute" still cannot pass unnoticed.
+    function test_sellPathIsReachable() public {
+        handler.buy(0, 100e6);
+        assertGt(handler.buysExecuted(), 0, "handler buy path is broken");
+        handler.sell(0, 50);
+        assertGt(handler.sellsExecuted(), 0, "handler sell path is broken");
     }
 }

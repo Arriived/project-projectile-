@@ -38,7 +38,12 @@ contract CurveHandler {
         // to graduate — measured, not assumed — so the state machine's highest-stakes
         // transition was never fuzzed at all. 20k reaches the threshold in roughly
         // seven buys while still leaving most of a run for ordinary trading below it.
-        uint256 usdcIn = 1e6 + (usdcAmountSeed % (20_000e6));
+        // Retuned for the $8,000 curve. The old 20k ceiling was sized for a $67,000
+        // threshold; here a single 20k buy clamps to full depletion and graduates the
+        // curve on the fuzzer's FIRST call, after which every later call no-ops -- which
+        // is exactly what the vacuity guard caught. 250 keeps a depth-50 run inside the
+        // curve for most of its length while still reaching graduation sometimes.
+        uint256 usdcIn = 1e6 + (usdcAmountSeed % (250e6));
         usdc.mint(address(this), usdcIn);
         usdc.approve(address(factory), usdcIn);
         try factory.buy(token, usdcIn, 0) {

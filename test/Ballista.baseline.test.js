@@ -75,9 +75,8 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const tokenAddr = event.args.token;
 
       const token = await ethers.getContractAt("ArcLaunchToken", tokenAddr);
-      // 965M = 800M curve supply + 165M LP reserve. Was 1B when the LP reserve was
-      // 200M; the reserve was resized to fit where the curve actually graduates.
-      expect(await token.balanceOf(await factory.getAddress())).to.equal(TOKENS(965_000_000));
+      // 1B = 807M curve supply + 193M LP reserve, from the $8,000 curve derivation.
+      expect(await token.balanceOf(await factory.getAddress())).to.equal(TOKENS(1_000_000_000));
       expect(await token.balanceOf(alice.address)).to.equal(0n);
       expect(await token.creator()).to.equal(alice.address);
     });
@@ -149,7 +148,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const curve = await factory.curves(tokenAddr);
       expect(curve.buyFeeBps).to.equal(100);
       expect(curve.sellFeeBps).to.equal(100);
-      expect(curve.graduationThresholdUsdc).to.equal(USDC(67_000));
+      expect(curve.graduationThresholdUsdc).to.equal(USDC(8_000));
     });
   });
 
@@ -166,7 +165,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       // not the new 9% default.
       const treasuryBefore = await usdc.balanceOf(treasury.address);
       const creatorBefore = await factory.creatorFeesAccrued(alice.address);
-      await factory.connect(bob).buy(tokenAddr, USDC(1000), 0);
+      await factory.connect(bob).buy(tokenAddr, USDC(100), 0);
       const treasuryAfter = await usdc.balanceOf(treasury.address);
       const creatorAfter = await factory.creatorFeesAccrued(alice.address);
 
@@ -174,7 +173,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       // total charged is what this test is really about -- it must still be the 1% the
       // token launched with, not the new 9% default.
       const totalFee = (treasuryAfter - treasuryBefore) + (creatorAfter - creatorBefore);
-      expect(totalFee).to.equal(USDC(10));
+      expect(totalFee).to.equal(USDC(1)); // 1% of the 100 USDC buy
     });
   });
 
@@ -199,7 +198,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const tokenAddr = await getLastToken(factory, alice);
 
       const priceBefore = await factory.currentPrice(tokenAddr);
-      await factory.connect(bob).buy(tokenAddr, USDC(5000), 0);
+      await factory.connect(bob).buy(tokenAddr, USDC(500), 0);
       const priceAfter = await factory.currentPrice(tokenAddr);
       expect(priceAfter).to.be.gt(priceBefore);
     });
@@ -211,7 +210,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const token = await ethers.getContractAt("ArcLaunchToken", tokenAddr);
 
       const startBalance = await usdc.balanceOf(bob.address);
-      await factory.connect(bob).buy(tokenAddr, USDC(1000), 0);
+      await factory.connect(bob).buy(tokenAddr, USDC(100), 0);
       const tokensReceived = await token.balanceOf(bob.address);
 
       await token.connect(bob).approve(await factory.getAddress(), tokensReceived);
@@ -228,7 +227,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
       await expect(
-        factory.connect(bob).buy(tokenAddr, USDC(1000), TOKENS(999_999_999))
+        factory.connect(bob).buy(tokenAddr, USDC(100), TOKENS(999_999_999))
       ).to.be.revertedWith("slippage exceeded");
     });
   });
@@ -255,8 +254,8 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
 
-      // Buy enough to blow past the 67,000 USDC threshold in one shot.
-      await factory.connect(bob).buy(tokenAddr, USDC(75_000), 0);
+      // Buy enough to blow past the 8,000 USDC threshold in one shot.
+      await factory.connect(bob).buy(tokenAddr, USDC(9_000), 0);
 
       const curve = await factory.curves(tokenAddr);
       expect(curve.state).to.equal(GRADUATED);
@@ -276,7 +275,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
 
-      await expect(factory.connect(bob).buy(tokenAddr, USDC(75_000), 0)).to.not.be.reverted;
+      await expect(factory.connect(bob).buy(tokenAddr, USDC(9_000), 0)).to.not.be.reverted;
 
       const curve = await factory.curves(tokenAddr);
       expect(curve.state).to.equal(GRADUATION_READY);

@@ -31,39 +31,62 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     // ── Token economics (per launched token) ──────────────────────────────
-    uint256 public constant CURVE_TOKEN_SUPPLY = 800_000_000e18; // sold via bonding curve
+    /// @notice Tokens sold through the bonding curve. 807M of a 1B total supply.
+    /// @dev Derived alongside the other curve constants for an $8,000 graduation, not
+    ///      chosen independently -- see the block on INITIAL_VIRTUAL_USDC_RESERVES.
+    ///
+    ///      807M rather than the derivation's 806M is deliberate and load-bearing. At
+    ///      806M the curve's DEPLETION CEILING -- the most realUsdcReserves can ever
+    ///      reach, computed from the virtual reserves -- lands at $7,991, BELOW the
+    ///      $8,000 threshold. The threshold would be structurally unreachable and every
+    ///      token would graduate via the depletion fallback instead. Measured, not
+    ///      assumed. 807M lifts the ceiling to $8,030.85, so the threshold is reachable
+    ///      with $30.85 of headroom and depletion goes back to being a true fallback.
+    uint256 public constant CURVE_TOKEN_SUPPLY = 807_000_000e18;
     /// @notice Tokens reserved for the DEX pool at graduation.
-    /// @dev Sized for where this curve ACTUALLY graduates, not for full depletion.
+    /// @dev THE GAP DIAL. The pool receives `LP_TOKEN_RESERVE + tokenReserves` -- the
+    ///      reserve plus whatever the curve never sold. A smaller reserve means a higher
+    ///      opening pool price and a larger positive gap over the curve's close.
     ///
-    ///      The pool receives `LP_TOKEN_RESERVE + tokenReserves` — the reserve plus
-    ///      whatever the curve never sold — which reduces to `TOTAL_TOKEN_SUPPLY - sold`.
-    ///      The split between the two constants cancels out; only the total moves the
-    ///      pool's opening price.
-    ///
-    ///      The Pump.fun-derived 200M was self-consistent at FULL depletion: sell all
-    ///      800M, raise $87,912, and the pool opens just above the curve's last price
-    ///      with no leftovers. But graduation fires at $67,000 — 92.6% of the curve —
-    ///      leaving ~58.9M unsold tokens dumped into a pool sized for zero. That
-    ///      dilution opened the pool ~11.4% BELOW the curve's final price: the last
-    ///      buyer on the curve was instantly down 11%, on a gap predictable enough to
-    ///      position against. 165M sizes the pool for the real graduation point.
-    ///
-    ///      Does not affect the $87,912 depletion ceiling or the $67,000 threshold's
-    ///      margin — those depend on CURVE_TOKEN_SUPPLY and the virtual reserves, none
-    ///      of which move here. Pool depth in USDC is likewise unchanged; the pool
-    ///      still receives the full realUsdcReserves.
-    uint256 public constant LP_TOKEN_RESERVE = 165_000_000e18;
+    ///      Sized for a +4% gap at the $8,000 threshold. Positive is the safe direction:
+    ///      the pool opening ABOVE the curve's close means the last curve buyer is never
+    ///      instantly underwater. It is not free, though -- a positive gap is exactly
+    ///      what an arbitrageur extracts by buying the last curve tokens and selling
+    ///      into the fresh pool, so it should stay small. Do not enlarge it: a big gap
+    ///      is arbitraged away within minutes and hands whoever buys first on the DEX a
+    ///      bad fill.
+    uint256 public constant LP_TOKEN_RESERVE = 193_000_000e18;
     uint256 public constant TOTAL_TOKEN_SUPPLY = CURVE_TOKEN_SUPPLY + LP_TOKEN_RESERVE;
 
     // ── Bonding curve starting parameters (USDC assumed 6 decimals) ───────
-    uint256 public constant INITIAL_VIRTUAL_TOKEN_RESERVES = 1_073_000_000e18;
-    uint256 public constant INITIAL_VIRTUAL_USDC_RESERVES = 30_000e6;
+    /// @dev These four constants (with CURVE_TOKEN_SUPPLY and LP_TOKEN_RESERVE) are one
+    ///      derivation, not six independent knobs. Changing any of them in isolation
+    ///      breaks the relationships the graduation gap and price multiple depend on.
+    ///
+    ///      Solved for: $8,000 graduation, 16x launch-to-graduation price multiple, +4%
+    ///      graduation gap, 1B total supply. With x = T / (vUSDC0 + T) as the fraction
+    ///      of final virtual USDC that is real:
+    ///        tokens sold at threshold = vTOKEN0 * x
+    ///        multiple                 = 1 / (1 - x)^2      (depends ONLY on x)
+    ///        gap                      = x * vTOKEN0 * (1-x) / LP - 1
+    ///
+    ///      Was 30,000 / 1,073M for a $67,000 threshold. The threshold dropped to $8,000
+    ///      because we were asking 7-11x more than any competitor (pump.fun graduates at
+    ///      ~$6,100-7,400, Pons at ~$9,700) while the real pump.fun graduation rate is
+    ///      0.198% -- a high bar was a real problem, not a cosmetic one.
+    ///
+    ///      CONSEQUENCE WORTH KNOWING: at $2,667 the curve starts roughly 11x thinner
+    ///      than before, so absolute trade sizes bite far harder. A $1,000 buy took 4.3%
+    ///      of supply on the old curve; here it takes about 41%. Price impact has to be
+    ///      a headline number in any UI, not fine print.
+    uint256 public constant INITIAL_VIRTUAL_TOKEN_RESERVES = 1_075_000_000e18;
+    uint256 public constant INITIAL_VIRTUAL_USDC_RESERVES = 2_667e6;
 
     // ── Graduation ──────────────────────────────────────────────────────
     // DEFAULT applied to newly created tokens only. Existing tokens keep whatever value was
     // snapshotted into their Curve struct at launch — see the note on the struct above.
     // 67,000 rather than the Pump.fun-derived 69,000 — deliberate, ours.
-    uint256 public defaultGraduationThresholdUsdc = 67_000e6;
+    uint256 public defaultGraduationThresholdUsdc = 8_000e6;
     address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
     /// @notice The DEX router graduation hands liquidity to.
     /// @dev TRUST NOTE. This is the highest-value lever in the contract. At graduation
@@ -636,7 +659,22 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         // It counts toward graduation, which is intended.
         c.realUsdcReserves += (q.actualUsdcIn - q.actualFee) + f.curveCut;
         c.tokenReserves -= q.tokensOut;
-        bool crossedThreshold = c.realUsdcReserves >= c.graduationThresholdUsdc;
+        // DUAL GRADUATION TRIGGER. Either condition graduates the curve.
+        //
+        // The depletion arm is not decoration. The curve's ceiling -- the most
+        // realUsdcReserves can ever reach, fixed by the virtual reserves -- sits only
+        // $30.85 above the threshold at the current constants. Round CURVE_TOKEN_SUPPLY
+        // down by a single million and the ceiling drops BELOW the threshold, at which
+        // point a threshold-only check would leave every token permanently stuck: no
+        // tokens left to sell, threshold unreachable, holders trapped. Not an edge
+        // case, a 100% failure rate. The depletion arm makes that class of mistake
+        // survivable rather than fatal.
+        //
+        // sell() needs no equivalent check: tokenReserves only ever reaches zero via a
+        // buy, and that buy graduates the curve in the same transaction, closing sell()
+        // along with it. A sell can never observe a depleted curve in ACTIVE state.
+        bool crossedThreshold =
+            c.realUsdcReserves >= c.graduationThresholdUsdc || c.tokenReserves == 0;
 
         // Creator share is only ACCRUED here -- never transferred to the creator inside
         // a trade. Still an effect, so it lands with the other effects.
@@ -942,8 +980,19 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     function graduationProgressBps(address token) external view returns (uint256) {
         Curve storage c = _curves[token];
         require(c.token == token, "unknown token");
-        if (c.realUsdcReserves >= c.graduationThresholdUsdc) return BPS_DENOMINATOR;
-        return (c.realUsdcReserves * BPS_DENOMINATOR) / c.graduationThresholdUsdc;
+        // Graduation fires on EITHER arm of the dual trigger, so progress has to be
+        // whichever is closer -- reporting only threshold progress would leave a curve
+        // that is about to deplete showing well under 100% right up to the moment it
+        // graduates, which reads as a bug to anyone watching a progress bar.
+        if (c.state != CurveState.ACTIVE) return BPS_DENOMINATOR;
+        if (c.realUsdcReserves >= c.graduationThresholdUsdc || c.tokenReserves == 0) {
+            return BPS_DENOMINATOR;
+        }
+        uint256 byThreshold =
+            (c.realUsdcReserves * BPS_DENOMINATOR) / c.graduationThresholdUsdc;
+        uint256 bySupply =
+            ((CURVE_TOKEN_SUPPLY - c.tokenReserves) * BPS_DENOMINATOR) / CURVE_TOKEN_SUPPLY;
+        return byThreshold >= bySupply ? byThreshold : bySupply;
     }
 
     /// @notice Whether `symbol` could be used in createToken() right now, under the

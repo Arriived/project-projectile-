@@ -58,9 +58,9 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
     expect(artifact).to.not.be.undefined;
   });
 
-  it('launches with a 67,000 USDC graduation default, not 69,000', async function () {
+  it('launches with an 8,000 USDC graduation default', async function () {
     const { ballista } = await deployFixture();
-    expect(await ballista.defaultGraduationThresholdUsdc()).to.equal(67_000n * ONE_USDC);
+    expect(await ballista.defaultGraduationThresholdUsdc()).to.equal(8_000n * ONE_USDC);
   });
 
   describe('symbol case-sensitivity toggle', function () {
@@ -387,7 +387,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       const { ballista, creator, trader, usdc } = await deployFixture();
       const tokenAddress = await launch(ballista, creator, 'Safe Coin', 'SAFE');
       await usdc.mint(trader.address, 200_000n * ONE_USDC);
-      await ballista.connect(trader).buy(tokenAddress, 70_000n * ONE_USDC, 0);
+      await ballista.connect(trader).buy(tokenAddress, 9_000n * ONE_USDC, 0);
       expect((await ballista.curves(tokenAddress)).state).to.equal(2n); // GRADUATED
     });
   });
@@ -467,7 +467,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
     expect(await token.balanceOf(trader.address)).to.equal(tokensHeld - tokensHeld / 2n);
 
     await usdc.mint(trader.address, 200_000n * ONE_USDC);
-    await ballista.connect(trader).buy(tokenAddress, 70_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(tokenAddress, 9_000n * ONE_USDC, 0);
 
     const curve = await ballista.curves(tokenAddress);
     expect(curve.state).to.equal(2n); // GRADUATED

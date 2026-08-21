@@ -63,11 +63,11 @@ describe('Ballista — partial-fill adversarial testing', function () {
     await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
     const { tokenAddress } = await launchToken(ballista, creator, 'Adversary Coin', 'ADV', [trader, griefer]);
 
-    await ballista.connect(trader).buy(tokenAddress, 80_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(tokenAddress, 7_000n * ONE_USDC, 0);
     const remaining = (await ballista.curves(tokenAddress)).tokenReserves;
     expect(remaining).to.be.gt(0n);
 
-    await ballista.connect(griefer).buy(tokenAddress, 500n * ONE_USDC, 0);
+    await ballista.connect(griefer).buy(tokenAddress, 100n * ONE_USDC, 0);
     const curveAfterGrief = await ballista.curves(tokenAddress);
     expect(curveAfterGrief.tokenReserves).to.be.lt(remaining);
     if (curveAfterGrief.state !== 0n) return;
@@ -84,32 +84,44 @@ describe('Ballista — partial-fill adversarial testing', function () {
 
     const finalCurve = await ballista.curves(tokenAddress);
     expect(finalCurve.tokenReserves).to.equal(0n);
+    // The clamp consumes ALL remaining supply, so the dual trigger's depletion arm
+    // fires in the same transaction. A clamped buy is now always a graduating buy.
+    expect(finalCurve.state).to.not.equal(0n);
     expect(tradeEvent.args.usdcAmount).to.be.lt(oversizedRequest);
 
     const traderBalanceAfter = await usdcContract.balanceOf(trader.address);
     expect(traderBalanceBefore - traderBalanceAfter).to.equal(tradeEvent.args.usdcAmount);
   });
 
-  it('ISOLATED: the clamp fires purely from token-supply exhaustion, independent of graduation', async function () {
+  // PREMISE CHANGED BY THE DUAL TRIGGER. This used to assert the clamp could fire
+  // while the curve stayed ACTIVE, by parking the threshold out of reach so only
+  // depletion could end the curve. Depletion now graduates, and since the clamp always
+  // takes every remaining token, clamping and graduating became the same event. The
+  // test is kept, inverted, so the coupling is asserted rather than assumed.
+  it('the clamp and graduation are now INSEPARABLE -- clamping always depletes', async function () {
     const { ballista, creator, trader, griefer } = await deployFixture();
     await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
     const { tokenAddress } = await launchToken(ballista, creator, 'Isolated Coin', 'ISO', [trader, griefer]);
 
-    await ballista.connect(trader).buy(tokenAddress, 80_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(tokenAddress, 7_000n * ONE_USDC, 0);
     const remaining = (await ballista.curves(tokenAddress)).tokenReserves;
     expect(remaining).to.be.gt(0n);
 
-    await ballista.connect(griefer).buy(tokenAddress, 500n * ONE_USDC, 0);
+    await ballista.connect(griefer).buy(tokenAddress, 100n * ONE_USDC, 0);
     const curveAfterGrief = await ballista.curves(tokenAddress);
     expect(curveAfterGrief.state).to.equal(0n); // ACTIVE
 
     const tx = await ballista.connect(trader).buy(tokenAddress, 500_000n * ONE_USDC, 0);
-    const tradeEvent = findEvent(ballista, await tx.wait(), 'Trade');
+    const receipt = await tx.wait();
+    const tradeEvent = findEvent(ballista, receipt, 'Trade');
 
     expect(tradeEvent.args.tokenAmount).to.equal(curveAfterGrief.tokenReserves);
     const finalCurve = await ballista.curves(tokenAddress);
     expect(finalCurve.tokenReserves).to.equal(0n);
-    expect(finalCurve.state).to.equal(0n); // ACTIVE
+    // NOT ACTIVE any more: the depletion arm graduated it in this same transaction,
+    // even though the threshold is parked at 10,000,000 and can never be reached.
+    expect(finalCurve.state).to.not.equal(0n);
+    expect(findEvent(ballista, receipt, 'Graduated')).to.not.be.undefined;
   });
 
   it('the excess is never pulled at all -- not pulled-then-refunded, simply never taken', async function () {
@@ -118,7 +130,7 @@ describe('Ballista — partial-fill adversarial testing', function () {
     const { tokenAddress } = await launchToken(ballista, creator, 'Excess Coin', 'EXC', [trader]);
     const usdcContract = await ethers.getContractAt('MockUSDC', await ballista.usdc());
 
-    await ballista.connect(trader).buy(tokenAddress, 80_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(tokenAddress, 7_000n * ONE_USDC, 0);
     const remainingBefore = (await ballista.curves(tokenAddress)).tokenReserves;
 
     const balanceBefore = await usdcContract.balanceOf(trader.address);
@@ -143,8 +155,8 @@ describe('Ballista — partial-fill adversarial testing', function () {
     const a = await launchToken(fixtureA.ballista, fixtureA.creator, 'Coin A', 'CA', [fixtureA.trader, fixtureA.other]);
     const b = await launchToken(fixtureB.ballista, fixtureB.creator, 'Coin B', 'CB', [fixtureB.trader, fixtureB.other]);
 
-    await fixtureA.ballista.connect(fixtureA.trader).buy(a.tokenAddress, 80_000n * ONE_USDC, 0);
-    await fixtureB.ballista.connect(fixtureB.trader).buy(b.tokenAddress, 80_000n * ONE_USDC, 0);
+    await fixtureA.ballista.connect(fixtureA.trader).buy(a.tokenAddress, 7_000n * ONE_USDC, 0);
+    await fixtureB.ballista.connect(fixtureB.trader).buy(b.tokenAddress, 7_000n * ONE_USDC, 0);
 
     const remainingA = (await fixtureA.ballista.curves(a.tokenAddress)).tokenReserves;
     const remainingB = (await fixtureB.ballista.curves(b.tokenAddress)).tokenReserves;
@@ -165,8 +177,8 @@ describe('Ballista — partial-fill adversarial testing', function () {
     await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
     const { tokenAddress } = await launchToken(ballista, creator, 'Slippage Coin', 'SLP', [trader, griefer]);
 
-    await ballista.connect(trader).buy(tokenAddress, 80_000n * ONE_USDC, 0);
-    await ballista.connect(griefer).buy(tokenAddress, 500n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(tokenAddress, 7_000n * ONE_USDC, 0);
+    await ballista.connect(griefer).buy(tokenAddress, 100n * ONE_USDC, 0);
     const remainingAfterGrief = (await ballista.curves(tokenAddress)).tokenReserves;
 
     const impossibleMinimum = remainingAfterGrief + 1n;
@@ -175,25 +187,23 @@ describe('Ballista — partial-fill adversarial testing', function () {
     ).to.be.revertedWith('slippage exceeded');
   });
 
-  it('a fully depleted curve treats a further buy as a harmless zero-fill when minTokensOut is 0, but rejects it the moment a real floor is set', async function () {
-    const { ballista, creator, trader, griefer } = await deployFixture();
+  // The zero-fill case this used to cover is now UNREACHABLE, which is a strict
+  // improvement: there is no longer a state where the curve holds no tokens but still
+  // accepts buys. Depletion graduates, and a graduated curve rejects everything.
+  it('a depleted curve is closed outright -- the old zero-fill state cannot be reached', async function () {
+    const { ballista, creator, trader } = await deployFixture();
     await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
-    const { tokenAddress } = await launchToken(ballista, creator, 'Depleted Coin', 'DEP', [trader, griefer]);
+    const { tokenAddress } = await launchToken(ballista, creator, 'Depleted Coin', 'DEP', [trader]);
 
-    await ballista.connect(trader).buy(tokenAddress, 80_000n * ONE_USDC, 0);
-    await ballista.connect(griefer).buy(tokenAddress, 500n * ONE_USDC, 0);
-    await ballista.connect(trader).buy(tokenAddress, 10_000_000n * ONE_USDC, 0);
-    expect((await ballista.curves(tokenAddress)).tokenReserves).to.equal(0n);
+    await ballista.connect(trader).buy(tokenAddress, 500_000n * ONE_USDC, 0);
+    const curve = await ballista.curves(tokenAddress);
+    expect(curve.tokenReserves).to.equal(0n);
+    expect(curve.state).to.not.equal(0n);
 
-    const usdcContract = await ethers.getContractAt('MockUSDC', await ballista.usdc());
-    const balanceBefore = await usdcContract.balanceOf(trader.address);
-
-    await expect(ballista.connect(trader).buy(tokenAddress, 100n * ONE_USDC, 0)).to.not.be.reverted;
-    expect(await usdcContract.balanceOf(trader.address)).to.equal(balanceBefore);
-
-    await expect(
-      ballista.connect(trader).buy(tokenAddress, 100n * ONE_USDC, 1),
-    ).to.be.revertedWith('slippage exceeded');
+    const closed = 'curve not open for trading: check DEX or wait for graduation';
+    await expect(ballista.connect(trader).buy(tokenAddress, ONE_USDC, 0)).to.be.revertedWith(closed);
+    await expect(ballista.connect(trader).buy(tokenAddress, ONE_USDC, 1n)).to.be.revertedWith(closed);
+    await expect(ballista.quoteBuy(tokenAddress, ONE_USDC)).to.be.revertedWith(closed);
   });
 
   it('a clamped buy that also crosses the graduation threshold graduates correctly, in the same transaction', async function () {
@@ -232,9 +242,9 @@ describe('Ballista — partial-fill adversarial testing', function () {
       await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
       const { tokenAddress, token } = await launchToken(ballista, creator, 'Multi Coin', 'MLT', [trader, griefer, other]);
 
-      await ballista.connect(trader).buy(tokenAddress, 50_000n * ONE_USDC, 0);
-      await ballista.connect(griefer).buy(tokenAddress, 30_000n * ONE_USDC, 0);
-      await ballista.connect(other).buy(tokenAddress, 10_000n * ONE_USDC, 0);
+      await ballista.connect(trader).buy(tokenAddress, 3_000n * ONE_USDC, 0);
+      await ballista.connect(griefer).buy(tokenAddress, 2_000n * ONE_USDC, 0);
+      await ballista.connect(other).buy(tokenAddress, 500n * ONE_USDC, 0);
 
       const curveBefore = await ballista.curves(tokenAddress);
       expect(curveBefore.realUsdcReserves).to.be.gt(0n);

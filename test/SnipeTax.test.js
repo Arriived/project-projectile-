@@ -83,7 +83,7 @@ describe('Ballista — decaying snipe tax', function () {
     await atElapsed(ballista, tokenAddress, 0);
     expect(await ballista.currentSnipeTaxBps(tokenAddress)).to.equal(9800);
 
-    const spend = 10_000n * ONE_USDC;
+    const spend = 1_000n * ONE_USDC;
     const quoted = await ballista.quoteBuy(tokenAddress, spend);
     await ballista.connect(sniper).buy(tokenAddress, spend, 0);
 
@@ -103,7 +103,7 @@ describe('Ballista — decaying snipe tax', function () {
     const token0 = await launch(ballista, creator, 'EARLY');
 
     await atElapsed(ballista, token0, 0);
-    await ballista.connect(sniper).buy(token0, 10_000n * ONE_USDC, 0);
+    await ballista.connect(sniper).buy(token0, 1_000n * ONE_USDC, 0);
     const early = await (await ethers.getContractAt('ArcLaunchToken', token0)).balanceOf(
       sniper.address
     );
@@ -112,7 +112,7 @@ describe('Ballista — decaying snipe tax', function () {
     await ethers.provider.send('evm_mine');
     const token1 = await launch(ballista, creator, 'LATE');
     await atElapsed(ballista, token1, 10); // past the window
-    await ballista.connect(trader).buy(token1, 10_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(token1, 1_000n * ONE_USDC, 0);
     const late = await (await ethers.getContractAt('ArcLaunchToken', token1)).balanceOf(
       trader.address
     );
@@ -129,7 +129,7 @@ describe('Ballista — decaying snipe tax', function () {
     const before = await ballista.curves(tokenAddress);
     const treasuryBefore = await usdc.balanceOf(treasury.address);
 
-    const spend = 10_000n * ONE_USDC;
+    const spend = 1_000n * ONE_USDC;
     const receipt = await (await ballista.connect(sniper).buy(tokenAddress, spend, 0)).wait();
     const taxEvent = receipt.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -165,7 +165,7 @@ describe('Ballista — decaying snipe tax', function () {
     await atElapsed(ballista, taxed, 1);
 
     const before = await ballista.curves(taxed);
-    const spend = 10_000n * ONE_USDC;
+    const spend = 1_000n * ONE_USDC;
     await ballista.connect(sniper).buy(taxed, spend, 0);
     const after = await ballista.curves(taxed);
 
@@ -187,7 +187,7 @@ describe('Ballista — decaying snipe tax', function () {
     const tokenAddress = await launch(ballista, creator);
 
     await atElapsed(ballista, tokenAddress, 10); // buy cleanly, outside the window
-    await ballista.connect(trader).buy(tokenAddress, 50_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(tokenAddress, 2_000n * ONE_USDC, 0);
 
     const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
     const held = await token.balanceOf(trader.address);
@@ -318,7 +318,7 @@ describe('Ballista — decaying snipe tax', function () {
 
       await atElapsed(ballista, tokenAddress, 1);
       const treasuryBefore = await usdc.balanceOf(treasury.address);
-      const spend = 10_000n * ONE_USDC;
+      const spend = 1_000n * ONE_USDC;
       const receipt = await (await ballista.connect(sniper).buy(tokenAddress, spend, 0)).wait();
       const taxEvent = receipt.logs
         .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })

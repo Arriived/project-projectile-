@@ -46,7 +46,7 @@ describe('Ballista — creator fee share', function () {
     const { ballista, usdc, creator, trader, treasury } = await deployFixture();
     const tokenAddress = await launch(ballista, creator);
 
-    const buyAmount = 10_000n * ONE_USDC;
+    const buyAmount = 1_000n * ONE_USDC;
     const traderBefore = await usdc.balanceOf(trader.address);
     const treasuryBefore = await usdc.balanceOf(treasury.address);
 
@@ -71,7 +71,7 @@ describe('Ballista — creator fee share', function () {
     const tokenAddress = await launch(ballista, creator);
     const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
 
-    await ballista.connect(trader).buy(tokenAddress, 10_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(tokenAddress, 1_000n * ONE_USDC, 0);
     const afterBuy = await ballista.creatorFeesAccrued(creator.address);
 
     const held = await token.balanceOf(trader.address);
@@ -135,9 +135,9 @@ describe('Ballista — creator fee share', function () {
 
     // Trading is completely unaffected: fees accrue as a bookkeeping entry, and
     // nothing is ever pushed to the creator inside a trade.
-    await expect(ballista.connect(trader).buy(tokenAddress, 5_000n * ONE_USDC, 0)).to.not.be
+    await expect(ballista.connect(trader).buy(tokenAddress, 500n * ONE_USDC, 0)).to.not.be
       .reverted;
-    await expect(ballista.connect(other).buy(tokenAddress, 5_000n * ONE_USDC, 0)).to.not.be
+    await expect(ballista.connect(other).buy(tokenAddress, 500n * ONE_USDC, 0)).to.not.be
       .reverted;
 
     expect(await ballista.creatorFeesAccrued(creator.address)).to.be.greaterThan(0n);
@@ -154,7 +154,7 @@ describe('Ballista — creator fee share', function () {
   it('claiming pays out once and zeroes the balance — a second claim reverts', async function () {
     const { ballista, usdc, creator, trader } = await deployFixture();
     const tokenAddress = await launch(ballista, creator);
-    await ballista.connect(trader).buy(tokenAddress, 10_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(tokenAddress, 1_000n * ONE_USDC, 0);
 
     const owed = await ballista.creatorFeesAccrued(creator.address);
     expect(owed).to.be.greaterThan(0n);
@@ -173,7 +173,7 @@ describe('Ballista — creator fee share', function () {
   it('a non-creator cannot claim anything', async function () {
     const { ballista, creator, trader, other } = await deployFixture();
     const tokenAddress = await launch(ballista, creator);
-    await ballista.connect(trader).buy(tokenAddress, 10_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(tokenAddress, 1_000n * ONE_USDC, 0);
 
     // Fees are keyed to the caller, so a stranger's claim finds an empty balance
     // rather than someone else's.
@@ -186,7 +186,7 @@ describe('Ballista — creator fee share', function () {
     const { ballista, creator, trader } = await deployFixture();
     const tokenAddress = await launch(ballista, creator);
 
-    const buyAmount = 10_000n * ONE_USDC;
+    const buyAmount = 1_000n * ONE_USDC;
     await expect(ballista.connect(trader).buy(tokenAddress, buyAmount, 0))
       .to.emit(ballista, 'CreatorFeeAccrued')
       .withArgs(tokenAddress, creator.address, (buyAmount * 90n) / BPS);
@@ -199,10 +199,10 @@ describe('Ballista — creator fee share', function () {
     await ethers.provider.send('evm_mine');
     const second = await launch(ballista, creator, 'TWO');
 
-    await ballista.connect(trader).buy(first, 10_000n * ONE_USDC, 0);
-    await ballista.connect(trader).buy(second, 10_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(first, 1_000n * ONE_USDC, 0);
+    await ballista.connect(trader).buy(second, 1_000n * ONE_USDC, 0);
 
-    const expected = 2n * ((10_000n * ONE_USDC * 90n) / BPS);
+    const expected = 2n * ((1_000n * ONE_USDC * 90n) / BPS);
     expect(await ballista.creatorFeesAccrued(creator.address)).to.equal(expected);
   });
 
@@ -216,7 +216,7 @@ describe('Ballista — creator fee share', function () {
       const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
 
       // ── buy side ──
-      const buyAmount = 10_000n * ONE_USDC;
+      const buyAmount = 1_000n * ONE_USDC;
       let tBefore = await usdc.balanceOf(treasury.address);
       let cBefore = await ballista.creatorFeesAccrued(creator.address);
       await ballista.connect(trader).buy(tokenAddress, buyAmount, 0);
@@ -285,7 +285,7 @@ describe('Ballista — creator fee share', function () {
       await ballista.setDefaultCreatorFees(70, 70); // the eventual steady-state rate
 
       const before = await ballista.creatorFeesAccrued(creator.address);
-      const buyAmount = 10_000n * ONE_USDC;
+      const buyAmount = 1_000n * ONE_USDC;
       await ballista.connect(trader).buy(promo, buyAmount, 0);
       // Still the promotional 90%, because it was snapshotted at launch.
       expect((await ballista.creatorFeesAccrued(creator.address)) - before).to.equal(
@@ -335,7 +335,7 @@ describe('Ballista — creator fee share', function () {
       await ballista.setDefaultCreatorFees(100, 100); // the whole fee, both sides
 
       const before = await ballista.creatorFeesAccrued(creator.address);
-      const buyAmount = 10_000n * ONE_USDC;
+      const buyAmount = 1_000n * ONE_USDC;
       await ballista.connect(trader).buy(tokenAddress, buyAmount, 0);
 
       // Still 0.90% on the buy side, not the new 1%.

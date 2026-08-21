@@ -44,7 +44,12 @@ contract MultiCurveHandler {
         address token = _pick(seed);
         if (factory.curves(token).state != Ballista.CurveState.ACTIVE) return;
 
-        uint256 usdcIn = 1e6 + (amountSeed % (20_000e6));
+        // Retuned for the $8,000 curve. The old 20k ceiling was sized for a $67,000
+        // threshold; here a single 20k buy clamps to full depletion and graduates the
+        // curve on the fuzzer's FIRST call, after which every later call no-ops -- which
+        // is exactly what the vacuity guard caught. 250 keeps a depth-50 run inside the
+        // curve for most of its length while still reaching graduation sometimes.
+        uint256 usdcIn = 1e6 + (amountSeed % (250e6));
         usdc.mint(address(this), usdcIn);
         usdc.approve(address(factory), usdcIn);
 
