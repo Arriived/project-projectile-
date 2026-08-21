@@ -23,6 +23,13 @@ contract ArcLaunchToken is ERC20 {
     ///         Score layer reads from.
     address public immutable creator;
 
+    /// @notice The Ballista factory that deployed this token.
+    /// @dev The only address allowed to update metadataURI. Permissioning goes through
+    ///      the factory rather than straight to the creator so the update EVENT lives on
+    ///      one well-known address instead of being scattered across every token an
+    ///      indexer would otherwise have to subscribe to individually.
+    address public immutable factory;
+
     constructor(
         string memory name_,
         string memory symbol_,
@@ -32,7 +39,23 @@ contract ArcLaunchToken is ERC20 {
         string memory metadataURI_
     ) ERC20(name_, symbol_) {
         creator = creator_;
+        factory = msg.sender;
         metadataURI = metadataURI_;
         _mint(mintTo_, totalSupply_);
+    }
+
+    /// @notice Replaces the off-chain metadata pointer. Factory-only; the factory
+    ///         checks that the caller is this token's creator and emits the audit event.
+    /// @dev Deliberately NOT restricted beyond that. Socials are usually added after a
+    ///      launch rather than before, and the alternative -- immutable metadata --
+    ///      pushes creators into relaunching just to add a Telegram link.
+    ///
+    ///      The obvious abuse is launching with clean links, attracting buyers, then
+    ///      swapping them. That is not preventable on-chain, so it is made VISIBLE
+    ///      instead: every update emits old and new on the factory, and the frontend is
+    ///      expected to surface "socials updated N hours ago" from those events.
+    function setMetadataURI(string calldata newURI) external {
+        require(msg.sender == factory, "only the factory may update metadata");
+        metadataURI = newURI;
     }
 }

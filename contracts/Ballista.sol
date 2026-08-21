@@ -393,6 +393,14 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         uint256 bpsOfCurveSupply
     );
     event RouterProposed(address indexed router, uint256 activatableAt);
+    /// @dev Carries BOTH values so a swap is auditable after the fact, not just the
+    ///      current state. This is the whole protection against launch-clean-then-swap.
+    event MetadataURIUpdated(
+        address indexed token,
+        address indexed creator,
+        string oldURI,
+        string newURI
+    );
     event RouterActivated(address indexed router);
     event MaxCreatorLaunchBpsSet(uint16 maxCreatorLaunchBps);
     event RouterRevoked(address indexed router, bool wasLive);
@@ -673,6 +681,91 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         require(q.actualUsdcIn <= usdcIn, "clamp computed a higher cost than offered");
     }
 
+    /// @notice Lets a token's creator update its off-chain metadata pointer after launch.
+    /// @dev Real product lever rather than a nicety: pump.fun launches advertising a
+    ///      Telegram graduate at 1.485% against 0.166% without, and all three social
+    ///      channels gives 1.919% against 0.110%. Socials are normally added after a
+    ///      launch, so immutable metadata pushes creators into relaunching to add one.
+    ///
+    ///      No restriction on how often, or on the content. The abuse case -- launch
+    ///      with clean links, attract buyers, then swap them -- cannot be prevented
+    ///      on-chain, so it is surfaced instead: MetadataURIUpdated carries the old and
+    ///      the new value, and the frontend is expected to show how recently a token's
+    ///      links changed.
+    function updateMetadataURI(address token, string calldata newURI) external {
+        Curve storage c = _curves[token];
+        require(c.token == token, "unknown token");
+        require(msg.sender == c.creator, "only the token's creator may update metadata");
+
+        string memory oldURI = ArcLaunchToken(token).metadataURI();
+        ArcLaunchToken(token).setMetadataURI(newURI);
+        emit MetadataURIUpdated(token, msg.sender, oldURI, newURI);
+    }
+
+    /// @dev Everything a buy does once its quote is known: fee split, reserve updates,
+    ///      creator accrual, transfers, and the graduation check. Shared by buy() and
+    ///      creatorLaunchBuy().
+    ///
+    ///      Extracted because the two paths had drifted into ~40 duplicated lines, and
+    ///      that duplication pushed the deployed contract past EIP-170's 24,576-byte
+    ///      limit. Restructuring rather than lowering optimizer runs was deliberate:
+    ///      optimizing for size would have traded gas on every single trade, and
+    ///      createToken already costs ~900k.
+    ///
+    ///      Effects before interactions throughout. `taxBps` is passed in only so the
+    ///      SnipeTaxCollected event can be skipped on the exempt creator path -- the
+    ///      tax itself is already baked into the quote by the caller.
+    function _settleBuy(
+        address token,
+        Curve storage c,
+        BuyQuote memory q,
+        uint16 taxBps
+    ) internal {
+        FeeSplit memory f = _splitBuyFee(c, q.actualUsdcIn, q.actualFee);
+
+        c.virtualUsdcReserves = q.newVirtualUsdc;
+        c.virtualTokenReserves = q.newVirtualToken;
+        // The curve keeps the post-fee amount PLUS its share of the snipe tax. That
+        // share adds USDC without releasing tokens and without moving the virtual
+        // reserves, so it raises the floor under holders rather than buying anything.
+        c.realUsdcReserves += (q.actualUsdcIn - q.actualFee) + f.curveCut;
+        c.tokenReserves -= q.tokensOut;
+
+        // DUAL GRADUATION TRIGGER. Either arm graduates the curve. The depletion arm is
+        // load-bearing, not decoration: the ceiling sits only $30.85 above the threshold
+        // at the current constants, and a threshold-only check would leave a token whose
+        // ceiling fell below its threshold permanently stuck with holders trapped.
+        //
+        // sell() needs no equivalent: tokenReserves only reaches zero via a buy, and
+        // that buy graduates the curve in the same transaction, closing sell() with it.
+        bool crossedThreshold =
+            c.realUsdcReserves >= c.graduationThresholdUsdc || c.tokenReserves == 0;
+
+        if (f.creatorCut > 0) {
+            creatorFeesAccrued[c.creator] += f.creatorCut;
+            emit CreatorFeeAccrued(token, c.creator, f.creatorCut);
+        }
+        if (taxBps > 0) {
+            emit SnipeTaxCollected(token, msg.sender, f.snipeToTreasury, f.curveCut);
+        }
+
+        // Interactions. Only q.actualUsdcIn is ever pulled -- a clamped request simply
+        // never takes the excess, rather than taking and refunding it.
+        usdc.safeTransferFrom(msg.sender, address(this), q.actualUsdcIn);
+        if (f.treasuryCut > 0) usdc.safeTransfer(treasury, f.treasuryCut);
+        IERC20(token).safeTransfer(msg.sender, q.tokensOut);
+        emit Trade(token, msg.sender, true, q.actualUsdcIn, q.tokensOut);
+
+        if (crossedThreshold) {
+            // The trade above has ALREADY succeeded regardless of what happens next.
+            // Curve trading closes here permanently, whether or not the DEX side
+            // completes in this same transaction.
+            c.state = CurveState.GRADUATION_READY;
+            emit GraduationReady(token);
+            if (!_performGraduation(token)) emit GraduationAttemptFailed(token);
+        }
+    }
+
     /// @notice The creator's one privileged window: a capped, snipe-tax-exempt buy in
     ///         the same block the token was created. Everyone else starts at block 1,
     ///         into the decaying tax.
@@ -728,26 +821,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         );
         require(q.tokensOut >= minTokensOut, "slippage exceeded");
 
-        FeeSplit memory f = _splitBuyFee(c, q.actualUsdcIn, q.actualFee);
-
-        c.virtualUsdcReserves = q.newVirtualUsdc;
-        c.virtualTokenReserves = q.newVirtualToken;
-        c.realUsdcReserves += (q.actualUsdcIn - q.actualFee) + f.curveCut;
-        c.tokenReserves -= q.tokensOut;
         c.creatorLaunchPurchased += q.tokensOut;
-        bool crossedThreshold =
-            c.realUsdcReserves >= c.graduationThresholdUsdc || c.tokenReserves == 0;
-
-        if (f.creatorCut > 0) {
-            creatorFeesAccrued[c.creator] += f.creatorCut;
-            emit CreatorFeeAccrued(token, c.creator, f.creatorCut);
-        }
-
-        usdc.safeTransferFrom(msg.sender, address(this), q.actualUsdcIn);
-        if (f.treasuryCut > 0) usdc.safeTransfer(treasury, f.treasuryCut);
-        IERC20(token).safeTransfer(msg.sender, q.tokensOut);
-
-        emit Trade(token, msg.sender, true, q.actualUsdcIn, q.tokensOut);
         emit CreatorLaunchBuy(
             token,
             msg.sender,
@@ -756,14 +830,8 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
             (c.creatorLaunchPurchased * BPS_DENOMINATOR) / CURVE_TOKEN_SUPPLY
         );
 
-        // Kept for consistency with buy() rather than assumed unreachable. At the 2.5%
-        // default a launch buy cannot get near either arm, but maxCreatorLaunchBps is
-        // settable and this should not become a special case that quietly skips it.
-        if (crossedThreshold) {
-            c.state = CurveState.GRADUATION_READY;
-            emit GraduationReady(token);
-            if (!_performGraduation(token)) emit GraduationAttemptFailed(token);
-        }
+        // taxBps 0: this path is exempt, which is the whole point of it existing.
+        _settleBuy(token, c, q, 0);
     }
 
     function buy(address token, uint256 usdcIn, uint256 minTokensOut) external nonReentrant whenNotPaused {
@@ -773,83 +841,17 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         require(block.number > c.creationBlock, "trading opens next block");
         require(usdcIn > 0, "zero amount");
 
-        // Snipe tax rides on top of the base fee for the purposes of the curve math:
-        // the trader pays it, and the curve releases tokens only for what is left after
-        // BOTH. MAX_TOTAL_FEE_BPS, enforced at creation, is what keeps this sum inside
-        // the range the clamp path can invert.
+        // Snipe tax rides on top of the base fee for the curve math: the trader pays it,
+        // and the curve releases tokens only for what is left after BOTH.
+        // MAX_TOTAL_FEE_BPS, enforced at creation, keeps this sum inside the range the
+        // clamp path can invert.
         uint16 taxBps = _snipeTaxBps(c);
-        BuyQuote memory q = _quoteBuy(usdcIn, c.buyFeeBps + taxBps, c.virtualUsdcReserves, c.virtualTokenReserves, c.tokenReserves);
-
+        BuyQuote memory q = _quoteBuy(
+            usdcIn, c.buyFeeBps + taxBps, c.virtualUsdcReserves, c.virtualTokenReserves, c.tokenReserves
+        );
         require(q.tokensOut >= minTokensOut, "slippage exceeded");
 
-        FeeSplit memory f = _splitBuyFee(c, q.actualUsdcIn, q.actualFee);
-
-        // Effects before interactions: all state finalized before any external call fires.
-        c.virtualUsdcReserves = q.newVirtualUsdc;
-        c.virtualTokenReserves = q.newVirtualToken;
-        // The curve keeps the post-fee amount PLUS its share of the snipe tax. That
-        // share adds USDC without releasing any tokens and without moving the virtual
-        // reserves, so it raises the floor under holders rather than buying anything.
-        // It counts toward graduation, which is intended.
-        c.realUsdcReserves += (q.actualUsdcIn - q.actualFee) + f.curveCut;
-        c.tokenReserves -= q.tokensOut;
-        // DUAL GRADUATION TRIGGER. Either condition graduates the curve.
-        //
-        // The depletion arm is not decoration. The curve's ceiling -- the most
-        // realUsdcReserves can ever reach, fixed by the virtual reserves -- sits only
-        // $30.85 above the threshold at the current constants. Round CURVE_TOKEN_SUPPLY
-        // down by a single million and the ceiling drops BELOW the threshold, at which
-        // point a threshold-only check would leave every token permanently stuck: no
-        // tokens left to sell, threshold unreachable, holders trapped. Not an edge
-        // case, a 100% failure rate. The depletion arm makes that class of mistake
-        // survivable rather than fatal.
-        //
-        // sell() needs no equivalent check: tokenReserves only ever reaches zero via a
-        // buy, and that buy graduates the curve in the same transaction, closing sell()
-        // along with it. A sell can never observe a depleted curve in ACTIVE state.
-        bool crossedThreshold =
-            c.realUsdcReserves >= c.graduationThresholdUsdc || c.tokenReserves == 0;
-
-        // Creator share is only ACCRUED here -- never transferred to the creator inside
-        // a trade. Still an effect, so it lands with the other effects.
-        if (f.creatorCut > 0) {
-            creatorFeesAccrued[c.creator] += f.creatorCut;
-            emit CreatorFeeAccrued(token, c.creator, f.creatorCut);
-        }
-        if (taxBps > 0) {
-            emit SnipeTaxCollected(token, msg.sender, f.snipeToTreasury, f.curveCut);
-        }
-
-        // Interactions. Only q.actualUsdcIn is ever pulled from the buyer — if the
-        // request was clamped, the excess is simply never taken in the first place,
-        // rather than taken and refunded in a separate transfer. One fewer external
-        // call, one fewer way for a "refund" step to fail or be forgotten.
-        usdc.safeTransferFrom(msg.sender, address(this), q.actualUsdcIn);
-        // Only treasury's share leaves the contract. The creator's stays until claimed
-        // and the curve's stays as reserves; all three sum to exactly q.actualFee.
-        if (f.treasuryCut > 0) usdc.safeTransfer(treasury, f.treasuryCut);
-        IERC20(token).safeTransfer(msg.sender, q.tokensOut);
-        emit Trade(token, msg.sender, true, q.actualUsdcIn, q.tokensOut);
-
-        if (crossedThreshold) {
-            // The trade above has ALREADY happened and succeeded, regardless of
-            // whatever happens next. Curve trading closes here, permanently, whether
-            // or not the DEX side manages to complete in this same transaction.
-            c.state = CurveState.GRADUATION_READY;
-            emit GraduationReady(token);
-
-            // Best-effort automatic graduation. _performGraduation isolates the one
-            // external call that can actually fail (the router) behind its own
-            // try/catch, so a router hiccup — near the block gas limit is the common
-            // real-world case — cannot unwind the buy that already succeeded above.
-            // If it fails, state simply stays GRADUATION_READY: no funds are stuck,
-            // no state is inconsistent, and anyone at all can retry later via
-            // graduate() — this contract does not depend on its own frontend or
-            // backend being up for a token to eventually reach the DEX.
-            if (!_performGraduation(token)) {
-                emit GraduationAttemptFailed(token);
-            }
-        }
+        _settleBuy(token, c, q, taxBps);
     }
 
     /// @dev Pure curve math for a sell, mirroring _quoteBuy — same stack-depth and
