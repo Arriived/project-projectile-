@@ -138,6 +138,26 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     ///      Defaults-for-new-tokens-only, like the fees above. Each is capped at the
     ///      fee on its own side so the creator's slice can never exceed the fee it is
     ///      carved out of; see setDefaultCreatorFees and the guard in setDefaultFees.
+    /// @notice Cap on the creator's privileged block-0 buy, in bps of CURVE_TOKEN_SUPPLY.
+    /// @dev 2.5%, and settable rather than constant on purpose: starting conservative
+    ///      and loosening later reads as a gift, while tightening later breaks the terms
+    ///      people launched under. Snapshotted per token, so a change never moves the
+    ///      deal for anything already live.
+    ///
+    ///      WHY 2.5% AND NOT 5% OR 10%. Dump impact is close to linear. On this curve a
+    ///      creator who buys the cap and exits after $2,000 of follow-on buying extracts
+    ///      roughly 4.7% of inflows at 2.5%, 9.1% at 5%, and 17.4% at 10%. The usual
+    ///      argument for a larger allocation is creator alignment, and it does not apply
+    ///      here: this cap limits only the PRIVILEGED, UNTAXED slot, and a creator who
+    ///      wants a bigger position can buy at block 1 like anyone else. So the number
+    ///      should be set purely by tolerable rug damage, and lower wins.
+    ///
+    ///      WHAT THIS DOES NOT DO. It does not cap total creator holdings. Nothing stops
+    ///      a creator buying more from another address, and no contract-level rule can
+    ///      detect that. NOBODY SHOULD DESCRIBE THIS AS "creators are capped at 2.5%" --
+    ///      it is a cap on one privileged path, and disclosure is the actual protection.
+    uint16 public maxCreatorLaunchBps = 250;
+
     uint16 public defaultCreatorBuyFeeBps = 90;  // 0.90% of a buy  = 90% of a 1% fee
     uint16 public defaultCreatorSellFeeBps = 50; // 0.50% of a sell = 50% of a 1% fee
 
@@ -297,6 +317,14 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         uint256 creationTimestamp;
         uint32 snipeTaxTableVersion;
         uint16 snipeTaxTreasuryBps;
+        /// Cap on the creator's block-0 buy, snapshotted at launch.
+        uint16 maxCreatorLaunchBps;
+        /// Tokens the creator has taken through the block-0 path so far.
+        /// CUMULATIVE, and counted as tokens PURCHASED rather than tokens held: a
+        /// balance check is defeated by transferring out and buying again, and a
+        /// per-transaction cap is defeated by simply sending several transactions in
+        /// the same block.
+        uint256 creatorLaunchPurchased;
     }
 
     /// @dev Private with an explicit struct getter below, rather than a public mapping.
@@ -355,8 +383,18 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     /// @dev These three events ARE the early-warning system. Anyone watching the chain
     ///      should alert on RouterProposed: it is the only advance notice that the most
     ///      dangerous address in the contract is about to change.
+    /// @dev The frontend must surface this on every token page. Disclosure is the
+    ///      protection here, not the cap.
+    event CreatorLaunchBuy(
+        address indexed token,
+        address indexed creator,
+        uint256 usdcSpent,
+        uint256 tokensReceived,
+        uint256 bpsOfCurveSupply
+    );
     event RouterProposed(address indexed router, uint256 activatableAt);
     event RouterActivated(address indexed router);
+    event MaxCreatorLaunchBpsSet(uint16 maxCreatorLaunchBps);
     event RouterRevoked(address indexed router, bool wasLive);
     event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount);
     event CreatorFeesClaimed(address indexed creator, uint256 amount);
@@ -463,6 +501,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
             defaultGraduationThresholdUsdc,
             defaultCreatorBuyFeeBps,
             defaultCreatorSellFeeBps,
+            maxCreatorLaunchBps,
             activeSnipeTaxTableVersion,
             defaultSnipeTaxTreasuryBps,
             caseSensitiveSymbols,
@@ -548,7 +587,9 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
             creationBlock: block.number,
             creationTimestamp: block.timestamp,
             snipeTaxTableVersion: activeSnipeTaxTableVersion,
-            snipeTaxTreasuryBps: defaultSnipeTaxTreasuryBps
+            snipeTaxTreasuryBps: defaultSnipeTaxTreasuryBps,
+            maxCreatorLaunchBps: maxCreatorLaunchBps,
+            creatorLaunchPurchased: 0
         });
 
         emit TokenCreated(token, msg.sender, name, symbol, metadataURI);
@@ -630,6 +671,99 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         // expected to ever actually fire. If it does, something upstream is wrong,
         // and reverting is far safer than silently overcharging.
         require(q.actualUsdcIn <= usdcIn, "clamp computed a higher cost than offered");
+    }
+
+    /// @notice The creator's one privileged window: a capped, snipe-tax-exempt buy in
+    ///         the same block the token was created. Everyone else starts at block 1,
+    ///         into the decaying tax.
+    ///
+    /// @dev This makes the block-0 rule STRONGER, not weaker. Block 0 was closed to
+    ///      everyone, which in practice meant a creator who wanted a position had to
+    ///      race snipers from a second wallet at block 1 -- invisibly, and worse for
+    ///      everyone. Block 0 is now creator-only and disclosed by event.
+    ///
+    ///      Exempt from the snipe tax deliberately: at 98% the feature would be
+    ///      pointless. The base buy fee still applies.
+    ///
+    ///      THE CAP IS CUMULATIVE PER TOKEN, not per transaction. Several transactions
+    ///      fit in one block, so a per-call cap is not a cap at all -- ten "2.5%" buys
+    ///      would take roughly 37% of curve supply. creatorLaunchPurchased accumulates
+    ///      across every call in the window.
+    ///
+    ///      Clamps rather than reverting when the creator asks for more than the cap
+    ///      allows, matching how buy() already handles a request larger than supply.
+    ///      The clamp is reused rather than reimplemented: passing the remaining
+    ///      allowance as `tokenReservesAvailable` makes _quoteBuy's existing, audited
+    ///      clamp path do the work.
+    function creatorLaunchBuy(address token, uint256 usdcIn, uint256 minTokensOut)
+        external
+        nonReentrant
+        whenNotPaused
+    {
+        Curve storage c = _curves[token];
+        require(c.token == token, "unknown token");
+        require(msg.sender == c.creator, "only the token's creator may buy at launch");
+        require(
+            block.number == c.creationBlock,
+            "creator launch buy is block 0 only -- use buy() from the next block"
+        );
+        require(c.state == CurveState.ACTIVE, "curve not open for trading: check DEX or wait for graduation");
+        require(usdcIn > 0, "zero amount");
+
+        uint256 cap = (CURVE_TOKEN_SUPPLY * uint256(c.maxCreatorLaunchBps)) / BPS_DENOMINATOR;
+        require(c.creatorLaunchPurchased < cap, "creator launch allocation already used");
+        uint256 remainingAllowance = cap - c.creatorLaunchPurchased;
+
+        // Bound by BOTH the remaining allowance and the curve's actual supply, so the
+        // clamp cannot hand out more than either permits.
+        uint256 available =
+            c.tokenReserves < remainingAllowance ? c.tokenReserves : remainingAllowance;
+
+        // NOTE the fee argument: c.buyFeeBps ALONE, with no snipe tax added. That also
+        // changes the denominator in the clamp path's fee inversion,
+        // _ceilDiv(x * BPS, BPS - feeBps), which is why the clamp is exercised
+        // explicitly at this fee in the tests rather than assumed.
+        BuyQuote memory q = _quoteBuy(
+            usdcIn, c.buyFeeBps, c.virtualUsdcReserves, c.virtualTokenReserves, available
+        );
+        require(q.tokensOut >= minTokensOut, "slippage exceeded");
+
+        FeeSplit memory f = _splitBuyFee(c, q.actualUsdcIn, q.actualFee);
+
+        c.virtualUsdcReserves = q.newVirtualUsdc;
+        c.virtualTokenReserves = q.newVirtualToken;
+        c.realUsdcReserves += (q.actualUsdcIn - q.actualFee) + f.curveCut;
+        c.tokenReserves -= q.tokensOut;
+        c.creatorLaunchPurchased += q.tokensOut;
+        bool crossedThreshold =
+            c.realUsdcReserves >= c.graduationThresholdUsdc || c.tokenReserves == 0;
+
+        if (f.creatorCut > 0) {
+            creatorFeesAccrued[c.creator] += f.creatorCut;
+            emit CreatorFeeAccrued(token, c.creator, f.creatorCut);
+        }
+
+        usdc.safeTransferFrom(msg.sender, address(this), q.actualUsdcIn);
+        if (f.treasuryCut > 0) usdc.safeTransfer(treasury, f.treasuryCut);
+        IERC20(token).safeTransfer(msg.sender, q.tokensOut);
+
+        emit Trade(token, msg.sender, true, q.actualUsdcIn, q.tokensOut);
+        emit CreatorLaunchBuy(
+            token,
+            msg.sender,
+            q.actualUsdcIn,
+            q.tokensOut,
+            (c.creatorLaunchPurchased * BPS_DENOMINATOR) / CURVE_TOKEN_SUPPLY
+        );
+
+        // Kept for consistency with buy() rather than assumed unreachable. At the 2.5%
+        // default a launch buy cannot get near either arm, but maxCreatorLaunchBps is
+        // settable and this should not become a special case that quietly skips it.
+        if (crossedThreshold) {
+            c.state = CurveState.GRADUATION_READY;
+            emit GraduationReady(token);
+            if (!_performGraduation(token)) emit GraduationAttemptFailed(token);
+        }
     }
 
     function buy(address token, uint256 usdcIn, uint256 minTokensOut) external nonReentrant whenNotPaused {
@@ -1111,6 +1245,16 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         defaultCreatorBuyFeeBps = creatorBuyFeeBps_;
         defaultCreatorSellFeeBps = creatorSellFeeBps_;
         emit DefaultCreatorFeesSet(creatorBuyFeeBps_, creatorSellFeeBps_);
+    }
+
+    /// @notice Sets the block-0 creator buy cap for tokens created AFTER this call.
+    /// @dev Capped at BPS_DENOMINATOR only; the real limit is judgement, and the
+    ///      reasoning for 2.5% is on maxCreatorLaunchBps above. Raising this is a gift
+    ///      to future creators; it can never change the deal for a live token.
+    function setMaxCreatorLaunchBps(uint16 maxCreatorLaunchBps_) external onlyOwner {
+        require(maxCreatorLaunchBps_ <= BPS_DENOMINATOR, "cap cannot exceed 100% of curve supply");
+        maxCreatorLaunchBps = maxCreatorLaunchBps_;
+        emit MaxCreatorLaunchBpsSet(maxCreatorLaunchBps_);
     }
 
     function setCreationFee(uint256 creationFeeUsdc_) external onlyOwner {
