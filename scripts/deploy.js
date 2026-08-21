@@ -197,7 +197,8 @@ async function main() {
   console.log(`  MockRouter  ${routerAddress}  (PLACEHOLDER -- not a real DEX)`);
   console.log(`  explorer    https://testnet.arcscan.app/address/${ballistaAddress}`);
   console.log(`\n  Verify:`);
-  console.log(`    npx hardhat verify --network arcTestnet ${ballistaAddress} ${ARC_TESTNET_USDC} ${treasury}`);
+  // Third constructor arg is the initial router -- omitting it makes verification fail.
+  console.log(`    npx hardhat verify --network arcTestnet ${ballistaAddress} ${ARC_TESTNET_USDC} ${treasury} ${routerAddress}`);
   console.log(`    npx hardhat verify --network arcTestnet ${routerAddress}`);
   if (deployBlock) {
     console.log(`\n  indexer/.env:`);

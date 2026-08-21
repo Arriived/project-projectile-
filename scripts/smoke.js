@@ -88,7 +88,7 @@ async function main() {
   const symbol = "SMK" + (Date.now() % 100000);
   const hash = await ballista.currentEconomicsHash();
   const createRcpt = await send("createToken", ballista, "createToken",
-    ["Smoke Test", symbol, "ipfs://smoke", hash]);
+    ["Smoke Test", symbol, "ipfs://smoke", hash, false]);
   const created = parse(ballista, createRcpt, "TokenCreated")[0];
   const tokenAddress = created.args.token;
   const token = await ethers.getContractAt("ArcLaunchToken", tokenAddress);
@@ -96,8 +96,8 @@ async function main() {
   console.log(`  token ${tokenAddress}  symbol ${symbol}  block ${createRcpt.blockNumber}`);
   check("TokenCreated fired with our creator", created.args.creator === me.address);
   check("symbol recorded on the ERC20", (await token.symbol()) === symbol);
-  check("full 965M minted to factory, none to creator",
-    (await token.balanceOf(BALLISTA)) === 965_000_000n * 10n ** 18n &&
+  check("full 1B minted to factory, none to creator",
+    (await token.balanceOf(BALLISTA)) === 1_000_000_000n * 10n ** 18n &&
     (await token.balanceOf(me.address)) === 0n,
     `factory holds ${ethers.formatUnits(await token.balanceOf(BALLISTA), 18)}`);
 
@@ -269,6 +269,60 @@ async function main() {
   console.log(`\nFINAL CURVE`);
   console.log(`  state ${fin.state} (0=ACTIVE)   realUsdcReserves ${ethers.formatUnits(fin.realUsdcReserves, 6)} USDC`);
   console.log(`  tokenReserves ${ethers.formatUnits(fin.tokenReserves, 18)}   progress ${await ballista.graduationProgressBps(tokenAddress)} bps`);
+
+  // -- creator block-0 buy, on REAL Arc timing ------------------------------
+  // The one thing local tests cannot check. createToken and creatorLaunchBuy must land
+  // in the SAME block; at 500ms blocks that means firing both back to back with
+  // sequential nonces and no wait between them. The token address is predicted from the
+  // factory nonce, because it does not exist until creation is mined.
+  console.log("\nCREATOR BLOCK-0 BUY (real Arc block timing)");
+  try {
+    const n0 = await ethers.provider.getTransactionCount(me.address);
+    const factoryNonce = await ethers.provider.getTransactionCount(BALLISTA);
+    const predicted = ethers.getCreateAddress({ from: BALLISTA, nonce: factoryNonce });
+    const sym2 = "CB0" + (Date.now() % 100000);
+    const h2 = await ballista.currentEconomicsHash();
+
+    const createTx = await ballista.createToken("Block Zero", sym2, "ipfs://b0", h2, false,
+      { nonce: n0, gasLimit: 2000000 });
+    const buyTx = await ballista.creatorLaunchBuy(predicted, 20n * ONE_USDC, 0,
+      { nonce: n0 + 1, gasLimit: 1000000 });
+
+    const cRc = await createTx.wait();
+    const bRc = await buyTx.wait().catch((e) => (e && e.receipt) || null);
+
+    const realToken = parse(ballista, cRc, "TokenCreated")[0].args.token;
+    check("predicted token address matched the real one",
+      predicted.toLowerCase() === realToken.toLowerCase(), predicted);
+
+    const sameBlock = bRc && bRc.blockNumber === cRc.blockNumber;
+    console.log("  create block " + cRc.blockNumber + ", buy block " +
+      (bRc ? bRc.blockNumber : "n/a") + "  -> " +
+      (sameBlock ? "SAME BLOCK" : "different blocks"));
+
+    if (bRc && bRc.status === 1) {
+      const ev = parse(ballista, bRc, "CreatorLaunchBuy")[0];
+      check("creator block-0 buy landed on real Arc timing", !!ev);
+      if (ev) {
+        const pct = Number(ev.args.bpsOfCurveSupply) / 100;
+        console.log("  creator bought " + pct.toFixed(3) + "% of curve supply for " +
+          ethers.formatUnits(ev.args.usdcSpent, 6) + " USDC");
+        check("within the 2.5% cap", ev.args.bpsOfCurveSupply <= 250n, pct + "%");
+        check("no snipe tax on the creator path",
+          parse(ballista, bRc, "SnipeTaxCollected").length === 0);
+      }
+      gas.push({ label: "creatorLaunchBuy", est: 0n, gasUsed: bRc.gasUsed,
+                 cost: bRc.gasUsed * bRc.gasPrice });
+    } else {
+      check("creator block-0 buy landed in the creation block", false,
+        "buy did not share the creation block");
+      console.log("  The privileged window is ONE block. Missing it means the creator");
+      console.log("  falls back to buy() from the next block like anyone else, which is");
+      console.log("  the designed behaviour rather than a contract fault.");
+    }
+  } catch (e) {
+    console.log("  block-0 attempt error: " + (e.shortMessage || e.message));
+  }
 
   console.log(`\nGAS  (limit sent = 2x estimate)`);
   let total = 0n, totalCost = 0n;
