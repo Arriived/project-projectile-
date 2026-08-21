@@ -108,16 +108,20 @@ async function main() {
   // The tight cases matter most: the smallest position that still triggers graduation
   // takes the least slippage selling into the pool, so if this arbitrage is ever
   // profitable, it is profitable there.
+  // RESCALED FOR THE $8,000 CURVE. Prefunds are GROSS (the 1% fee means only 99%
+  // reaches reserves) and chosen so the ATTACKER's buy is what crosses the threshold.
+  // The tight cases matter most: the smallest position that still triggers graduation
+  // takes the least slippage selling into the pool.
   const cases = [
-    ["solo graduation (attacker funds whole curve)",            0n,      80_000n],
-    ["TIGHTEST (others 67.6k, attacker crosses w/ 100)",   67_600n,         100n],
-    ["very tight (others 67.5k, attacker 250)",           67_500n,         250n],
-    ["tight (others 67k, attacker 700)",                  67_000n,         700n],
-    ["small overshoot (others 60k, attacker 10k)",        60_000n,      10_000n],
-    ["heavy overshoot (others 50k, attacker 30k)",        50_000n,      30_000n],
-    ["huge overshoot  (others 40k, attacker 60k)",        40_000n,      60_000n],
-    ["max overshoot   (others 20k, attacker 200k)",       20_000n,     200_000n],
+    ["solo graduation (attacker funds whole curve)",          0n,      12_000n],
+    ["TIGHTEST (others 8,080, attacker crosses w/ 10)",   8_080n,          10n],
+    ["very tight (others 8,050, attacker 50)",            8_050n,          50n],
+    ["tight (others 8,000, attacker 100)",                8_000n,         100n],
+    ["small overshoot (others 6,000, attacker 2,500)",    6_000n,       2_500n],
+    ["heavy overshoot (others 4,000, attacker 5,000)",    4_000n,       5_000n],
+    ["max overshoot   (others 1,000, attacker 50,000)",   1_000n,      50_000n],
   ];
+
 
   console.log("\n  scenario                                     spent      best sale   profit");
   console.log("  " + "-".repeat(76));

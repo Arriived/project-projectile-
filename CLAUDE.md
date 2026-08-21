@@ -45,32 +45,40 @@ Compiled, **95 Hardhat tests + 2 Foundry invariants passing**. **Not yet deploye
 version (`ArcLaunchFactory`) is live on Arc Testnet at
 `0x63C4c5b7D7add4dbE9Bf8f155711dd00F566Ec57`, verified on Blockscout.
 
-**Token supply constants:** 800M curve supply + **165M** LP reserve = **965M total**.
-The LP reserve was 200M, sized for full curve depletion. We graduate at 67,000 USDC
-(92.6% of the curve), so ~58.9M unsold tokens diluted a pool sized for zero leftovers:
-the pool opened **11.45% below** the curve's closing price and the last curve buyer was
-instantly down 11%. Measured against the contract, not modelled.
+**CURVE CONSTANTS — redesigned for an $8,000 graduation.** These six values are ONE
+derivation, not six knobs; changing any in isolation breaks the gap and multiple.
 
-**Measured graduation gap at 165M**, by how far the triggering buy overshoots 67,000:
-tight `+2.42%` / moderate `+6.60%` / heavy `+14.46%` / near-depletion `+23.36%`.
-The gap is not a property of the constant alone — it scales with overshoot, and nothing
-caps how far a single buy can cross the threshold. Tests enforce the SIGN (the pool must
-never open below the curve close); the magnitude is reported, not asserted.
+```
+INITIAL_VIRTUAL_USDC_RESERVES  =  2_667e6            (was 30_000e6)
+INITIAL_VIRTUAL_TOKEN_RESERVES =  1_075_000_000e18   (was 1_073_000_000e18)
+CURVE_TOKEN_SUPPLY             =  807_000_000e18     (was 800_000_000e18)
+LP_TOKEN_RESERVE               =  193_000_000e18     (was 165_000_000e18)
+TOTAL_TOKEN_SUPPLY             =  1_000_000_000e18   (was 965M)
+defaultGraduationThresholdUsdc =  8_000e6            (was 67_000e6)
+```
 
-**Measured fee economics** (`npx hardhat run scripts/economics.js`, real trades through
-a real deployment, so fee rounding is included):
-- Blended creator share: **70.12%** at a 50:50 buy/sell mix, 74.11% at 60:40, 78.56% at
-  70:30. The blend is the honest headline number.
-- Protocol revenue needs **2.34x** the volume under the new model to match the old
-  (0.5 USDC + 90/50 vs 5 USDC + symmetric 30%). Flat across $10k/$100k/$1M, because both
-  models are linear in volume once the launch fee is amortised.
-- A creator on a $100k-lifetime-volume token earns **$704** at 50:50, **$784** at 70:30.
-- A lifetime mix below 50:50 buy is **structurally impossible** — every token sold must
-  have been bought first, so cumulative sell volume can never exceed buy volume.
-- Buy-heavy tokens **graduate before accumulating volume**: at 70:30 the curve hit its
-  67,000 threshold at ~$161k lifetime volume and stopped earning.
+Why $8,000: we were asking 7-11x more than anyone else (pump.fun ~$6,100-7,400,
+Pons ~$9,700) while the measured pump.fun graduation rate is **0.198%**.
 
-Recent changes, all tested:
+**807M, not the 806M the derivation gives.** At 806M the DEPLETION CEILING — the most
+`realUsdcReserves` can ever reach — is **$7,991**, BELOW the $8,000 threshold, so the
+threshold is structurally unreachable. Even the unrounded values land at $7,999.81,
+19 cents short. 807M lifts the ceiling to **$8,030.85** so the threshold is the primary
+path with $30.85 of headroom.
+
+**DUAL GRADUATION TRIGGER, mandatory:** `realUsdcReserves >= threshold OR tokenReserves == 0`.
+Load-bearing, not a safety net — with a ceiling below the threshold a single-arm check
+leaves every token permanently stuck. `sell()` needs no equivalent: `tokenReserves` only
+reaches zero via a buy, and that buy graduates in the same transaction.
+
+**Measured on the new curve** (`npx hardhat test test/GraduationGap.test.js`):
+- depletion ceiling **$8,030.85**, gap **+4.16%** tight, +4.16% to +4.83% across overshoot
+- launch-to-graduation multiple **16.05x**, graduation market cap ~$39,687
+- the curve is ~11x thinner than before: a $1,000 buy takes ~36% of supply, not 4.3%.
+  **Price impact must be a headline number in any UI, and `minTokensOut` must never
+  default to zero.**
+
+Recent changes, all tested:Recent changes, all tested:
 - Renamed to `Ballista`
 - Graduation threshold 67,000 USDC (was 69,000)
 - Symbol lock is time-limited (5 min default) rather than permanent
@@ -119,7 +127,27 @@ Recent changes, all tested:
   Never routed to the creator — a creator sniping their own launch would otherwise
   recover part of their own tax. Opening table: 98/25/3/1/0 percent.
 - `curves()` returns the **`Curve` struct**, not a flat tuple — Solidity's auto-generated
-  getter overflowed the ABI encoder's stack at 15 fields. Callers get named fields.
+  getter overflowed the ABI encoder's stack. Callers get named fields.
+- **Creator launch buy** — `creatorLaunchBuy()` opens block 0 to `curve.creator` only,
+  capped at `maxCreatorLaunchBps` (250 = 2.5% of curve supply) and EXEMPT from the snipe
+  tax. The cap is **cumulative per token**, tracked as tokens PURCHASED: a per-transaction
+  cap is defeated by several transactions in one block (~37% of supply), and a balance
+  check is defeated by transferring out and buying again. Snapshotted and in the
+  economics hash. **This does NOT cap total creator holdings** — nothing stops a creator
+  buying more from another address. Never describe it as "creators are capped at 2.5%";
+  disclosure via the `CreatorLaunchBuy` event is the protection.
+- **Mutable metadata URI** — `updateMetadataURI()`, creator-only, going through the
+  factory so the audit event lives on one address. `MetadataURIUpdated` carries old AND
+  new; launch-clean-then-swap is not preventable on-chain, so it is made visible.
+- **Pool boost (opt-in at launch)** — `createToken(..., poolBoostEnabled)`. Diverts the
+  creator's fee share into a SEPARATE `poolBoost` accumulator added to the pool's USDC
+  side at graduation. It must never touch `realUsdcReserves` or it would advance
+  graduation and leave leftover tokens diluting the pool. Measured worth: gap 4.16% ->
+  5.65%, i.e. a low-single-digit-percent deeper pool. **A trust signal, not an economic
+  mechanism** — do not let the UI imply otherwise.
+- **Licence: UNLICENSED** on everything we wrote. OpenZeppelin stays MIT (verified
+  against the compiler input: 9 ours UNLICENSED, 14 OZ still MIT). Blockscout
+  verification continues — a readable contract is the whole advantage.
 
 ### Other components (built, never run against real infrastructure)
 - `BridgeWithPermit.sol` — permit-based CCTP burn, one tx instead of approve+burn.
@@ -157,9 +185,13 @@ Recent changes, all tested:
 6. Frontend. Needs `tokens.state` (indexer migration 001) to distinguish "still trading"
    from "awaiting graduation" from "graduated" — the old boolean cannot.
 7. ~~P1 (only if the date is safe): decaying snipe tax, creator fee share~~ **Both landed.**
-8. **Redeploy to Arc Testnet.** The deployment at
-   `0x874C80220d7d21ada3c5137335FBFF895F4b1858` predates the fee revision (it carries
-   the 5 USDC launch fee and the symmetric 30% creator share). Superseded, not broken.
+8. **Activate the router on the new testnet deployment.** Ballista is live at
+   `0x8a6175797BBd32aA306f39a25B215CA0d9Be44f7` (block 58150801), verified exact.
+   MockRouter `0x07D7D1C2D31FFa19Ca24b7Fe116Db1Ada67e191a` is PROPOSED but not active:
+   the 24h `ROUTER_TIMELOCK` must elapse, then `activateRouter()`. **Nothing can launch
+   until then** -- the F1 fix working as designed, not a fault. The live smoke test,
+   including a real creator block-0 buy, is blocked on this.
+10. **Retune the snipe tax table** for the thinner curve -- see the constraint above.
 9. **Post-graduation fee capture** via a V3/V4 locker. Probably where the long-term
    revenue is: measured below, a buy-heavy token graduates at ~$161k of lifetime volume
    and the curve stops earning entirely after that. Blocked on confirming which Uniswap
@@ -176,10 +208,20 @@ Recent changes, all tested:
 - **USDC is 6 decimals** in all contract amounts. Arc also exposes USDC as native
   gas with 18 decimals internally — these are not interchangeable. Confirm which
   one you're touching before assuming.
-- **Graduation threshold cannot exceed ~87,912 USDC.** That's the computed maximum
-  `realUsdcReserves` can ever reach at full curve depletion. Set it higher and a
-  sold-out token can never graduate — it just sits there, permanently stuck. 67,000
-  leaves deliberate margin.
+- **The depletion ceiling is $8,030.85** — the most `realUsdcReserves` can ever reach,
+  fixed by the virtual reserves. The $8,000 threshold sits only **$30.85** below it. Any
+  threshold above the ceiling would be unreachable; the DUAL TRIGGER is what makes that
+  survivable rather than fatal, and it is why the trigger is not optional.
+- **The threshold-to-ceiling window is only ~$31 wide.** A final buy larger than that
+  clamps straight to depletion instead of crossing the threshold cleanly, so in practice
+  many graduations take the depletion arm. Both produce a ~+4% gap, so this is a
+  behavioural note rather than a problem.
+- **A clamped buy ALWAYS graduates.** The clamp takes every remaining token, so it trips
+  the depletion arm in the same transaction. There is no longer a "depleted but still
+  ACTIVE" state, and the old zero-fill-on-empty-curve case is unreachable.
+- **The contract is 24,306 bytes against EIP-170's 24,576** — 270 bytes of headroom.
+  Adding anything requires restructuring or a library first. `_settleBuy` was extracted
+  precisely because `buy()`/`creatorLaunchBuy()` duplication pushed it over the limit.
 - **Fees are read per-token from `curves()`**, snapshotted at creation. Never assume
   the global default applies to an existing token. This now covers `creatorFeeBps`,
   `snipeTaxTableVersion` and `snipeTaxTreasuryBps` as well.
@@ -236,6 +278,11 @@ Recent changes, all tested:
   invented ABI params, wrong decimals, or fabricated functions. Verify against
   actual source before trusting it.
 - Be direct. If an idea is bad, say so and say why. Don't soften it.
+- **The snipe tax table no longer deters on the new curve.** Measured: a $1,000 sniper
+  takes 0.49% of supply at t=0 (9800 bps) but **28.93% at t=1** (2500 bps) and 35% by
+  t=2. The table was tuned against a $30,000 virtual reserve; at $2,667 the same dollar
+  buys 11x more. Real testnet racing lands snipers at t=1-2. Retuning the table is
+  outstanding — do not describe the tax as effective until it is.
 - **Never market the creator split as "90/10".** The blended rate is 70%. Both splits are
   readable on a verified contract in thirty seconds, and the honest claims — "70% to
   creators, matching the market leader" and "90% on every buy" — are both true and both
