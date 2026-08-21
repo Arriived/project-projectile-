@@ -1,5 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
+const { activateRouter } = require('./routerHelper');
 
 const ONE_USDC = 1_000_000n;
 const ACTIVE = 0n;
@@ -20,7 +21,7 @@ describe('Ballista — graduation state machine adversarial testing', function (
     if (RouterContractName) {
       const Router = await ethers.getContractFactory(RouterContractName);
       const router = await Router.deploy();
-      await ballista.setRouter(await router.getAddress());
+      await activateRouter(ballista, await router.getAddress());
     }
 
 
@@ -98,7 +99,7 @@ describe('Ballista — graduation state machine adversarial testing', function (
     // bought this token, never touched it before.
     const WorkingRouter = await ethers.getContractFactory('MockRouter');
     const workingRouter = await WorkingRouter.deploy();
-    await ballista.setRouter(await workingRouter.getAddress());
+    await activateRouter(ballista, await workingRouter.getAddress());
 
     const tx = await ballista.connect(other).graduate(tokenAddress);
     const receipt = await tx.wait();

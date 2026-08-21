@@ -27,7 +27,11 @@ contract MultiCurveInvariantTest is Test {
 
         usdc = new MockUSDC();
         factory = new Ballista(address(usdc), address(this));
-        factory.setRouter(address(new MockRouter()));
+        // Router activation is timelocked now: propose, wait out ROUTER_TIMELOCK, activate.
+        address routerAddr = address(new MockRouter());
+        factory.proposeRouter(routerAddr);
+        vm.warp(block.timestamp + factory.ROUTER_TIMELOCK() + 1);
+        factory.activateRouter(routerAddr);
         // The snipe tax is a launch-window mechanism; leaving it on would make almost
         // every fuzzed buy land in the taxed window and starve the steady-state paths.
         uint16[] memory none = new uint16[](0);

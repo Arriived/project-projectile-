@@ -11,6 +11,7 @@
 //   ECON_GAS_PRICE_GWEI=21              measured Arc Testnet gas price
 const hre = require("hardhat");
 const { ethers } = hre;
+const { activateRouter } = require('../test/routerHelper');
 
 const ONE = 1_000_000n; // 1 USDC, 6dp
 const BPS = 10_000n;
@@ -33,7 +34,7 @@ async function freshDeployment({ creationFee, creatorBuy, creatorSell }) {
   const ballista = await (await ethers.getContractFactory("Ballista"))
     .deploy(await usdc.getAddress(), treasury.address);
   const router = await (await ethers.getContractFactory("MockRouter")).deploy();
-  await ballista.setRouter(await router.getAddress());
+  await activateRouter(ballista, await router.getAddress());
   // Steady-state economics: the snipe tax is a launch-window deterrent, not part of
   // the ongoing fee model, and leaving it on would distort early volume.
   await ballista.publishSnipeTaxTable([]);

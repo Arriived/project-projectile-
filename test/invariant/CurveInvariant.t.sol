@@ -35,7 +35,11 @@ contract CurveInvariantTest is Test {
         // here. This also means the fuzzer drives curves through a real graduation
         // rather than parking them at GRADUATION_READY -- graduation is the
         // highest-stakes transition in the contract, so it should be fuzzed.
-        factory.setRouter(address(new MockRouter()));
+        // Router activation is timelocked now: propose, wait out ROUTER_TIMELOCK, activate.
+        address routerAddr = address(new MockRouter());
+        factory.proposeRouter(routerAddr);
+        vm.warp(block.timestamp + factory.ROUTER_TIMELOCK() + 1);
+        factory.activateRouter(routerAddr);
 
         usdc.mint(address(this), 1_000e6);
         usdc.approve(address(factory), 1_000e6);

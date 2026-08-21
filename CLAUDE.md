@@ -84,11 +84,18 @@ Recent changes, all tested:
 - **Economics pinning** — `createToken()` takes `expectedEconomicsHash`; reverts if
   fees/threshold/symbol policy changed since the creator saw the terms
 - `quoteBuy()` / `quoteSell()` views sharing the exact same math as execution
-- **Router gate** — `createToken()` reverts unless a router is set, and `setRouter()`
-  rejects `address(0)`. Together these make it impossible for a token to launch into a
-  state it cannot leave: a curve at `GRADUATION_READY` has buy and sell both closed and
-  needs a working router to move on. Accepted consequence: **nothing can launch until a
-  router is configured, and no Arc DEX is confirmed yet.**
+- **Router gate + 24h timelock** — `createToken()` reverts unless a router is live.
+  `setRouter()` is GONE, replaced by `proposeRouter()` → 24h → `activateRouter()`, with
+  `revokeRouter()` immediate at any stage. The asymmetry is the point: granting trust is
+  slow and public, removing it is one transaction. `ROUTER_TIMELOCK` is a constant, not
+  owner-settable — an owner who can shorten it to zero has no timelock.
+  Consequences, both accepted: **nothing can launch until a router is live** (and a
+  fresh deployment is therefore unusable for 24h), and revoking the live router strands
+  `GRADUATION_READY` tokens until a replacement clears the delay. Losing a day of
+  graduation beats losing the pot.
+  **Residual risk, unfixed by design:** an owner who holds the key for 24 hours
+  unnoticed still takes the pot. No on-chain check can tell a hostile router from an
+  honest one. Monitoring `RouterProposed` is what turns the delay into a defence.
 - **Creator fee share, asymmetric** — `creatorBuyFeeBps` 90 and `creatorSellFeeBps` 50:
   90% of the fee on a buy, 50% on a sell, carved OUT OF the existing 1% fee, never added
   on top. Trader-facing cost is unchanged; the treasury's share is what shrinks.
@@ -191,6 +198,12 @@ Recent changes, all tested:
   configured none, so invariant fuzzing ran against unoptimized bytecode while everything
   that ships is optimized at 200 runs. Both now match at 200.
 - **Never put raw private keys in browser storage.** Rejected permanently, any framing.
+- **`pause()` does NOT stop graduation.** `buy()`/`sell()` are `whenNotPaused`, so the
+  auto-graduation inside `buy()` is blocked transitively — but `graduate()` is only
+  `nonReentrant`, so anyone can still push a `GRADUATION_READY` token through a live
+  router while paused. `revokeRouter()` is the tool that actually stops graduation.
+- **Monitoring `RouterProposed` is a launch requirement, not a nice-to-have.** The 24h
+  router timelock only defends anything if somebody is watching the event during it.
 - The relayer never custodies user funds — it only pays gas to trigger a mint whose
   recipient was fixed at burn time on the source chain. Keep it that way. No session
   keys, no relayer-signs-buy-on-behalf-of-user.

@@ -65,7 +65,31 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     // 67,000 rather than the Pump.fun-derived 69,000 — deliberate, ours.
     uint256 public defaultGraduationThresholdUsdc = 67_000e6;
     address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
-    address public router; // DEX router — set once a launch-partner DEX is confirmed on Arc
+    /// @notice The DEX router graduation hands liquidity to.
+    /// @dev TRUST NOTE. This is the highest-value lever in the contract. At graduation
+    ///      the entire LP token allocation AND every USDC the curve accumulated (up to
+    ///      ~67,000 per token) are approved to this address and sent in a single call,
+    ///      and the only success check is that a non-zero liquidity figure comes back.
+    ///      An address set here can therefore take everything a graduating token holds,
+    ///      irreversibly, and nothing on-chain can claw it back.
+    ///
+    ///      That is why it cannot be set directly. proposeRouter() starts a 24-hour
+    ///      timelock, activateRouter() finishes it, and revokeRouter() cancels or kills
+    ///      a router with no delay at all. Granting trust is slow and visible; removing
+    ///      it is instant.
+    address public router;
+
+    /// @notice Delay between proposing a router and being able to activate it.
+    /// @dev Deliberately a constant and NOT owner-settable. An owner who can shorten
+    ///      this to zero does not have a timelock, they have a formality -- the whole
+    ///      protection is that a compromised key cannot compress the waiting period.
+    ///      24 hours is long enough for anyone monitoring RouterProposed to react, and
+    ///      short enough that replacing a broken router is not a multi-day outage.
+    uint256 public constant ROUTER_TIMELOCK = 24 hours;
+
+    /// @notice When each address was proposed as a router. Zero means "not proposed",
+    ///         which is also what revocation resets it to.
+    mapping(address => uint256) public routerProposedAt;
 
     // ── Fees ────────────────────────────────────────────────────────────
     // Also defaults-for-new-tokens-only, same reasoning as above.
@@ -305,6 +329,12 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     event GraduationReady(address indexed token);
     event GraduationAttemptFailed(address indexed token);
     event CaseSensitiveSymbolsSet(bool caseSensitive);
+    /// @dev These three events ARE the early-warning system. Anyone watching the chain
+    ///      should alert on RouterProposed: it is the only advance notice that the most
+    ///      dangerous address in the contract is about to change.
+    event RouterProposed(address indexed router, uint256 activatableAt);
+    event RouterActivated(address indexed router);
+    event RouterRevoked(address indexed router, bool wasLive);
     event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount);
     event CreatorFeesClaimed(address indexed creator, uint256 amount);
     event DefaultCreatorFeesSet(uint16 creatorBuyFeeBps, uint16 creatorSellFeeBps);
@@ -811,6 +841,17 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     ///      unwind whatever triggered this — the caller decides what "failure" means
     ///      for its own context (buy() logs and moves on; graduate() reverts, since
     ///      there's no trade to protect on that path).
+    ///
+    /// @dev REENTRANCY NOTE, do not remove the guards on the strength of ordering.
+    ///      State here is written AFTER the external addLiquidity call, which is a
+    ///      deliberate deviation from checks-effects-interactions: reserves must stay
+    ///      intact until the DEX hand-off is CONFIRMED, or a failed graduation would
+    ///      have nothing to roll back to. That is only safe because every external
+    ///      entry point -- buy, sell, graduate, claimCreatorFees -- carries
+    ///      nonReentrant, and OpenZeppelin's guard is a single shared lock, so a router
+    ///      cannot re-enter any of them mid-call. Slither flags this ordering, correctly.
+    ///      If anyone ever adds a state-changing external function WITHOUT nonReentrant,
+    ///      or removes one of the existing guards, this becomes a live reentrancy bug.
     function _performGraduation(address token) internal returns (bool success) {
         if (router == address(0)) return false;
         Curve storage c = _curves[token];
@@ -919,17 +960,66 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
 
     // ── Admin (should be a multisig, not an EOA, before real funds are involved) ──
 
-    /// @notice Points graduation at a DEX router. Can be swapped to a different
-    ///         non-zero router at any time, but never cleared back to the zero address.
-    /// @dev    Rejecting zero is what makes createToken()'s router check meaningful.
-    ///         If the router could be unset, an owner could configure one, let a batch
-    ///         of tokens launch against it, then clear it -- stranding every one of
-    ///         them at GRADUATION_READY with trading closed and no way out. To halt
-    ///         activity, use pause(); that is reversible and does not trap anyone
-    ///         mid-curve.
-    function setRouter(address router_) external onlyOwner {
-        require(router_ != address(0), "router cannot be unset: use pause() to halt instead");
+    /// @notice Step 1 of 3. Announces the intent to make `router_` the graduation
+    ///         router, and starts the timelock. Does NOT change anything live.
+    /// @dev TRUST NOTE. See the note on `router`: whatever is eventually activated here
+    ///      receives the entire LP allocation and all accumulated USDC of every token
+    ///      that graduates afterwards. This function exists so that granting that power
+    ///      is always visible on-chain for at least ROUTER_TIMELOCK before it can be
+    ///      used, giving anyone watching time to react to a compromised owner key.
+    ///
+    ///      Re-proposing an address restarts its clock, which is intentional: it means
+    ///      a proposal cannot be quietly parked and activated much later.
+    function proposeRouter(address router_) external onlyOwner {
+        require(router_ != address(0), "router cannot be the zero address");
+        routerProposedAt[router_] = block.timestamp;
+        emit RouterProposed(router_, block.timestamp + ROUTER_TIMELOCK);
+    }
+
+    /// @notice Step 2 of 3. Makes a previously proposed router live, once its timelock
+    ///         has elapsed.
+    /// @dev Reverts if the address was never proposed, if the delay has not passed, or
+    ///      if the proposal was revoked in the meantime -- revocation zeroes the
+    ///      timestamp, so a revoked address is indistinguishable from one never proposed
+    ///      and must go through the full delay again.
+    function activateRouter(address router_) external onlyOwner {
+        require(router_ != address(0), "router cannot be the zero address");
+        uint256 proposedAt = routerProposedAt[router_];
+        require(proposedAt != 0, "router was never proposed, or was revoked");
+        require(
+            block.timestamp >= proposedAt + ROUTER_TIMELOCK,
+            "router timelock has not elapsed yet"
+        );
         router = router_;
+        emit RouterActivated(router_);
+    }
+
+    /// @notice Emergency stop for a router. IMMEDIATE, no delay, at any stage.
+    /// @dev The asymmetry against proposeRouter is the entire point of this design:
+    ///      granting trust takes 24 hours and is publicly visible the whole time,
+    ///      withdrawing it takes one transaction. Cancels a pending proposal AND, if
+    ///      the address is the one currently live, clears `router` outright -- clearing
+    ///      only the proposal would leave the malicious router still collecting the
+    ///      next graduation, which would make revocation useless.
+    ///
+    ///      ACCEPTED CONSEQUENCE: createToken() requires a live router, so revoking the
+    ///      active one halts new launches until a replacement clears the timelock. That
+    ///      is the correct response to discovering a hostile router. Tokens already at
+    ///      GRADUATION_READY are delayed, not lost -- graduate() is permissionless and
+    ///      retryable the moment a good router is live. Note this does weaken the
+    ///      earlier guarantee that a launched token can ALWAYS reach a router: it can
+    ///      now be stranded for at least ROUTER_TIMELOCK. Losing 24 hours of graduation
+    ///      is strictly better than losing the pot.
+    ///
+    ///      Deliberately does not revert on an address that was never proposed and is
+    ///      not live: this is the function reached for in an emergency, and it should
+    ///      never fail on a technicality.
+    function revokeRouter(address router_) external onlyOwner {
+        require(router_ != address(0), "router cannot be the zero address");
+        routerProposedAt[router_] = 0;
+        bool wasLive = (router == router_);
+        if (wasLive) router = address(0);
+        emit RouterRevoked(router_, wasLive);
     }
 
     /// @notice Sets the fee that will apply to tokens created AFTER this call. Every token
@@ -1003,11 +1093,33 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     ///         caseSensitiveSymbols above for the reasoning. Only affects tokens created
     ///         after this call — symbols already claimed keep whatever hash they were
     ///         claimed under.
+    /// @dev SQUATTING NOTE, before anyone flips this to false. Case-sensitive (true,
+    ///      the launch default) is LENIENT: "HOTCOIN" being taken still leaves "HotCoin"
+    ///      available, so squatting a symbol only half-blocks a competitor. Setting this
+    ///      to false makes matching strict, which also makes squatting materially
+    ///      stronger -- an attacker holding "HOTCOIN" then blocks every case variant of
+    ///      it, renewable indefinitely for the creation fee once per symbolLockDuration.
+    ///      Measured at the current 0.5 USDC fee and 5 minute lock, that is roughly $144
+    ///      per day to deny one symbol outright. Tightening this is a real trade, not a
+    ///      free improvement.
     function setCaseSensitiveSymbols(bool caseSensitive_) external onlyOwner {
         caseSensitiveSymbols = caseSensitive_;
         emit CaseSensitiveSymbolsSet(caseSensitive_);
     }
 
+    /// @notice Where creation fees and the protocol's share of trading fees are sent.
+    /// @dev TRUST NOTE. A compromised owner key can redirect this to an address they
+    ///      control and take every fee collected from that moment on. It is NOT
+    ///      retroactive: USDC already sent to the old treasury is gone from this
+    ///      contract's reach, curve reserves are untouched, and accrued creator fees
+    ///      are unaffected because they are held per-creator and paid by claim, not
+    ///      routed through treasury. The exposure is the fee flow going forward, which
+    ///      is real but bounded -- unlike the router, which can take an entire
+    ///      graduating token's balance in one call.
+    ///
+    ///      No timelock here on purpose: the loss rate is a fraction of trading volume
+    ///      rather than a lump sum, and being able to move treasury quickly is itself
+    ///      useful if the treasury address is the thing that gets compromised.
     function setTreasury(address treasury_) external onlyOwner {
         require(treasury_ != address(0), "zero address");
         treasury = treasury_;

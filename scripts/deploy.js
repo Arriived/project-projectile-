@@ -69,8 +69,8 @@ async function main() {
 
   Ballista gates createToken() on a router being set, so testnet cannot
   function at all without one. Replace this the moment a real Arc DEX
-  router is confirmed and verified -- setRouter() accepts any non-zero
-  address, so swapping it is a single owner transaction.
+  router is confirmed and verified. Swapping it means proposeRouter()
+  then activateRouter() after a 24h timelock; revokeRouter() is instant.
 `);
 
   let routerAddress = EXISTING_ROUTER;
@@ -105,13 +105,31 @@ async function main() {
   const ballista = await ethers.getContractAt("Ballista", ballistaAddress);
 
   // ── 3. Wire the router ───────────────────────────────────────────────
-  console.log(`\n================================================================\n  STEP 3 -- setRouter\n================================================================`);
+  console.log(`\n================================================================\n  STEP 3 -- router (propose / activate, timelocked)\n================================================================`);
   const currentRouter = await ballista.router();
   if (ethers.getAddress(currentRouter) === ethers.getAddress(routerAddress)) {
     console.log(`  already set to ${routerAddress}, skipping`);
   } else {
-    await record("setRouter", ballista.setRouter(routerAddress));
-    console.log(`  router = ${await ballista.router()}`);
+    // Router activation is timelocked: propose now, activate after ROUTER_TIMELOCK.
+    // A fresh deployment therefore cannot launch tokens until the delay elapses.
+    const delay = await ballista.ROUTER_TIMELOCK();
+    const proposedAt = await ballista.routerProposedAt(routerAddress);
+    if (proposedAt === 0n) {
+      await record("proposeRouter", ballista.proposeRouter(routerAddress));
+      console.log(`  proposed ${routerAddress}`);
+    }
+    const readyAt = (await ballista.routerProposedAt(routerAddress)) + delay;
+    const now = BigInt((await ethers.provider.getBlock("latest")).timestamp);
+    if (now >= readyAt) {
+      await record("activateRouter", ballista.activateRouter(routerAddress));
+      console.log(`  router = ${await ballista.router()}`);
+    } else {
+      const mins = Number(readyAt - now) / 60;
+      console.log(`  NOT YET ACTIVATABLE. Timelock elapses in ${mins.toFixed(0)} minutes`);
+      console.log(`  (unix ${readyAt}). Re-run this script then, or call:`);
+      console.log(`    ballista.activateRouter("${routerAddress}")`);
+      console.log(`  createToken() stays closed until a router is live.`);
+    }
   }
 
   // ── 4. Snipe tax table ───────────────────────────────────────────────

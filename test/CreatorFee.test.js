@@ -1,5 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
+const { activateRouter } = require('./routerHelper');
 
 const ONE_USDC = 1_000_000n;
 const BPS = 10_000n;
@@ -14,7 +15,7 @@ describe('Ballista — creator fee share', function () {
       treasury.address
     );
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
-    await ballista.setRouter(await router.getAddress());
+    await activateRouter(ballista, await router.getAddress());
 
     // These tests are about steady-state curve economics, not sniping, and they trade
     // immediately after launch -- which in production is squarely inside the snipe

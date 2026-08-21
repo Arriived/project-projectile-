@@ -20,6 +20,13 @@ module.exports = [
   "event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount)",
   "event CreatorFeesClaimed(address indexed creator, uint256 amount)",
   "event SnipeTaxCollected(address indexed token, address indexed buyer, uint256 toTreasury, uint256 toCurve)",
+  // ROUTER GOVERNANCE -- these are the early-warning signals, not indexer data.
+  // RouterProposed is the one to alert on: it is the only advance notice that the most
+  // dangerous address in the contract is about to change, and it fires ROUTER_TIMELOCK
+  // (24h) before the change can take effect. Anyone running monitoring should page on it.
+  "event RouterProposed(address indexed router, uint256 activatableAt)",
+  "event RouterActivated(address indexed router)",
+  "event RouterRevoked(address indexed router, bool wasLive)",
   // The single creatorFeeBps became the asymmetric pair creatorBuyFeeBps /
   // creatorSellFeeBps -- buy and sell no longer pay the creator the same share.
   // curves() returns the Curve STRUCT now, not a flat tuple. Solidity's auto-getter

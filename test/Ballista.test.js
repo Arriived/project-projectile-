@@ -1,5 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
+const { activateRouter } = require('./routerHelper');
 
 const ONE_USDC = 1_000_000n;
 
@@ -17,7 +18,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
     // configure one. Tests that care about a specific router override this.
     const FixtureRouter = await ethers.getContractFactory('MockRouter');
     const fixtureRouter = await FixtureRouter.deploy();
-    await ballista.setRouter(await fixtureRouter.getAddress());
+    await activateRouter(ballista, await fixtureRouter.getAddress());
 
     // These tests are about steady-state curve economics, not sniping, and they trade
     // immediately after launch -- which in production is squarely inside the snipe
@@ -194,7 +195,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       const { ballista, creator, trader, usdc } = await deployFixture();
       const Router = await ethers.getContractFactory('MockRouter');
       const router = await Router.deploy();
-      await ballista.setRouter(await router.getAddress());
+      await activateRouter(ballista, await router.getAddress());
 
       const createTx = await create(ballista, creator, 'Closed Quote Coin', 'CQC', 'ipfs://a');
       const receipt = await createTx.wait();
@@ -264,39 +265,127 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       );
     });
 
-    it('setRouter rejects the zero address, so a configured router cannot be taken away', async function () {
+    it('proposeRouter/activateRouter/revokeRouter all reject the zero address', async function () {
       const { ballista } = await deployFixture();
-      await expect(ballista.setRouter(ethers.ZeroAddress)).to.be.revertedWith(
-        'router cannot be unset: use pause() to halt instead'
+      const msg = 'router cannot be the zero address';
+      await expect(ballista.proposeRouter(ethers.ZeroAddress)).to.be.revertedWith(msg);
+      await expect(ballista.activateRouter(ethers.ZeroAddress)).to.be.revertedWith(msg);
+      await expect(ballista.revokeRouter(ethers.ZeroAddress)).to.be.revertedWith(msg);
+    });
+
+    it('TIMELOCK: activation before the delay reverts, after it succeeds', async function () {
+      const { ballista } = await deployFixture();
+      const next = await (await ethers.getContractFactory('MockRouter')).deploy();
+      const addr = await next.getAddress();
+
+      const delay = await ballista.ROUTER_TIMELOCK();
+      expect(delay).to.equal(24n * 3600n);
+
+      await ballista.proposeRouter(addr);
+      await expect(ballista.activateRouter(addr)).to.be.revertedWith(
+        'router timelock has not elapsed yet'
+      );
+
+      // One second short is still short.
+      await ethers.provider.send('evm_increaseTime', [Number(delay) - 5]);
+      await ethers.provider.send('evm_mine');
+      await expect(ballista.activateRouter(addr)).to.be.revertedWith(
+        'router timelock has not elapsed yet'
+      );
+
+      await ethers.provider.send('evm_increaseTime', [10]);
+      await ethers.provider.send('evm_mine');
+      await expect(ballista.activateRouter(addr)).to.not.be.reverted;
+      expect(await ballista.router()).to.equal(addr);
+    });
+
+    it('activating a never-proposed address reverts', async function () {
+      const { ballista } = await deployFixture();
+      const stranger = await (await ethers.getContractFactory('MockRouter')).deploy();
+      await expect(ballista.activateRouter(await stranger.getAddress())).to.be.revertedWith(
+        'router was never proposed, or was revoked'
       );
     });
 
-    it('setRouter still allows swapping one live router for another', async function () {
+    it('propose, revoke, then activate reverts -- revocation kills a pending proposal', async function () {
       const { ballista } = await deployFixture();
-      const Replacement = await ethers.getContractFactory('MockRouter');
-      const replacement = await Replacement.deploy();
-      const replacementAddress = await replacement.getAddress();
+      const next = await (await ethers.getContractFactory('MockRouter')).deploy();
+      const addr = await next.getAddress();
 
-      await ballista.setRouter(replacementAddress);
-      expect(await ballista.router()).to.equal(replacementAddress);
+      await ballista.proposeRouter(addr);
+      await ballista.revokeRouter(addr);
+      expect(await ballista.routerProposedAt(addr)).to.equal(0n);
+
+      await ethers.provider.send('evm_increaseTime', [24 * 3600 + 1]);
+      await ethers.provider.send('evm_mine');
+      await expect(ballista.activateRouter(addr)).to.be.revertedWith(
+        'router was never proposed, or was revoked'
+      );
     });
 
-    it('only the owner can set the router', async function () {
+    it('revoking the LIVE router clears router and blocks new launches', async function () {
       const { ballista, creator } = await deployFixture();
-      const Replacement = await ethers.getContractFactory('MockRouter');
-      const replacement = await Replacement.deploy();
-      await expect(ballista.connect(creator).setRouter(await replacement.getAddress())).to.be
-        .reverted;
+      const live = await ballista.router();
+      expect(live).to.not.equal(ethers.ZeroAddress);
+
+      await expect(ballista.revokeRouter(live))
+        .to.emit(ballista, 'RouterRevoked')
+        .withArgs(live, true);
+
+      expect(await ballista.router()).to.equal(ethers.ZeroAddress);
+      await expect(create(ballista, creator, 'After Revoke', 'ARV', 'ipfs://a')).to.be.revertedWith(
+        'router not set: launches are closed until a DEX is configured'
+      );
     });
 
-    // The whole point of the gate: a token that exists is always a token that has
-    // somewhere to graduate into, for the entire life of the curve.
-    it('a launched token can always still reach a router, even after an owner tries to clear it', async function () {
+    it('revoking a non-live, non-proposed address is a harmless no-op', async function () {
+      const { ballista } = await deployFixture();
+      const live = await ballista.router();
+      const stranger = ethers.Wallet.createRandom().address;
+      // Must never revert -- this is the function reached for in an emergency.
+      await expect(ballista.revokeRouter(stranger))
+        .to.emit(ballista, 'RouterRevoked')
+        .withArgs(stranger, false);
+      expect(await ballista.router()).to.equal(live);
+    });
+
+    it('the proposal event carries the timestamp it becomes activatable', async function () {
+      const { ballista } = await deployFixture();
+      const next = await (await ethers.getContractFactory('MockRouter')).deploy();
+      const addr = await next.getAddress();
+
+      const rc = await (await ballista.proposeRouter(addr)).wait();
+      const evt = rc.logs
+        .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+        .find((l) => l && l.name === 'RouterProposed');
+      const blk = await ethers.provider.getBlock(rc.blockNumber);
+      expect(evt.args.router).to.equal(addr);
+      expect(evt.args.activatableAt).to.equal(BigInt(blk.timestamp) + 24n * 3600n);
+    });
+
+    it('only the owner can propose, activate or revoke', async function () {
+      const { ballista, creator } = await deployFixture();
+      const next = await (await ethers.getContractFactory('MockRouter')).deploy();
+      const addr = await next.getAddress();
+      await expect(ballista.connect(creator).proposeRouter(addr)).to.be.reverted;
+      await expect(ballista.connect(creator).activateRouter(addr)).to.be.reverted;
+      await expect(ballista.connect(creator).revokeRouter(addr)).to.be.reverted;
+    });
+
+    it('swapping one live router for another still works, through the timelock', async function () {
+      const { ballista } = await deployFixture();
+      const replacement = await (await ethers.getContractFactory('MockRouter')).deploy();
+      const addr = await replacement.getAddress();
+      await activateRouter(ballista, addr);
+      expect(await ballista.router()).to.equal(addr);
+    });
+
+    // The launch gate's guarantee is now WEAKER than before by design: a launched token
+    // can be stranded at GRADUATION_READY if the live router is revoked, until a
+    // replacement clears the timelock. Losing a day of graduation beats losing the pot.
+    it('a launched token still graduates normally while its router stays live', async function () {
       const { ballista, creator, trader, usdc } = await deployFixture();
       const tokenAddress = await launch(ballista, creator, 'Safe Coin', 'SAFE');
-
-      await expect(ballista.setRouter(ethers.ZeroAddress)).to.be.reverted;
-
       await usdc.mint(trader.address, 200_000n * ONE_USDC);
       await ballista.connect(trader).buy(tokenAddress, 70_000n * ONE_USDC, 0);
       expect((await ballista.curves(tokenAddress)).state).to.equal(2n); // GRADUATED
@@ -359,7 +448,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
 
     const Router = await ethers.getContractFactory('MockRouter');
     const router = await Router.deploy();
-    await ballista.setRouter(await router.getAddress());
+    await activateRouter(ballista, await router.getAddress());
 
     const createTx = await create(ballista, creator, 'Sanity Coin', 'SANE', 'ipfs://a');
     const receipt = await createTx.wait();

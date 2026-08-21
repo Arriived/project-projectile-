@@ -1,5 +1,6 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
+const { activateRouter } = require('./routerHelper');
 
 const USDC = (n) => ethers.parseUnits(n.toString(), 6);
 const TOKENS = (n) => ethers.parseUnits(n.toString(), 18);
@@ -28,7 +29,7 @@ async function deployFixture() {
   // createToken() now refuses to launch while router is unset, so every fixture has
   // to configure one up front. Tests that care about a specific router's behavior
   // override this with their own setRouter() call.
-  await factory.connect(owner).setRouter(await router.getAddress());
+  await activateRouter(factory.connect(owner), await router.getAddress());
 
   // These tests are about steady-state curve economics, not sniping, and they trade
   // immediately after launch -- which in production is squarely inside the snipe
@@ -250,7 +251,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
   describe("graduation", function () {
     it("graduates once the threshold is crossed and disables further curve trading", async function () {
       const { factory, owner, alice, bob, router } = await deployFixture();
-      await factory.connect(owner).setRouter(await router.getAddress());
+      await activateRouter(factory.connect(owner), await router.getAddress());
       await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
 
@@ -271,7 +272,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
     // failure — retryably.
     it("does not unwind the triggering trade when the router returns zero liquidity", async function () {
       const { factory, owner, alice, bob, brokenRouter } = await deployFixture();
-      await factory.connect(owner).setRouter(await brokenRouter.getAddress());
+      await activateRouter(factory.connect(owner), await brokenRouter.getAddress());
       await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
 
@@ -306,7 +307,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
 
       // ...and once a router exists, the same launch goes through unchanged.
       const router = await (await ethers.getContractFactory("MockRouter")).deploy();
-      await bare.connect(owner).setRouter(await router.getAddress());
+      await activateRouter(bare.connect(owner), await router.getAddress());
       await expect(createToken(bare, alice, "First", "CAT")).to.not.be.reverted;
     });
   });

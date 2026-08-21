@@ -16,6 +16,7 @@
 //   npx hardhat run scripts/attack-overshoot.js
 const hre = require("hardhat");
 const { ethers } = hre;
+const { activateRouter } = require('../test/routerHelper');
 
 const ONE = 1_000_000n;
 const SWAP_FEE_NUM = 997n, SWAP_FEE_DEN = 1000n; // 0.30%, Uniswap V2
@@ -35,7 +36,7 @@ async function setup() {
   const ballista = await (await ethers.getContractFactory("Ballista"))
     .deploy(await usdc.getAddress(), treasury.address);
   const router = await (await ethers.getContractFactory("MockRouter")).deploy();
-  await ballista.setRouter(await router.getAddress());
+  await activateRouter(ballista, await router.getAddress());
   await ballista.publishSnipeTaxTable([]); // the attack happens long after launch
   await ballista.setLaunchCooldown(0);
   for (const s of [creator, whale, attacker]) {

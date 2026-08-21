@@ -1,5 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
+const { activateRouter } = require('./routerHelper');
 
 const ONE_USDC = 1_000_000n;
 const BPS = 10_000n;
@@ -17,7 +18,7 @@ describe('Ballista — decaying snipe tax', function () {
       treasury.address
     );
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
-    await ballista.setRouter(await router.getAddress());
+    await activateRouter(ballista, await router.getAddress());
 
     for (const signer of [creator, sniper, trader]) {
       await usdc.mint(signer.address, 5_000_000n * ONE_USDC);
