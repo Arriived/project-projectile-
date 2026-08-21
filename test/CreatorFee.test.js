@@ -34,7 +34,7 @@ describe('Ballista — creator fee share', function () {
   async function launch(ballista, creator, symbol = 'CRT') {
     const hash = await ballista.currentEconomicsHash();
     const receipt = await (
-      await ballista.connect(creator).createToken('Creator Coin', symbol, 'ipfs://a', hash)
+      await ballista.connect(creator).createToken('Creator Coin', symbol, 'ipfs://a', hash, false)
     ).wait();
     const event = receipt.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -307,7 +307,7 @@ describe('Ballista — creator fee share', function () {
       const staleHash = await ballista.currentEconomicsHash();
       await ballista.setDefaultCreatorFees(90, 40); // buy unchanged, sell moved
       await expect(
-        ballista.connect(creator).createToken('SellOnly', 'SLO', 'ipfs://a', staleHash)
+        ballista.connect(creator).createToken('SellOnly', 'SLO', 'ipfs://a', staleHash, false)
       ).to.be.revertedWith(
         'economics changed since you last checked -- refresh and confirm the new terms'
       );
@@ -320,7 +320,7 @@ describe('Ballista — creator fee share', function () {
       await ballista.setDefaultCreatorFees(50, 40);
 
       await expect(
-        ballista.connect(creator).createToken('Late', 'LATE', 'ipfs://a', staleHash)
+        ballista.connect(creator).createToken('Late', 'LATE', 'ipfs://a', staleHash, false)
       ).to.be.revertedWith(
         'economics changed since you last checked -- refresh and confirm the new terms'
       );

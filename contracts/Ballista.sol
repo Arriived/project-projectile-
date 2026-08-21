@@ -319,6 +319,17 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         uint16 snipeTaxTreasuryBps;
         /// Cap on the creator's block-0 buy, snapshotted at launch.
         uint16 maxCreatorLaunchBps;
+        /// Chosen by the creator at createToken, immutable thereafter. When true the
+        /// creator's fee share is diverted into poolBoost instead of accruing to them.
+        bool poolBoostEnabled;
+        /// Accumulated creator fees destined for the USDC side of the pool.
+        ///
+        /// MUST stay separate from realUsdcReserves. If it were folded in, the
+        /// graduation threshold would be reached before tokenReserves depletes,
+        /// graduation would fire with leftover tokens, and those leftovers would dilute
+        /// the pool -- undoing the flat hand-off the curve constants were derived for.
+        /// It is added to usdcLiquidity at graduation and nowhere else.
+        uint256 poolBoost;
         /// Tokens the creator has taken through the block-0 path so far.
         /// CUMULATIVE, and counted as tokens PURCHASED rather than tokens held: a
         /// balance check is defeated by transferring out and buying again, and a
@@ -401,6 +412,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         string oldURI,
         string newURI
     );
+    event PoolBoostAccrued(address indexed token, uint256 amount, uint256 total);
     event RouterActivated(address indexed router);
     event MaxCreatorLaunchBpsSet(uint16 maxCreatorLaunchBps);
     event RouterRevoked(address indexed router, bool wasLive);
@@ -521,7 +533,8 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         string calldata name,
         string calldata symbol,
         string calldata metadataURI,
-        bytes32 expectedEconomicsHash
+        bytes32 expectedEconomicsHash,
+        bool poolBoostEnabled
     ) external nonReentrant whenNotPaused returns (address token) {
         // No router means nothing to graduate into. Without this check a token can be
         // launched, trade all the way to its threshold, flip to GRADUATION_READY --
@@ -597,7 +610,9 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
             snipeTaxTableVersion: activeSnipeTaxTableVersion,
             snipeTaxTreasuryBps: defaultSnipeTaxTreasuryBps,
             maxCreatorLaunchBps: maxCreatorLaunchBps,
-            creatorLaunchPurchased: 0
+            creatorLaunchPurchased: 0,
+            poolBoostEnabled: poolBoostEnabled,
+            poolBoost: 0
         });
 
         emit TokenCreated(token, msg.sender, name, symbol, metadataURI);
@@ -741,10 +756,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         bool crossedThreshold =
             c.realUsdcReserves >= c.graduationThresholdUsdc || c.tokenReserves == 0;
 
-        if (f.creatorCut > 0) {
-            creatorFeesAccrued[c.creator] += f.creatorCut;
-            emit CreatorFeeAccrued(token, c.creator, f.creatorCut);
-        }
+        _routeCreatorCut(token, c, f.creatorCut);
         if (taxBps > 0) {
             emit SnipeTaxCollected(token, msg.sender, f.snipeToTreasury, f.curveCut);
         }
@@ -921,10 +933,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         c.tokenReserves += q.actualTokensIn;
 
         uint256 creatorCut = _creatorCut(q.usdcOutGross, c.creatorSellFeeBps, q.fee);
-        if (creatorCut > 0) {
-            creatorFeesAccrued[c.creator] += creatorCut;
-            emit CreatorFeeAccrued(token, c.creator, creatorCut);
-        }
+        _routeCreatorCut(token, c, creatorCut);
 
         // Interactions. Only q.actualTokensIn is ever pulled from the seller — same
         // "never take the excess in the first place" approach as buy().
@@ -987,6 +996,24 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         f.treasuryCut = (baseFee - f.creatorCut) + f.snipeToTreasury;
     }
 
+    /// @dev Sends the creator's slice of a fee either to their claimable balance or,
+    ///      if the token opted in at launch, into the pool boost accumulator.
+    ///
+    ///      Be honest about the magnitude of the boost: measured, it is worth roughly a
+    ///      1-4% deeper pool depending on churn. It is primarily a TRUST SIGNAL -- "the
+    ///      creator put their fees into the liquidity" is worth more than the dollars
+    ///      are -- and the UI should not imply otherwise.
+    function _routeCreatorCut(address token, Curve storage c, uint256 cut) internal {
+        if (cut == 0) return;
+        if (c.poolBoostEnabled) {
+            c.poolBoost += cut;
+            emit PoolBoostAccrued(token, cut, c.poolBoost);
+        } else {
+            creatorFeesAccrued[c.creator] += cut;
+            emit CreatorFeeAccrued(token, c.creator, cut);
+        }
+    }
+
     /// @notice Withdraw everything you have accrued as a token creator, across all of
     ///         your launches.
     /// @dev Pull, not push -- see the note on creatorFeesAccrued. Zeroes before
@@ -1031,7 +1058,9 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         Curve storage c = _curves[token];
 
         uint256 tokenLiquidity = LP_TOKEN_RESERVE + c.tokenReserves; // reserve + any curve dust
-        uint256 usdcLiquidity = c.realUsdcReserves;
+        // The boost joins the pool HERE and only here -- never in realUsdcReserves,
+        // which is what keeps it out of the graduation threshold.
+        uint256 usdcLiquidity = c.realUsdcReserves + c.poolBoost;
 
         IERC20(token).forceApprove(router, tokenLiquidity);
         usdc.forceApprove(router, usdcLiquidity);
@@ -1059,6 +1088,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
             c.state = CurveState.GRADUATED;
             c.tokenReserves = 0;
             c.realUsdcReserves = 0;
+            c.poolBoost = 0;
             emit Graduated(token, tokenLiquidity, usdcLiquidity, liquidity);
             return true;
         } catch {

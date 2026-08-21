@@ -52,7 +52,7 @@ async function freshDeployment({ creationFee, creatorBuy, creatorSell }) {
 async function launch(ballista, creator, symbol) {
   const hash = await ballista.currentEconomicsHash();
   const rc = await (await ballista.connect(creator)
-    .createToken("Econ", symbol, "ipfs://e", hash)).wait();
+    .createToken("Econ", symbol, "ipfs://e", hash, false)).wait();
   return rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
     .find((l) => l && l.name === "TokenCreated").args.token;
 }

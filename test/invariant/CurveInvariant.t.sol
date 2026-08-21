@@ -48,7 +48,7 @@ contract CurveInvariantTest is Test {
             "INVT",
             "",
             factory.currentEconomicsHash()
-        );
+        , false);
 
         // Ballista opens trading only in the block AFTER creation. Without this roll,
         // every handler call would revert on that check, fail_on_revert = false would

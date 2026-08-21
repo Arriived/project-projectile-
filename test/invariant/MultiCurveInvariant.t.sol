@@ -48,7 +48,7 @@ contract MultiCurveInvariantTest is Test {
                     string.concat("MUL", vm.toString(i)),
                     "",
                     factory.currentEconomicsHash()
-                )
+                , false)
             );
         }
 

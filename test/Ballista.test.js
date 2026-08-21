@@ -40,7 +40,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
   // potentially forgotten) at every call site.
   async function create(ballista, creator, name, symbol, uri) {
     const hash = await ballista.currentEconomicsHash();
-    return ballista.connect(creator).createToken(name, symbol, uri, hash);
+    return ballista.connect(creator).createToken(name, symbol, uri, hash, false);
   }
 
   // create(), plus digging the new token's address back out of the receipt.
@@ -111,7 +111,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       await ballista.setDefaultFees(200, 100); // was 100/100
 
       await expect(
-        ballista.connect(creator).createToken('Stale Coin', 'STL', 'ipfs://a', staleHash),
+        ballista.connect(creator).createToken('Stale Coin', 'STL', 'ipfs://a', staleHash, false),
       ).to.be.revertedWith('economics changed since you last checked -- refresh and confirm the new terms');
     });
 
@@ -121,7 +121,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       await ballista.setDefaultGraduationThreshold(80_000n * ONE_USDC);
 
       await expect(
-        ballista.connect(creator).createToken('Stale Threshold Coin', 'STH', 'ipfs://a', staleHash),
+        ballista.connect(creator).createToken('Stale Threshold Coin', 'STH', 'ipfs://a', staleHash, false),
       ).to.be.revertedWith('economics changed since you last checked -- refresh and confirm the new terms');
     });
 
@@ -131,7 +131,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       await ballista.setCaseSensitiveSymbols(false);
 
       await expect(
-        ballista.connect(creator).createToken('Stale Symbol Coin', 'SSC', 'ipfs://a', staleHash),
+        ballista.connect(creator).createToken('Stale Symbol Coin', 'SSC', 'ipfs://a', staleHash, false),
       ).to.be.revertedWith('economics changed since you last checked -- refresh and confirm the new terms');
     });
 
@@ -141,7 +141,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       await ballista.setSymbolLockDuration(600);
 
       await expect(
-        ballista.connect(creator).createToken('Stale Lock Coin', 'SLC', 'ipfs://a', staleHash),
+        ballista.connect(creator).createToken('Stale Lock Coin', 'SLC', 'ipfs://a', staleHash, false),
       ).to.be.revertedWith('economics changed since you last checked -- refresh and confirm the new terms');
     });
 
@@ -163,7 +163,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       // actually documented (fees, threshold, symbol policy), not everything
       // adjustable in the contract.
       await expect(
-        ballista.connect(creator).createToken('Unpinned Coin', 'UPC', 'ipfs://a', staleHash),
+        ballista.connect(creator).createToken('Unpinned Coin', 'UPC', 'ipfs://a', staleHash, false),
       ).to.not.be.reverted;
     });
   });

@@ -30,7 +30,7 @@ describe('Ballista — decaying snipe tax', function () {
   async function launch(ballista, creator, symbol = 'SNP') {
     const hash = await ballista.currentEconomicsHash();
     const receipt = await (
-      await ballista.connect(creator).createToken('Snipe Coin', symbol, 'ipfs://a', hash)
+      await ballista.connect(creator).createToken('Snipe Coin', symbol, 'ipfs://a', hash, false)
     ).wait();
     const event = receipt.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -280,7 +280,7 @@ describe('Ballista — decaying snipe tax', function () {
       let stale = await ballista.currentEconomicsHash();
       await ballista.publishSnipeTaxTable([5000, 1000]);
       await expect(
-        ballista.connect(creator).createToken('A', 'AAA', 'u', stale)
+        ballista.connect(creator).createToken('A', 'AAA', 'u', stale, false)
       ).to.be.revertedWith(
         'economics changed since you last checked -- refresh and confirm the new terms'
       );
@@ -288,7 +288,7 @@ describe('Ballista — decaying snipe tax', function () {
       stale = await ballista.currentEconomicsHash();
       await ballista.setDefaultSnipeTaxTreasuryBps(1000);
       await expect(
-        ballista.connect(creator).createToken('B', 'BBB', 'u', stale)
+        ballista.connect(creator).createToken('B', 'BBB', 'u', stale, false)
       ).to.be.revertedWith(
         'economics changed since you last checked -- refresh and confirm the new terms'
       );

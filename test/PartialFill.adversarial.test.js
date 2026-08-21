@@ -36,7 +36,7 @@ describe('Ballista — partial-fill adversarial testing', function () {
 
   async function launchToken(ballista, creator, name, symbol, signersToApprove) {
     const expectedHash = await ballista.currentEconomicsHash();
-    const createTx = await ballista.connect(creator).createToken(name, symbol, 'ipfs://a', expectedHash);
+    const createTx = await ballista.connect(creator).createToken(name, symbol, 'ipfs://a', expectedHash, false);
     const receipt = await createTx.wait();
     const event = receipt.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })

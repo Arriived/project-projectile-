@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 interface IBallistaLaunch {
-    function createToken(string calldata, string calldata, string calldata, bytes32)
+    function createToken(string calldata, string calldata, string calldata, bytes32, bool)
         external returns (address);
     function currentEconomicsHash() external view returns (bytes32);
     function creatorLaunchBuy(address token, uint256 usdcIn, uint256 minTokensOut) external;
@@ -36,7 +36,7 @@ contract CreatorLauncher {
         external
         returns (address)
     {
-        token = ballista.createToken("Loop", symbol, "ipfs://x", ballista.currentEconomicsHash());
+        token = ballista.createToken("Loop", symbol, "ipfs://x", ballista.currentEconomicsHash(), false);
         for (uint256 i = 0; i < times; i++) {
             // Swallow the revert once the allowance is exhausted, so the loop measures
             // how much can actually be taken rather than just reverting the whole tx.

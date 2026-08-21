@@ -23,7 +23,7 @@ describe('Ballista — mutable metadata URI', function () {
   async function launch(ballista, creator, symbol, uri = 'ipfs://original') {
     const hash = await ballista.currentEconomicsHash();
     const rc = await (await ballista.connect(creator)
-      .createToken('Meta', symbol, uri, hash)).wait();
+      .createToken('Meta', symbol, uri, hash, false)).wait();
     return rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated').args.token;
   }

@@ -43,7 +43,7 @@ async function main() {
   console.log("creating, then firing the buy the instant the address is known...");
   const createTx = await ballista.createToken("Race", symbol, "ipfs://r", hash, {
     nonce, gasLimit: 2_000_000,
-  });
+  }, false);
   const createRc = await createTx.wait();
   const token = createRc.logs
     .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })

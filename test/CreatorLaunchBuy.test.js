@@ -29,7 +29,7 @@ describe('Ballista — creator launch buy (block 0)', function () {
     await ethers.provider.send('evm_setAutomine', [false]);
     const hash = await ballista.currentEconomicsHash();
     const createTx = await ballista.connect(creator)
-      .createToken('Launch', symbol, 'ipfs://a', hash);
+      .createToken('Launch', symbol, 'ipfs://a', hash, false);
 
     // The token address is deterministic from the factory nonce, so it can be
     // predicted and bought in the same block without waiting for the receipt.
@@ -60,7 +60,7 @@ describe('Ballista — creator launch buy (block 0)', function () {
     const stale = await ballista.currentEconomicsHash();
     await ballista.setMaxCreatorLaunchBps(500);
     await expect(
-      ballista.connect(creator).createToken('Late', 'LATE', 'u', stale)
+      ballista.connect(creator).createToken('Late', 'LATE', 'u', stale, false)
     ).to.be.revertedWith(
       'economics changed since you last checked -- refresh and confirm the new terms'
     );
@@ -70,7 +70,7 @@ describe('Ballista — creator launch buy (block 0)', function () {
     const { ballista, creator } = await env();
     const hash = await ballista.currentEconomicsHash();
     const rc = await (await ballista.connect(creator)
-      .createToken('Pinned', 'PIN', 'u', hash)).wait();
+      .createToken('Pinned', 'PIN', 'u', hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated').args.token;
 
@@ -83,7 +83,7 @@ describe('Ballista — creator launch buy (block 0)', function () {
     const { ballista, creator, sniper } = await env();
     const hash = await ballista.currentEconomicsHash();
     const rc = await (await ballista.connect(creator)
-      .createToken('Guard', 'GRD', 'u', hash)).wait();
+      .createToken('Guard', 'GRD', 'u', hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated').args.token;
 
@@ -96,7 +96,7 @@ describe('Ballista — creator launch buy (block 0)', function () {
     const { ballista, creator } = await env();
     const hash = await ballista.currentEconomicsHash();
     const rc = await (await ballista.connect(creator)
-      .createToken('Late', 'LTE', 'u', hash)).wait();
+      .createToken('Late', 'LTE', 'u', hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated').args.token;
 

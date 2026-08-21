@@ -53,7 +53,7 @@ async function deployFixture() {
 async function createToken(factory, creator, name, symbol, uri = "uri") {
   return factory
     .connect(creator)
-    .createToken(name, symbol, uri, await factory.currentEconomicsHash());
+    .createToken(name, symbol, uri, await factory.currentEconomicsHash(), false);
 }
 
 describe("Ballista — original ArcLaunchFactory suite", function () {

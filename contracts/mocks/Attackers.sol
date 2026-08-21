@@ -9,7 +9,7 @@ interface IBallista {
     function sell(address token, uint256 tokensIn, uint256 minUsdcOut) external;
     function graduate(address token) external;
     function claimCreatorFees() external returns (uint256);
-    function createToken(string calldata, string calldata, string calldata, bytes32)
+    function createToken(string calldata, string calldata, string calldata, bytes32, bool)
         external returns (address);
     function currentEconomicsHash() external view returns (bytes32);
 }
@@ -96,7 +96,7 @@ contract HostileCreator {
     constructor(address b) { ballista = IBallista(b); }
 
     function launch(string calldata name, string calldata symbol) external returns (address) {
-        return ballista.createToken(name, symbol, "ipfs://x", ballista.currentEconomicsHash());
+        return ballista.createToken(name, symbol, "ipfs://x", ballista.currentEconomicsHash(), false);
     }
 
     // Reverts on absolutely everything else.
@@ -120,7 +120,7 @@ contract MassLauncher {
                     string.concat(prefix, _toString(i)),
                     "ipfs://x",
                     ballista.currentEconomicsHash()
-                )
+                , false)
             );
         }
     }
