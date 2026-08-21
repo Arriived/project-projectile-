@@ -12,7 +12,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
     const usdc = await USDC.deploy();
 
     const Ballista = await ethers.getContractFactory('Ballista');
-    const ballista = await Ballista.deploy(await usdc.getAddress(), treasury.address);
+    const ballista = await Ballista.deploy(await usdc.getAddress(), treasury.address, ethers.ZeroAddress);
 
     // createToken() refuses to launch while router is unset, so the fixture has to
     // configure one. Tests that care about a specific router override this.
@@ -251,7 +251,8 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
       const ballista = await (await ethers.getContractFactory('Ballista')).deploy(
         await usdc.getAddress(),
-        treasury.address
+        treasury.address,
+        ethers.ZeroAddress
       );
       await usdc.mint(creator.address, 1_000_000n * ONE_USDC);
       await usdc.connect(creator).approve(await ballista.getAddress(), ethers.MaxUint256);

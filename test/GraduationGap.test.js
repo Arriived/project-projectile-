@@ -25,7 +25,8 @@ describe('Ballista — graduation gap and the dual trigger', function () {
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const ballista = await (await ethers.getContractFactory('Ballista')).deploy(
       await usdc.getAddress(),
-      treasury.address
+      treasury.address,
+      ethers.ZeroAddress
     );
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());

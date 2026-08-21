@@ -15,7 +15,7 @@ describe('Ballista — creator fee to pool boost', function () {
     const [deployer, treasury, creator, trader] = await ethers.getSigners();
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const ballista = await (await ethers.getContractFactory('Ballista'))
-      .deploy(await usdc.getAddress(), treasury.address);
+      .deploy(await usdc.getAddress(), treasury.address, ethers.ZeroAddress);
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());
     await ballista.publishSnipeTaxTable([]);

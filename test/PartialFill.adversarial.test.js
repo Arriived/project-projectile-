@@ -12,7 +12,7 @@ describe('Ballista — partial-fill adversarial testing', function () {
     const usdc = await USDC.deploy();
 
     const Ballista = await ethers.getContractFactory('Ballista');
-    const ballista = await Ballista.deploy(await usdc.getAddress(), treasury.address);
+    const ballista = await Ballista.deploy(await usdc.getAddress(), treasury.address, ethers.ZeroAddress);
     const ballistaAddress = await ballista.getAddress();
 
     const Router = await ethers.getContractFactory('MockRouter');

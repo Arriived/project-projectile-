@@ -423,19 +423,64 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
     event DefaultSnipeTaxTreasuryBpsSet(uint16 treasuryBps);
     event SnipeTaxCollected(address indexed token, address indexed buyer, uint256 toTreasury, uint256 toCurve);
 
-    constructor(address usdc_, address treasury_) Ownable(msg.sender) {
+    /// @param initialRouter_ Optional. Pass address(0) to deploy with no router, which
+    ///        leaves createToken() gated until one clears the timelock. Pass a real
+    ///        address to have it live from block zero.
+    ///
+    /// @dev THE ONE TIMELOCK BYPASS, and it is deliberate. Arc mainnet does not exist
+    ///      until launch day, so a deployment that must then wait 24 hours for a router
+    ///      spends the busiest day of a new chain rejecting every createToken call.
+    ///
+    ///      This does not weaken the router timelock. What the timelock defends against
+    ///      is an owner SWAPPING the router later to drain a graduation -- it buys time
+    ///      for someone watching RouterProposed to react. A constructor-set router is
+    ///      baked into the deployment transaction itself, sits in the constructor
+    ///      arguments on the verified explorer page, and offers no window to attack
+    ///      because there is nothing to change. A malicious one would mean the contract
+    ///      was compromised from block zero, which no delay can help with.
+    ///
+    ///      Every SUBSEQUENT change goes through propose -> ROUTER_TIMELOCK -> activate
+    ///      unchanged. This is the only assignment that skips it, and it can only ever
+    ///      happen once, because a constructor runs once.
+    constructor(address usdc_, address treasury_, address initialRouter_) Ownable(msg.sender) {
         require(usdc_ != address(0) && treasury_ != address(0), "zero address");
         usdc = IERC20(usdc_);
         treasury = treasury_;
 
-        // Opening table: ~98% at t=0 decaying to nothing by t=5. Modelled on Pons V2,
-        // with t=0 capped by MAX_TOTAL_FEE_BPS. Tunable via publishSnipeTaxTable().
-        uint16[] memory opening = new uint16[](5);
+        if (initialRouter_ != address(0)) {
+            // Emit the SAME pair of events the propose/activate path would, so anyone
+            // reconstructing router history from logs sees no hole -- the activatableAt
+            // is simply now. Recording routerProposedAt keeps the ledger consistent
+            // with a router that is genuinely approved.
+            routerProposedAt[initialRouter_] = block.timestamp;
+            emit RouterProposed(initialRouter_, block.timestamp);
+            router = initialRouter_;
+            emit RouterActivated(initialRouter_);
+        }
+
+        // Opening table, RETUNED for the $8,000 curve. The previous
+        // [9800, 2500, 300, 100, 0] was inherited from the $67,000 curve and stopped
+        // deterring once the virtual reserve fell from $30,000 to $2,667: the same
+        // dollar now buys ~11x more, so a $1,000 sniper took 0.49% of supply at t=0 but
+        // 28.93% at t=1 and 35% by t=2. Measured, not modelled. Real testnet racing
+        // lands snipers at t=1-2, which was exactly the useless band.
+        //
+        // This table holds that same $1,000 sniper to 1.0% / 2.4% / 4.8% / 9.2% across
+        // t=0..3. It decays slower and runs to t=7 rather than t=4 for that reason.
+        //
+        // A QUANTITY CAP would be more robust than a tax -- a max buy size during the
+        // window does not degrade as the curve thins, which is what Pons actually does.
+        // Logged as the better long-term answer; it needs a library extraction first,
+        // given how little bytecode headroom is left.
+        uint16[] memory opening = new uint16[](8);
         opening[0] = 9800; // 98%
-        opening[1] = 2500; // 25%
-        opening[2] = 300;  // 3%
-        opening[3] = 100;  // 1%
-        opening[4] = 0;
+        opening[1] = 9500; // 95%
+        opening[2] = 9000; // 90%
+        opening[3] = 8000; // 80%
+        opening[4] = 6000; // 60%
+        opening[5] = 4000; // 40%
+        opening[6] = 2000; // 20%
+        opening[7] = 0;
         _publishSnipeTaxTable(opening);
     }
 

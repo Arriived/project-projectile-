@@ -26,7 +26,7 @@ contract MultiCurveInvariantTest is Test {
         vm.warp(1_800_000_000);
 
         usdc = new MockUSDC();
-        factory = new Ballista(address(usdc), address(this));
+        factory = new Ballista(address(usdc), address(this), address(0));
         // Router activation is timelocked now: propose, wait out ROUTER_TIMELOCK, activate.
         address routerAddr = address(new MockRouter());
         factory.proposeRouter(routerAddr);

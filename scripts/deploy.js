@@ -94,7 +94,10 @@ async function main() {
     console.log(`  reusing existing Ballista ${ballistaAddress} (BALLISTA_ADDRESS was set)`);
   } else {
     const Ballista = await ethers.getContractFactory("Ballista");
-    const ballista = await Ballista.deploy(ARC_TESTNET_USDC, treasury);
+    // Router passed straight into the constructor: the one deliberate timelock
+    // bypass, so a fresh deployment is usable immediately instead of rejecting every
+    // createToken for 24 hours. Every later change still goes through propose/activate.
+    const ballista = await Ballista.deploy(ARC_TESTNET_USDC, treasury, routerAddress);
     const r = await record("Ballista deploy", Promise.resolve(ballista.deploymentTransaction()));
     await ballista.waitForDeployment();
     ballistaAddress = await ballista.getAddress();

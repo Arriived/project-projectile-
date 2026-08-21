@@ -29,7 +29,7 @@ contract CurveInvariantTest is Test {
         // Never an issue on any real chain, where timestamps are always this large.
 
         usdc = new MockUSDC();
-        factory = new Ballista(address(usdc), address(this));
+        factory = new Ballista(address(usdc), address(this), address(0));
 
         // createToken() now refuses to launch without a router, so one is required
         // here. This also means the fuzzer drives curves through a real graduation

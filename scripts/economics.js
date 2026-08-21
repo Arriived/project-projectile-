@@ -32,7 +32,7 @@ async function freshDeployment({ creationFee, creatorBuy, creatorSell }) {
   const [deployer, treasury, creator, trader] = await ethers.getSigners();
   const usdc = await (await ethers.getContractFactory("MockUSDC")).deploy();
   const ballista = await (await ethers.getContractFactory("Ballista"))
-    .deploy(await usdc.getAddress(), treasury.address);
+    .deploy(await usdc.getAddress(), treasury.address, ethers.ZeroAddress);
   const router = await (await ethers.getContractFactory("MockRouter")).deploy();
   await activateRouter(ballista, await router.getAddress());
   // Steady-state economics: the snipe tax is a launch-window deterrent, not part of

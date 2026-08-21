@@ -21,7 +21,8 @@ async function deployFixture() {
   const usdc = await (await ethers.getContractFactory("MockUSDC")).deploy();
   const factory = await (await ethers.getContractFactory("Ballista")).deploy(
     await usdc.getAddress(),
-    treasury.address
+    treasury.address,
+    ethers.ZeroAddress
   );
   const router = await (await ethers.getContractFactory("MockRouter")).deploy();
   const brokenRouter = await (await ethers.getContractFactory("MockBrokenRouter")).deploy();
@@ -295,7 +296,8 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const usdc = await (await ethers.getContractFactory("MockUSDC")).deploy();
       const bare = await (await ethers.getContractFactory("Ballista")).deploy(
         await usdc.getAddress(),
-        treasury.address
+        treasury.address,
+        ZERO
       );
       await usdc.mint(alice.address, USDC(1_000_000));
       await usdc.connect(alice).approve(await bare.getAddress(), ethers.MaxUint256);
@@ -315,7 +317,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
     it("rejects zero addresses", async function () {
       const [, treasury] = await ethers.getSigners();
       const Factory = await ethers.getContractFactory("Ballista");
-      await expect(Factory.deploy(ZERO, treasury.address)).to.be.reverted;
+      await expect(Factory.deploy(ZERO, treasury.address, ZERO)).to.be.reverted;
     });
   });
 });

@@ -6,7 +6,11 @@ const ONE_USDC = 1_000_000n;
 const BPS = 10_000n;
 
 // Mirrors the opening table published in Ballista's constructor.
-const OPENING_TABLE = [9800, 2500, 300, 100, 0];
+// Mirrors the retuned table published in Ballista's constructor. The old
+// [9800, 2500, 300, 100, 0] was inherited from the $67,000 curve and stopped deterring
+// once the virtual reserve dropped to $2,667 -- a $1,000 sniper took 29% of supply at
+// t=1. This decays slower and runs to t=7.
+const OPENING_TABLE = [9800, 9500, 9000, 8000, 6000, 4000, 2000, 0];
 
 describe('Ballista — decaying snipe tax', function () {
   async function deployFixture() {
@@ -15,7 +19,8 @@ describe('Ballista — decaying snipe tax', function () {
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const ballista = await (await ethers.getContractFactory('Ballista')).deploy(
       await usdc.getAddress(),
-      treasury.address
+      treasury.address,
+      ethers.ZeroAddress
     );
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());
@@ -68,7 +73,7 @@ describe('Ballista — decaying snipe tax', function () {
     const tokenAddress = await launch(ballista, creator);
 
     const seen = [];
-    for (let t = 0; t <= 6; t++) {
+    for (let t = 0; t <= OPENING_TABLE.length + 1; t++) {
       await atElapsed(ballista, tokenAddress, t);
       seen.push(Number(await ballista.currentSnipeTaxBps(tokenAddress)));
     }
@@ -124,7 +129,7 @@ describe('Ballista — decaying snipe tax', function () {
   it('splits the tax 70/30 treasury/curve, adding USDC to the curve without releasing tokens', async function () {
     const { ballista, usdc, creator, sniper, treasury } = await deployFixture();
     const tokenAddress = await launch(ballista, creator);
-    await atElapsed(ballista, tokenAddress, 1); // 25% tax, easier to reason about
+    await atElapsed(ballista, tokenAddress, 6); // 20% tax, small enough to reason about
 
     const before = await ballista.curves(tokenAddress);
     const treasuryBefore = await usdc.balanceOf(treasury.address);
@@ -135,7 +140,7 @@ describe('Ballista — decaying snipe tax', function () {
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'SnipeTaxCollected');
 
-    const snipeTax = (spend * 2500n) / BPS;
+    const snipeTax = (spend * 2000n) / BPS;
     const expectedToTreasury = (snipeTax * 7000n) / BPS;
     const expectedToCurve = snipeTax - expectedToTreasury;
 
@@ -152,7 +157,7 @@ describe('Ballista — decaying snipe tax', function () {
 
     // The curve's share is pure reserve growth: USDC in, no extra tokens out.
     const after = await ballista.curves(tokenAddress);
-    const totalFee = (spend * (2500n + 100n)) / BPS; // tax + base fee
+    const totalFee = (spend * (2000n + 100n)) / BPS; // tax + base fee
     expect(after.realUsdcReserves - before.realUsdcReserves).to.equal(
       spend - totalFee + expectedToCurve
     );
@@ -162,16 +167,16 @@ describe('Ballista — decaying snipe tax', function () {
   it('the curve share raises reserves without moving the virtual reserves', async function () {
     const { ballista, creator, sniper } = await deployFixture();
     const taxed = await launch(ballista, creator, 'TAXED');
-    await atElapsed(ballista, taxed, 1);
+    await atElapsed(ballista, taxed, 6);
 
     const before = await ballista.curves(taxed);
     const spend = 1_000n * ONE_USDC;
     await ballista.connect(sniper).buy(taxed, spend, 0);
     const after = await ballista.curves(taxed);
 
-    const snipeTax = (spend * 2500n) / BPS;
+    const snipeTax = (spend * 2000n) / BPS;
     const toCurve = snipeTax - (snipeTax * 7000n) / BPS;
-    const totalFee = (spend * (2500n + 100n)) / BPS;
+    const totalFee = (spend * (2000n + 100n)) / BPS;
 
     // Reserves grow by the post-fee spend PLUS the tax share.
     expect(after.realUsdcReserves - before.realUsdcReserves).to.equal(
@@ -306,7 +311,7 @@ describe('Ballista — decaying snipe tax', function () {
       // and atElapsed refuses to pretend otherwise.
       await atElapsed(ballista, tokenAddress, 1);
       // Still the OLD table's t=1 rate, not the newly published 1 bps.
-      expect(await ballista.currentSnipeTaxBps(tokenAddress)).to.equal(2500);
+      expect(await ballista.currentSnipeTaxBps(tokenAddress)).to.equal(9500);
     });
 
     it('changing the split does not affect a token already trading', async function () {
@@ -316,7 +321,7 @@ describe('Ballista — decaying snipe tax', function () {
 
       await ballista.setDefaultSnipeTaxTreasuryBps(1000); // 10/90 for FUTURE launches
 
-      await atElapsed(ballista, tokenAddress, 1);
+      await atElapsed(ballista, tokenAddress, 6);
       const treasuryBefore = await usdc.balanceOf(treasury.address);
       const spend = 1_000n * ONE_USDC;
       const receipt = await (await ballista.connect(sniper).buy(tokenAddress, spend, 0)).wait();
@@ -325,7 +330,7 @@ describe('Ballista — decaying snipe tax', function () {
         .find((l) => l && l.name === 'SnipeTaxCollected');
 
       // Still 70/30, the split it launched with.
-      const snipeTax = (spend * 2500n) / BPS;
+      const snipeTax = (spend * 2000n) / BPS;
       expect(taxEvent.args.toTreasury).to.equal((snipeTax * 7000n) / BPS);
       expect(treasuryBefore).to.be.a('bigint');
     });
