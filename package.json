@@ -12,6 +12,7 @@
     "chai": "^4.5.0",
     "ethers": "^6.17.0",
     "hardhat": "^2.22.15",
-    "solhint": "^6.2.3"
+    "solhint": "^6.2.3",
+    "solidity-coverage": "^0.8.17"
   }
 }
