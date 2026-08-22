@@ -58,6 +58,22 @@ describe('Ballista — decaying snipe tax', function () {
     }
     await ethers.provider.send('evm_setNextBlockTimestamp', [target]);
     await ethers.provider.send('evm_mine');
+    // Pin the CALLER'S next transaction to the same second too. Mining a filler block
+    // only fixes the timestamp that view calls see; the transaction that follows mines
+    // its OWN block, and hardhat stamps that from the wall clock. On a slow machine
+    // real seconds elapse between the assertion above and the trade below, so the trade
+    // executes in a LOWER tax tier than the one just asserted -- the test then compares
+    // a t=0 quote against a t=2 execution and fails on a contract that is behaving
+    // correctly. Reproduced deliberately with a 2.5s sleep: received 35,092,491 tokens
+    // against a quoted 4,015,689. allowBlocksWithSameTimestamp lets both blocks share
+    // the second.
+    await ethers.provider.send('evm_setNextBlockTimestamp', [target]);
+    return target;
+  }
+
+  // Re-pin when a test sends MORE than one transaction at the same elapsed second.
+  async function pinAgain(target) {
+    await ethers.provider.send('evm_setNextBlockTimestamp', [target]);
   }
 
   it('publishes the opening table in the constructor', async function () {

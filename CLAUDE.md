@@ -77,6 +77,23 @@ restricted."** Note also that `hardhat verify` does not send a licence type at
 all, so whichever is chosen must be set through Blockscout's own UI or a direct
 API call.
 
+**Chosen 22 Aug: BUSL-1.1, change licence GPL-2.0-or-later, Change Date 2030-09-16,
+Licensor left as `[LICENSOR]` until the entity name is supplied.** GPL rather than
+MIT because BUSL exists to stop commercial forks during the restricted window, and
+converting to MIT at the Change Date would hand a fork the right to close the source
+again — GPL-2.0-or-later keeps derivatives open. Confirmed as Uniswap v3-core's own
+choice by reading their LICENSE, not from memory. `LICENSE` at the repo root is the
+canonical MariaDB text with only the Parameters block replaced; the Terms section was
+verified byte-identical rather than retyped.
+
+**⚠ Verifying on an explorer arguably STARTS the four-year clock.** BUSL converts on
+the Change Date *or the fourth anniversary of the first publicly available
+distribution of that version, whichever comes first*. A verified contract on a public
+explorer is plausibly such a distribution, so a long-lived verified testnet deployment
+should not carry a Change Date anyone is relying on — the real date may be earlier
+than the one written in the file. Immaterial at current timescales; it matters if a
+version is ever left published for years.
+
 Realistic expectation: enforcement against an anonymous deployer on a new chain
 is not practical. This raises cost and removes ambiguity. It does not make
 copying impossible. The one lever that does work in practice is DMCA against
@@ -510,6 +527,15 @@ inverts the pool price.
 - **Price impact must be a headline number.** The curve is ~11x thinner than
   before: a $500 buy at launch takes ~21% of supply with ~19% slippage. Someone
   receiving 19% less than quoted will assume they were scammed.
+- **A quote taken during the snipe window is stale within ONE second.** Measured: a
+  quote at t=0 against an execution 2.5s later returned 35,092,491 tokens where the
+  quote said 4,015,689 — an 8.7x difference, because the tax decayed two tiers in
+  between. The direction is always favourable to the buyer (tax only decays, so
+  execution beats a stale quote and `minTokensOut` never trips), so this is a
+  presentation problem rather than a loss. But a UI showing a frozen quote during the
+  first seven seconds is showing a number that is simply wrong. Re-quote continuously
+  and show the current tax tier and the seconds remaining, or do not show a quote at
+  all until the window closes.
 - **`minTokensOut` must never default to zero.** On an exhausted curve a zero
   default silently does nothing; on a thin curve it means arbitrary sandwiching.
 - **Show "creator bought X% at launch"** on every token page.
@@ -525,6 +551,15 @@ inverts the pool price.
 - One feature at a time: build it, then genuinely try to break it, then move on.
   Adversarial tests, not happy-path confirmation. Report what was tried **and
   failed** — coverage matters as much as results.
+- **Hardhat stamps blocks from the WALL CLOCK, so timing tests are machine-speed
+  dependent.** A test that pins a timestamp, asserts a view, then sends a transaction
+  gets a transaction block stamped from real time — on a slow run the trade executes
+  in a different snipe-tax tier than the one just asserted, and a correct contract
+  fails. Fixed in `SnipeTax.test.js` by having `atElapsed` pin the CALLER'S next
+  transaction as well as mining a filler block for the views. Reproduced deliberately
+  with a 2.5s sleep before fixing, and re-verified under the same sleep and under six
+  concurrent CPU burners. **If you add a timing-sensitive test, pin every block it
+  depends on, not just the first.**
 - **Prove a test can fail before trusting it.** The single most valuable habit
   this project has developed, and not a footnote. Two separate suites here passed
   while testing nothing: the original 19 loaded frozen bytecode from a gitignored

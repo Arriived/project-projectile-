@@ -169,7 +169,8 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
 
     error BaseFeeCeilingExceeded();
     error BpsExceedsDenominator();
-    error ClampExceededOffer();
+    error ClampCostExceededOffer();
+    error ClampInputExceededOffer();
     error CreatorAllocationUsed();
     error CreatorBuyShareExceedsFee();
     error CreatorSellShareExceedsFee();
@@ -397,7 +398,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
         q.actualUsdcIn = _ceilDiv(clampedUsdcInAfterFee * BPS_DENOMINATOR, BPS_DENOMINATOR - buyFeeBps);
         q.actualFee = q.actualUsdcIn - clampedUsdcInAfterFee;
 
-        if (!(q.actualUsdcIn <= usdcIn)) revert ClampExceededOffer();
+        if (!(q.actualUsdcIn <= usdcIn)) revert ClampCostExceededOffer();
     }
 
     function updateMetadataURI(address token, string calldata newURI) external {
@@ -529,7 +530,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
         q.actualTokensIn = q.newVirtualToken - virtualTokenReserves;
         q.fee = (q.usdcOutGross * sellFeeBps) / BPS_DENOMINATOR;
 
-        if (!(q.actualTokensIn <= tokensIn)) revert ClampExceededOffer();
+        if (!(q.actualTokensIn <= tokensIn)) revert ClampInputExceededOffer();
     }
 
     function sell(address token, uint256 tokensIn, uint256 minUsdcOut) external nonReentrant whenNotPaused {
