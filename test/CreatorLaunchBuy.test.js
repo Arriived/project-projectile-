@@ -6,7 +6,7 @@ const ONE = 1_000_000n;
 const BPS = 10_000n;
 const CURVE_SUPPLY = 807_000_000n * 10n ** 18n;
 
-describe('Ballista — creator launch buy (block 0)', function () {
+describe('Ballista — creator launch buy (timed window)', function () {
   async function env() {
     const [deployer, treasury, creator, sniper, other] = await ethers.getSigners();
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
@@ -61,8 +61,7 @@ describe('Ballista — creator launch buy (block 0)', function () {
     await ballista.setMaxCreatorLaunchBps(500);
     await expect(
       ballista.connect(creator).createToken('Late', 'LATE', 'u', stale, false)
-    ).to.be.revertedWith(
-      'economics changed since you last checked -- refresh and confirm the new terms'
+    ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged'
     );
   });
 
@@ -87,12 +86,40 @@ describe('Ballista — creator launch buy (block 0)', function () {
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated').args.token;
 
-    await expect(ballista.connect(sniper).creatorLaunchBuy(t, ONE, 0)).to.be.revertedWith(
-      "only the token's creator may buy at launch"
+    await expect(ballista.connect(sniper).creatorLaunchBuy(t, ONE, 0)).to.be.revertedWithCustomError(ballista, 'NotCreator'
     );
   });
 
-  it('the creator is rejected on the privileged path from block 1 onward', async function () {
+  // THE REGRESSION TEST FOR OPEN ITEM 1. Under the old block.number == creationBlock
+  // rule this was impossible from a plain wallet: two sequential transactions from one
+  // EOA always land in consecutive blocks on Arc, so the creator could never reach
+  // their own privileged path without a bundling contract.
+  it('THE POINT: a plain EOA creator reaches the privileged path in a LATER block', async function () {
+    const { ballista, creator } = await env();
+    const hash = await ballista.currentEconomicsHash();
+    const rc = await (await ballista.connect(creator)
+      .createToken('Eoa', 'EOA', 'u', hash, false)).wait();
+    const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+      .find((l) => l && l.name === 'TokenCreated').args.token;
+
+    // Pin the buy one second after creation. Without this the test depends on how
+    // fast the machine runs: hardhat stamps blocks from the wall clock, so on a slow
+    // run more than 3 real seconds elapse between these two transactions and the
+    // window shuts for reasons that have nothing to do with the contract. Observed
+    // failing exactly that way on a 43s suite run. One second is what Arc's 500ms
+    // blocks actually produce between two sequential transactions from one wallet.
+    const created = Number((await ballista.curves(t)).creationTimestamp);
+    await ethers.provider.send('evm_setNextBlockTimestamp', [created + 1]);
+    const buyRc = await (await ballista.connect(creator)
+      .creatorLaunchBuy(t, 50n * ONE, 0)).wait();
+
+    expect(buyRc.blockNumber, 'must be a strictly later block, like a real wallet')
+      .to.be.greaterThan(rc.blockNumber);
+    expect(buyRc.status).to.equal(1);
+    expect((await ballista.curves(t)).creatorLaunchPurchased).to.be.greaterThan(0n);
+  });
+
+  it('the window closes on elapsed SECONDS, and the ordinary path still works after', async function () {
     const { ballista, creator } = await env();
     const hash = await ballista.currentEconomicsHash();
     const rc = await (await ballista.connect(creator)
@@ -100,12 +127,118 @@ describe('Ballista — creator launch buy (block 0)', function () {
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated').args.token;
 
-    // The receipt means the creation block is already behind us.
-    await expect(ballista.connect(creator).creatorLaunchBuy(t, ONE, 0)).to.be.revertedWith(
-      'creator launch buy is block 0 only -- use buy() from the next block'
-    );
-    // ...and the ordinary path works from here, like anyone else.
+    await ethers.provider.send('evm_increaseTime', [30]);
+    await ethers.provider.send('evm_mine');
+
+    await expect(ballista.connect(creator).creatorLaunchBuy(t, ONE, 0))
+      .to.be.revertedWithCustomError(ballista, 'LaunchWindowClosed');
     await expect(ballista.connect(creator).buy(t, ONE, 0)).to.not.be.reverted;
+  });
+
+  it('the LAST second of the window is inclusive, the next one is not', async function () {
+    const { ballista, creator } = await env();
+    const hash = await ballista.currentEconomicsHash();
+    const rc = await (await ballista.connect(creator)
+      .createToken('Edge', 'EDG', 'u', hash, false)).wait();
+    const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+      .find((l) => l && l.name === 'TokenCreated').args.token;
+    const created = (await ballista.curves(t)).creationTimestamp;
+    const window = (await ballista.curves(t)).creatorLaunchWindow;
+
+    // Land exactly on creationTimestamp + window: still inside.
+    await ethers.provider.send('evm_setNextBlockTimestamp', [Number(created + window)]);
+    await expect(ballista.connect(creator).creatorLaunchBuy(t, ONE, 0)).to.not.be.reverted;
+
+    // One second past it: outside.
+    await ethers.provider.send('evm_setNextBlockTimestamp', [Number(created + window) + 1]);
+    await expect(ballista.connect(creator).creatorLaunchBuy(t, ONE, 0))
+      .to.be.revertedWithCustomError(ballista, 'LaunchWindowClosed');
+  });
+
+  // These two must separate the SNAPSHOT from the GLOBAL, not merely observe that the
+  // struct field was written. Asserting curves(t).creatorLaunchWindow == 3 passes even
+  // if the require reads the global -- found by mutating the contract to do exactly
+  // that and watching this test stay green.
+  it('the window is snapshotted -- narrowing the global cannot shorten a live token', async function () {
+    const { ballista, creator } = await env();
+    const hash = await ballista.currentEconomicsHash();
+    const rc = await (await ballista.connect(creator)
+      .createToken('Snap', 'SNP', 'u', hash, false)).wait();
+    const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+      .find((l) => l && l.name === 'TokenCreated').args.token;
+    const created = (await ballista.curves(t)).creationTimestamp;
+
+    expect((await ballista.curves(t)).creatorLaunchWindow).to.equal(3);
+    await ballista.setCreatorLaunchWindow(0);
+    expect((await ballista.curves(t)).creatorLaunchWindow).to.equal(3);
+
+    // Elapsed 2s: inside the snapshotted 3, outside the global 0. Only a contract
+    // reading the snapshot lets this through.
+    await ethers.provider.send('evm_setNextBlockTimestamp', [Number(created) + 2]);
+    await expect(ballista.connect(creator).creatorLaunchBuy(t, ONE, 0)).to.not.be.reverted;
+  });
+
+  it('the window is snapshotted -- widening the global cannot lengthen a live token', async function () {
+    const { ballista, creator } = await env();
+    await ballista.setCreatorLaunchWindow(1);
+    const hash = await ballista.currentEconomicsHash();
+    const rc = await (await ballista.connect(creator)
+      .createToken('Wide', 'WID', 'u', hash, false)).wait();
+    const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+      .find((l) => l && l.name === 'TokenCreated').args.token;
+    const created = (await ballista.curves(t)).creationTimestamp;
+
+    await ballista.setCreatorLaunchWindow(600);
+    expect((await ballista.curves(t)).creatorLaunchWindow).to.equal(1);
+
+    // Elapsed 5s: outside the snapshotted 1, well inside the global 600. An owner
+    // must not be able to reopen a closed window on a token already trading.
+    await ethers.provider.send('evm_setNextBlockTimestamp', [Number(created) + 5]);
+    await expect(ballista.connect(creator).creatorLaunchBuy(t, ONE, 0))
+      .to.be.revertedWithCustomError(ballista, 'LaunchWindowClosed');
+  });
+
+  it('the window is pinned by the economics hash', async function () {
+    const { ballista, creator } = await env();
+    expect(await ballista.creatorLaunchWindow()).to.equal(3);
+
+    const stale = await ballista.currentEconomicsHash();
+    await ballista.setCreatorLaunchWindow(9);
+    await expect(
+      ballista.connect(creator).createToken('W', 'WIN', 'u', stale, false)
+    ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged'
+    );
+  });
+
+  it('only the owner can move the window', async function () {
+    const { ballista, creator } = await env();
+    await expect(ballista.connect(creator).setCreatorLaunchWindow(60)).to.be.reverted;
+    await expect(ballista.setCreatorLaunchWindow(60)).to.emit(ballista, 'CreatorLaunchWindowSet');
+  });
+
+  // A zero window is same-SECOND, which is NOT the same as same-BLOCK. Arc targets
+  // 500ms blocks, so two consecutive blocks routinely share a whole-second timestamp
+  // (hardhat.config.js sets allowBlocksWithSameTimestamp to reproduce that). Anyone
+  // reading "window 0" as "one block" would be wrong on the real chain.
+  it('a zero window is same-SECOND, which still spans more than one block on Arc', async function () {
+    const { ballista, creator } = await env();
+    await ballista.setCreatorLaunchWindow(0);
+    const hash = await ballista.currentEconomicsHash();
+    const rc = await (await ballista.connect(creator)
+      .createToken('Zero', 'ZRO', 'u', hash, false)).wait();
+    const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+      .find((l) => l && l.name === 'TokenCreated').args.token;
+    const created = (await ballista.curves(t)).creationTimestamp;
+
+    // A LATER BLOCK carrying the SAME timestamp is still inside a zero window.
+    await ethers.provider.send('evm_setNextBlockTimestamp', [Number(created)]);
+    const buyRc = await (await ballista.connect(creator).creatorLaunchBuy(t, ONE, 0)).wait();
+    expect(buyRc.blockNumber).to.be.greaterThan(rc.blockNumber);
+
+    // The moment the second ticks over, it is shut.
+    await ethers.provider.send('evm_setNextBlockTimestamp', [Number(created) + 1]);
+    await expect(ballista.connect(creator).creatorLaunchBuy(t, ONE, 0))
+      .to.be.revertedWithCustomError(ballista, 'LaunchWindowClosed');
   });
 
   it('works in block 0 and reports the percentage bought', async function () {
@@ -157,10 +290,12 @@ describe('Ballista — creator launch buy (block 0)', function () {
       await usdc.mint(await cl.getAddress(), 1_000_000n * ONE);
       await cl.approveAll();
 
-      // Ten buys, each individually large enough to reach the 2.5% cap on its own.
-      // Under a PER-TRANSACTION cap this yields ~37% of curve supply for a few
-      // hundred dollars. Under a cumulative cap it must stop at 2.5% exactly.
-      await cl.launchAndLoop('LOOP', 200n * ONE, 10);
+      // Each buy is individually well under the 2.5% cap (~8 USDC against the ~52 that
+      // buys the whole thing), so reaching the cap requires ACCUMULATION. At 200 USDC
+      // a call the first buy saturated the cap on its own and the rest bounced off the
+      // "already used" guard -- which left this test green even against a per-call cap,
+      // i.e. blind to the exact regression it exists to catch. Found by mutation.
+      await cl.launchAndLoop('LOOP', 8n * ONE, 10);
       const tokenAddress = await cl.token();
 
       const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
@@ -173,6 +308,44 @@ describe('Ballista — creator launch buy (block 0)', function () {
       expect(curve.creatorLaunchPurchased).to.equal(held);
       expect(heldBps).to.be.lessThanOrEqual(250n);
       expect(curve.creatorLaunchPurchased * BPS / CURVE_SUPPLY).to.be.lessThanOrEqual(250n);
+    });
+
+    // The widened window is the point of the change, so the cap has to hold across it,
+    // not just inside one block. Arc targets 500ms blocks, so a 3-second window is
+    // roughly 6-7 blocks; timestamps are pinned here to put TEN separate blocks inside
+    // it, which is worse than the real chain allows.
+    it('EXPLOIT ATTEMPT: loop the privileged buy across TEN blocks inside the widened window', async function () {
+      const { ballista, creator } = await env();
+      const hash = await ballista.currentEconomicsHash();
+      const rc = await (await ballista.connect(creator)
+        .createToken('Loop2', 'LP2', 'u', hash, false)).wait();
+      const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+        .find((l) => l && l.name === 'TokenCreated').args.token;
+      const created = Number((await ballista.curves(t)).creationTimestamp);
+
+      // Each buy is individually FAR UNDER the cap (~8 USDC against the ~52 that buys
+      // the whole 2.5%), so only accumulation across calls can reach it. Sizing these
+      // large enough to saturate the cap in one call makes the test pass against a
+      // per-call cap too, which is exactly the regression it is supposed to catch.
+      let landed = 0, reverted = 0;
+      for (let i = 0; i < 10; i++) {
+        await ethers.provider.send('evm_setNextBlockTimestamp', [created + Math.floor(i / 3)]);
+        try {
+          await (await ballista.connect(creator).creatorLaunchBuy(t, 8n * ONE, 0)).wait();
+          landed++;
+        } catch {
+          reverted++;
+        }
+      }
+
+      const curve = await ballista.curves(t);
+      const token = await ethers.getContractAt('ArcLaunchToken', t);
+      const held = await token.balanceOf(creator.address);
+      const heldBps = (held * BPS) / CURVE_SUPPLY;
+      console.log(`        ${landed} landed / ${reverted} reverted across 10 blocks -> ${(Number(heldBps) / 100).toFixed(3)}% of curve supply`);
+
+      expect(curve.creatorLaunchPurchased).to.equal(held);
+      expect(heldBps).to.be.lessThanOrEqual(250n);
     });
 
     it('the cap accumulates across separate transactions in the same block', async function () {
@@ -256,8 +429,7 @@ describe('Ballista — creator launch buy (block 0)', function () {
     it('only the owner can move the cap', async function () {
       const { ballista, creator } = await env();
       await expect(ballista.connect(creator).setMaxCreatorLaunchBps(500)).to.be.reverted;
-      await expect(ballista.setMaxCreatorLaunchBps(10_001)).to.be.revertedWith(
-        'cap cannot exceed 100% of curve supply'
+      await expect(ballista.setMaxCreatorLaunchBps(10_001)).to.be.revertedWithCustomError(ballista, 'BpsExceedsDenominator'
       );
     });
   });

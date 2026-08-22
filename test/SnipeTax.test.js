@@ -255,8 +255,7 @@ describe('Ballista — decaying snipe tax', function () {
       const { ballista } = await deployFixture();
       await ballista.setDefaultFees(1000, 1000);
       // 1000 + 9000 = 10000, exactly the denominator. Must be refused.
-      await expect(ballista.publishSnipeTaxTable([9000])).to.be.revertedWith(
-        'snipe tax plus base fee would exceed the combined ceiling'
+      await expect(ballista.publishSnipeTaxTable([9000])).to.be.revertedWithCustomError(ballista, 'SnipeTaxCeilingExceeded'
       );
     });
 
@@ -267,8 +266,7 @@ describe('Ballista — decaying snipe tax', function () {
       // ...then raise the base fee so the pair no longer fits.
       await ballista.setDefaultFees(1000, 1000);
 
-      await expect(launch(ballista, creator, 'BAD')).to.be.revertedWith(
-        'base fee plus snipe tax would exceed the combined ceiling'
+      await expect(launch(ballista, creator, 'BAD')).to.be.revertedWithCustomError(ballista, 'BaseFeeCeilingExceeded'
       );
     });
 
@@ -286,16 +284,14 @@ describe('Ballista — decaying snipe tax', function () {
       await ballista.publishSnipeTaxTable([5000, 1000]);
       await expect(
         ballista.connect(creator).createToken('A', 'AAA', 'u', stale, false)
-      ).to.be.revertedWith(
-        'economics changed since you last checked -- refresh and confirm the new terms'
+      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged'
       );
 
       stale = await ballista.currentEconomicsHash();
       await ballista.setDefaultSnipeTaxTreasuryBps(1000);
       await expect(
         ballista.connect(creator).createToken('B', 'BBB', 'u', stale, false)
-      ).to.be.revertedWith(
-        'economics changed since you last checked -- refresh and confirm the new terms'
+      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged'
       );
     });
 

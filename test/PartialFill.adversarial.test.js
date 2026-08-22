@@ -184,7 +184,7 @@ describe('Ballista — partial-fill adversarial testing', function () {
     const impossibleMinimum = remainingAfterGrief + 1n;
     await expect(
       ballista.connect(trader).buy(tokenAddress, 500_000n * ONE_USDC, impossibleMinimum),
-    ).to.be.revertedWith('slippage exceeded');
+    ).to.be.revertedWithCustomError(ballista, 'SlippageExceeded');
   });
 
   // The zero-fill case this used to cover is now UNREACHABLE, which is a strict
@@ -200,10 +200,10 @@ describe('Ballista — partial-fill adversarial testing', function () {
     expect(curve.tokenReserves).to.equal(0n);
     expect(curve.state).to.not.equal(0n);
 
-    const closed = 'curve not open for trading: check DEX or wait for graduation';
-    await expect(ballista.connect(trader).buy(tokenAddress, ONE_USDC, 0)).to.be.revertedWith(closed);
-    await expect(ballista.connect(trader).buy(tokenAddress, ONE_USDC, 1n)).to.be.revertedWith(closed);
-    await expect(ballista.quoteBuy(tokenAddress, ONE_USDC)).to.be.revertedWith(closed);
+    const closed = 'CurveNotActive';
+    await expect(ballista.connect(trader).buy(tokenAddress, ONE_USDC, 0)).to.be.revertedWithCustomError(ballista, closed);
+    await expect(ballista.connect(trader).buy(tokenAddress, ONE_USDC, 1n)).to.be.revertedWithCustomError(ballista, closed);
+    await expect(ballista.quoteBuy(tokenAddress, ONE_USDC)).to.be.revertedWithCustomError(ballista, closed);
   });
 
   it('a clamped buy that also crosses the graduation threshold graduates correctly, in the same transaction', async function () {

@@ -85,7 +85,7 @@ describe('Ballista — creator fee to pool boost', function () {
     await ballista.connect(trader).buy(on, 1_000n * ONE, 0);
 
     expect(await ballista.creatorFeesAccrued(creator.address)).to.equal(0n);
-    await expect(ballista.connect(creator).claimCreatorFees()).to.be.revertedWith('nothing to claim');
+    await expect(ballista.connect(creator).claimCreatorFees()).to.be.revertedWithCustomError(ballista, 'NothingToClaim');
     // The diverted amount is exactly the creator's 0.90% buy-side share.
     expect((await ballista.curves(on)).poolBoost).to.equal((1_000n * ONE * 90n) / 10_000n);
   });

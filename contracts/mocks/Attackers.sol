@@ -14,9 +14,6 @@ interface IBallista {
     function currentEconomicsHash() external view returns (bytes32);
 }
 
-/// @notice TEST ONLY. A router that takes the approved token and USDC for itself and
-///         reports a successful liquidity add. Models the worst case of a compromised
-///         owner calling setRouter() with a hostile address.
 contract MaliciousRouter is IDEXRouter {
     address public immutable thief;
 
@@ -32,16 +29,14 @@ contract MaliciousRouter is IDEXRouter {
         address,
         uint256
     ) external returns (uint256, uint256, uint256) {
-        // Both were forceApprove'd to this contract before the call.
+
         IERC20(tokenA).transferFrom(msg.sender, thief, amountADesired);
         IERC20(tokenB).transferFrom(msg.sender, thief, amountBDesired);
-        // Non-zero liquidity is all the caller checks.
+
         return (amountADesired, amountBDesired, 1);
     }
 }
 
-/// @notice TEST ONLY. Attempts cross-function reentrancy from inside the graduation
-///         call, which is the deepest point Ballista reaches into an external contract.
 contract ReentrantRouter is IDEXRouter {
     IBallista public immutable ballista;
     address public token;
@@ -55,7 +50,7 @@ contract ReentrantRouter is IDEXRouter {
         address, address, uint256 a, uint256 b, uint256, uint256, address, uint256
     ) external returns (uint256, uint256, uint256) {
         reenterAttempted = true;
-        // Every one of these should be blocked by the shared nonReentrant guard.
+
         try ballista.buy(token, 1e6, 0) { lastFailure = "BUY REENTERED"; }
         catch { lastFailure = "buy blocked"; }
         try ballista.sell(token, 1e18, 0) { lastFailure = "SELL REENTERED"; }
@@ -68,7 +63,6 @@ contract ReentrantRouter is IDEXRouter {
     }
 }
 
-/// @notice TEST ONLY. Burns every drop of gas it is given.
 contract GasGuzzlerRouter is IDEXRouter {
     uint256 public sink;
     function addLiquidity(
@@ -79,7 +73,6 @@ contract GasGuzzlerRouter is IDEXRouter {
     }
 }
 
-/// @notice TEST ONLY. Returns nonsense rather than reverting.
 contract GarbageRouter is IDEXRouter {
     function addLiquidity(
         address, address, uint256, uint256, uint256, uint256, address, uint256
@@ -88,9 +81,6 @@ contract GarbageRouter is IDEXRouter {
     }
 }
 
-/// @notice TEST ONLY. A creator that is a contract with no way to receive anything and
-///         which reverts on every call, used to prove it cannot break other people's
-///         trades on its token.
 contract HostileCreator {
     IBallista public immutable ballista;
     constructor(address b) { ballista = IBallista(b); }
@@ -99,13 +89,10 @@ contract HostileCreator {
         return ballista.createToken(name, symbol, "ipfs://x", ballista.currentEconomicsHash(), false);
     }
 
-    // Reverts on absolutely everything else.
     fallback() external payable { revert("HostileCreator: no"); }
     receive() external payable { revert("HostileCreator: no"); }
 }
 
-/// @notice TEST ONLY. Launches many tokens from one transaction, to measure whether the
-///         per-wallet launch cooldown is meaningful against a contract-based spammer.
 contract MassLauncher {
     IBallista public immutable ballista;
     address[] public launched;
@@ -137,8 +124,6 @@ contract MassLauncher {
     }
 }
 
-/// @notice TEST ONLY. One contract, many launcher children, to show the cooldown is
-///         per-address and therefore trivially sidestepped.
 contract LauncherFactory {
     address public immutable ballista;
     address[] public children;
@@ -155,10 +140,6 @@ contract LauncherFactory {
     function count() external view returns (uint256) { return children.length; }
 }
 
-/// @notice TEST ONLY. A router that consumes only PART of what it was approved for and
-///         still reports a successful liquidity add -- the shape of any router whose
-///         ratio maths leaves a remainder, not necessarily a malicious one. Used to
-///         show that the leftover allowance survives a SUCCESSFUL graduation.
 contract PartialConsumeRouter is IDEXRouter {
     address public immutable beneficiary;
     constructor(address b) { beneficiary = b; }
@@ -167,13 +148,12 @@ contract PartialConsumeRouter is IDEXRouter {
         address tokenA, address tokenB, uint256 amountADesired, uint256 amountBDesired,
         uint256, uint256, address to, uint256
     ) external returns (uint256, uint256, uint256) {
-        // Take only half of each, as a router with leftover ratio would.
+
         IERC20(tokenA).transferFrom(msg.sender, to, amountADesired / 2);
         IERC20(tokenB).transferFrom(msg.sender, address(this), amountBDesired / 2);
         return (amountADesired / 2, amountBDesired / 2, 1);
     }
 
-    /// @notice Later, unrelated transaction: drain whatever allowance was left behind.
     function sweepResidualAllowance(address usdcAddr, address factory) external returns (uint256) {
         uint256 remaining = IERC20(usdcAddr).allowance(factory, address(this));
         if (remaining == 0) return 0;

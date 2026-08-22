@@ -57,10 +57,10 @@ describe('Ballista — mutable metadata URI', function () {
     const t = await launch(ballista, creator, 'AUTH');
 
     await expect(ballista.connect(other).updateMetadataURI(t, 'ipfs://hijack'))
-      .to.be.revertedWith("only the token's creator may update metadata");
+      .to.be.revertedWithCustomError(ballista, 'NotCreator');
     // Not even the owner.
     await expect(ballista.connect(deployer).updateMetadataURI(t, 'ipfs://owner'))
-      .to.be.revertedWith("only the token's creator may update metadata");
+      .to.be.revertedWithCustomError(ballista, 'NotCreator');
   });
 
   it('ATTACK: call the token directly, bypassing the factory and its audit event', async function () {
@@ -94,6 +94,6 @@ describe('Ballista — mutable metadata URI', function () {
     const { ballista, creator } = await env();
     await expect(
       ballista.connect(creator).updateMetadataURI(ethers.Wallet.createRandom().address, 'x')
-    ).to.be.revertedWith('unknown token');
+    ).to.be.revertedWithCustomError(ballista, 'UnknownToken');
   });
 });

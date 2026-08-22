@@ -93,8 +93,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
     it("enforces the per-wallet launch cooldown", async function () {
       const { factory, alice } = await deployFixture();
       await createToken(factory, alice, "First", "FIRST");
-      await expect(createToken(factory, alice, "Second", "SECOND")).to.be.revertedWith(
-        "cooldown: wait before launching again"
+      await expect(createToken(factory, alice, "Second", "SECOND")).to.be.revertedWithCustomError(factory, 'LaunchCooldownActive'
       );
     });
 
@@ -109,8 +108,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
     it("blocks exact-duplicate symbols", async function () {
       const { factory, alice, bob } = await deployFixture();
       await createToken(factory, alice, "First", "DUPE");
-      await expect(createToken(factory, bob, "Copycat", "DUPE")).to.be.revertedWith(
-        "symbol locked: still within another launch's protection window"
+      await expect(createToken(factory, bob, "Copycat", "DUPE")).to.be.revertedWithCustomError(factory, 'SymbolLocked'
       );
     });
 
@@ -128,8 +126,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const strict = await deployFixture();
       await strict.factory.connect(strict.owner).setCaseSensitiveSymbols(false);
       await createToken(strict.factory, strict.alice, "First", "CAT");
-      await expect(createToken(strict.factory, strict.bob, "Copycat", "cat")).to.be.revertedWith(
-        "symbol locked: still within another launch's protection window"
+      await expect(createToken(strict.factory, strict.bob, "Copycat", "cat")).to.be.revertedWithCustomError(strict.factory, 'SymbolLocked'
       );
     });
 
@@ -181,8 +178,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
   describe("fee hard cap", function () {
     it("rejects any attempt to set default fees above 10%", async function () {
       const { factory, owner } = await deployFixture();
-      await expect(factory.connect(owner).setDefaultFees(1001, 100)).to.be.revertedWith(
-        "fee exceeds hard ceiling"
+      await expect(factory.connect(owner).setDefaultFees(1001, 100)).to.be.revertedWithCustomError(factory, 'FeeExceedsCeiling'
       );
     });
 
@@ -229,7 +225,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const tokenAddr = await getLastToken(factory, alice);
       await expect(
         factory.connect(bob).buy(tokenAddr, USDC(100), TOKENS(999_999_999))
-      ).to.be.revertedWith("slippage exceeded");
+      ).to.be.revertedWithCustomError(factory, 'SlippageExceeded');
     });
   });
 
@@ -261,8 +257,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const curve = await factory.curves(tokenAddr);
       expect(curve.state).to.equal(GRADUATED);
 
-      await expect(factory.connect(bob).buy(tokenAddr, USDC(100), 0)).to.be.revertedWith(
-        "curve not open for trading: check DEX or wait for graduation"
+      await expect(factory.connect(bob).buy(tokenAddr, USDC(100), 0)).to.be.revertedWithCustomError(factory, 'CurveNotActive'
       );
     });
 
@@ -281,8 +276,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const curve = await factory.curves(tokenAddr);
       expect(curve.state).to.equal(GRADUATION_READY);
 
-      await expect(factory.graduate(tokenAddr)).to.be.revertedWith(
-        "graduation attempt failed -- check router and liquidity conditions"
+      await expect(factory.graduate(tokenAddr)).to.be.revertedWithCustomError(factory, 'GraduationFailed'
       );
     });
 
@@ -302,8 +296,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       await usdc.mint(alice.address, USDC(1_000_000));
       await usdc.connect(alice).approve(await bare.getAddress(), ethers.MaxUint256);
 
-      await expect(createToken(bare, alice, "First", "CAT")).to.be.revertedWith(
-        "router not set: launches are closed until a DEX is configured"
+      await expect(createToken(bare, alice, "First", "CAT")).to.be.revertedWithCustomError(bare, 'RouterNotSet'
       );
 
       // ...and once a router exists, the same launch goes through unchanged.

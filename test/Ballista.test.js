@@ -87,7 +87,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
 
       await expect(
         create(ballista, creator, 'cat coin two', 'cat', 'ipfs://b'),
-      ).to.be.revertedWith("symbol locked: still within another launch's protection window");
+      ).to.be.revertedWithCustomError(ballista, 'SymbolLocked');
     });
 
     it('only owner can toggle it', async function () {
@@ -112,7 +112,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
 
       await expect(
         ballista.connect(creator).createToken('Stale Coin', 'STL', 'ipfs://a', staleHash, false),
-      ).to.be.revertedWith('economics changed since you last checked -- refresh and confirm the new terms');
+      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
     });
 
     it('reverts if the graduation threshold changes underneath a pinned hash', async function () {
@@ -122,7 +122,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
 
       await expect(
         ballista.connect(creator).createToken('Stale Threshold Coin', 'STH', 'ipfs://a', staleHash, false),
-      ).to.be.revertedWith('economics changed since you last checked -- refresh and confirm the new terms');
+      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
     });
 
     it('reverts if symbol case-sensitivity changes underneath a pinned hash', async function () {
@@ -132,7 +132,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
 
       await expect(
         ballista.connect(creator).createToken('Stale Symbol Coin', 'SSC', 'ipfs://a', staleHash, false),
-      ).to.be.revertedWith('economics changed since you last checked -- refresh and confirm the new terms');
+      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
     });
 
     it('reverts if the symbol lock duration changes underneath a pinned hash', async function () {
@@ -142,7 +142,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
 
       await expect(
         ballista.connect(creator).createToken('Stale Lock Coin', 'SLC', 'ipfs://a', staleHash, false),
-      ).to.be.revertedWith('economics changed since you last checked -- refresh and confirm the new terms');
+      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
     });
 
     it('a fresh hash fetched AFTER the change works fine -- this protects against surprise, not against change itself', async function () {
@@ -208,8 +208,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       await ballista.connect(trader).buy(tokenAddress, 68_000n * ONE_USDC, 0);
       expect((await ballista.curves(tokenAddress)).state).to.equal(2n); // GRADUATED
 
-      await expect(ballista.quoteBuy(tokenAddress, 100n * ONE_USDC)).to.be.revertedWith(
-        'curve not open for trading: check DEX or wait for graduation',
+      await expect(ballista.quoteBuy(tokenAddress, 100n * ONE_USDC)).to.be.revertedWithCustomError(ballista, 'CurveNotActive',
       );
     });
 
@@ -261,17 +260,16 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
 
     it('createToken reverts while router is unset', async function () {
       const { ballista, creator } = await bareDeploy();
-      await expect(create(ballista, creator, 'No Router', 'NRTR', 'ipfs://a')).to.be.revertedWith(
-        'router not set: launches are closed until a DEX is configured'
+      await expect(create(ballista, creator, 'No Router', 'NRTR', 'ipfs://a')).to.be.revertedWithCustomError(ballista, 'RouterNotSet'
       );
     });
 
     it('proposeRouter/activateRouter/revokeRouter all reject the zero address', async function () {
       const { ballista } = await deployFixture();
-      const msg = 'router cannot be the zero address';
-      await expect(ballista.proposeRouter(ethers.ZeroAddress)).to.be.revertedWith(msg);
-      await expect(ballista.activateRouter(ethers.ZeroAddress)).to.be.revertedWith(msg);
-      await expect(ballista.revokeRouter(ethers.ZeroAddress)).to.be.revertedWith(msg);
+      const msg = 'ZeroAddress';
+      await expect(ballista.proposeRouter(ethers.ZeroAddress)).to.be.revertedWithCustomError(ballista, msg);
+      await expect(ballista.activateRouter(ethers.ZeroAddress)).to.be.revertedWithCustomError(ballista, msg);
+      await expect(ballista.revokeRouter(ethers.ZeroAddress)).to.be.revertedWithCustomError(ballista, msg);
     });
 
     it('TIMELOCK: activation before the delay reverts, after it succeeds', async function () {
@@ -283,15 +281,13 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       expect(delay).to.equal(24n * 3600n);
 
       await ballista.proposeRouter(addr);
-      await expect(ballista.activateRouter(addr)).to.be.revertedWith(
-        'router timelock has not elapsed yet'
+      await expect(ballista.activateRouter(addr)).to.be.revertedWithCustomError(ballista, 'RouterTimelockPending'
       );
 
       // One second short is still short.
       await ethers.provider.send('evm_increaseTime', [Number(delay) - 5]);
       await ethers.provider.send('evm_mine');
-      await expect(ballista.activateRouter(addr)).to.be.revertedWith(
-        'router timelock has not elapsed yet'
+      await expect(ballista.activateRouter(addr)).to.be.revertedWithCustomError(ballista, 'RouterTimelockPending'
       );
 
       await ethers.provider.send('evm_increaseTime', [10]);
@@ -303,8 +299,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
     it('activating a never-proposed address reverts', async function () {
       const { ballista } = await deployFixture();
       const stranger = await (await ethers.getContractFactory('MockRouter')).deploy();
-      await expect(ballista.activateRouter(await stranger.getAddress())).to.be.revertedWith(
-        'router was never proposed, or was revoked'
+      await expect(ballista.activateRouter(await stranger.getAddress())).to.be.revertedWithCustomError(ballista, 'RouterNotProposed'
       );
     });
 
@@ -319,8 +314,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
 
       await ethers.provider.send('evm_increaseTime', [24 * 3600 + 1]);
       await ethers.provider.send('evm_mine');
-      await expect(ballista.activateRouter(addr)).to.be.revertedWith(
-        'router was never proposed, or was revoked'
+      await expect(ballista.activateRouter(addr)).to.be.revertedWithCustomError(ballista, 'RouterNotProposed'
       );
     });
 
@@ -334,8 +328,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
         .withArgs(live, true);
 
       expect(await ballista.router()).to.equal(ethers.ZeroAddress);
-      await expect(create(ballista, creator, 'After Revoke', 'ARV', 'ipfs://a')).to.be.revertedWith(
-        'router not set: launches are closed until a DEX is configured'
+      await expect(create(ballista, creator, 'After Revoke', 'ARV', 'ipfs://a')).to.be.revertedWithCustomError(ballista, 'RouterNotSet'
       );
     });
 
@@ -424,7 +417,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
         ballista.connect(trader).buy.staticCall(predictedToken, 10n * ONE_USDC, 0, {
           blockTag: createReceipt.blockNumber,
         }),
-      ).to.be.revertedWith('trading opens next block');
+      ).to.be.revertedWithCustomError(ballista, 'TradingNotOpenYet');
     });
 
     it('allows trading starting the block after creation', async function () {
@@ -475,7 +468,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
 
     await expect(
       ballista.connect(trader).buy(tokenAddress, 1n * ONE_USDC, 0),
-    ).to.be.revertedWith('curve not open for trading: check DEX or wait for graduation');
+    ).to.be.revertedWithCustomError(ballista, 'CurveNotActive');
 
     expect(await usdc.balanceOf(treasury.address)).to.be.gt(0n);
   });

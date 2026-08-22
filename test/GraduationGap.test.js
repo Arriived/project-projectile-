@@ -237,7 +237,7 @@ describe('Ballista — graduation gap and the dual trigger', function () {
       // Trading is closed, so no sell can push tokenReserves back above zero.
       await expect(
         ballista.connect(trader).sell(tokenAddress, 1_000n * 10n ** 18n, 0)
-      ).to.be.revertedWith('curve not open for trading: check DEX or wait for graduation');
+      ).to.be.revertedWithCustomError(ballista, 'CurveNotActive');
     });
   });
 

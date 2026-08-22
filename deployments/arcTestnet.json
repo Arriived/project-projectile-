@@ -1,0 +1,22 @@
+{
+  "network": "arcTestnet",
+  "chainId": 5042002,
+  "ballista": "0x19ba1Fd374Ff18366D7C8582047d18430F2501e3",
+  "deployBlock": 58153740,
+  "router": "0x73aE2ae8AC7AF1D6a9B3267fd2F6f3F0A62F27B5",
+  "routerSource": "MockRouter deployed by scripts/deploy.js (PLACEHOLDER -- not a real DEX)",
+  "routerLive": true,
+  "usdc": "0x3600000000000000000000000000000000000000",
+  "treasury": "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
+  "owner": "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
+  "deployer": "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
+  "constructorArgs": [
+    "0x3600000000000000000000000000000000000000",
+    "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
+    "0x73aE2ae8AC7AF1D6a9B3267fd2F6f3F0A62F27B5"
+  ],
+  "verifyCommand": "npx hardhat verify --network arcTestnet 0x19ba1Fd374Ff18366D7C8582047d18430F2501e3 0x3600000000000000000000000000000000000000 0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb 0x73aE2ae8AC7AF1D6a9B3267fd2F6f3F0A62F27B5",
+  "explorer": "https://testnet.arcscan.app/address/0x19ba1Fd374Ff18366D7C8582047d18430F2501e3",
+  "recordedAt": "2026-08-21T00:00:00.000Z",
+  "provenance": "BACKFILLED by hand, not written by deploy.js -- every later deploy overwrites it. All values verified, none transcribed on trust: usdc/treasury/owner/router read live from Arc Testnet 2026-08-21 via eth_call; deployBlock 58153740 confirmed by getCode (absent at 58153739, present at 58153740); deployer == owner is structural, since Ballista's constructor is Ownable(msg.sender) and takes no owner argument."
+}

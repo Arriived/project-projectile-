@@ -60,13 +60,11 @@ describe('Ballista — constructor router bootstrap', function () {
   it('address(0) preserves the old behaviour exactly -- gated until the timelock clears', async function () {
     const { ballista, creator, routerAddress } = await deployWith('zero');
     expect(await ballista.router()).to.equal(ethers.ZeroAddress);
-    await expect(create(ballista, creator, 'GATED')).to.be.revertedWith(
-      'router not set: launches are closed until a DEX is configured'
+    await expect(create(ballista, creator, 'GATED')).to.be.revertedWithCustomError(ballista, 'RouterNotSet'
     );
 
     await ballista.proposeRouter(routerAddress);
-    await expect(ballista.activateRouter(routerAddress)).to.be.revertedWith(
-      'router timelock has not elapsed yet'
+    await expect(ballista.activateRouter(routerAddress)).to.be.revertedWithCustomError(ballista, 'RouterTimelockPending'
     );
     await ethers.provider.send('evm_increaseTime', [DAY + 1]);
     await ethers.provider.send('evm_mine');
@@ -80,17 +78,14 @@ describe('Ballista — constructor router bootstrap', function () {
     const nextAddr = await next.getAddress();
 
     // Never proposed -> rejected outright.
-    await expect(ballista.activateRouter(nextAddr)).to.be.revertedWith(
-      'router was never proposed, or was revoked'
+    await expect(ballista.activateRouter(nextAddr)).to.be.revertedWithCustomError(ballista, 'RouterNotProposed'
     );
     await ballista.proposeRouter(nextAddr);
-    await expect(ballista.activateRouter(nextAddr)).to.be.revertedWith(
-      'router timelock has not elapsed yet'
+    await expect(ballista.activateRouter(nextAddr)).to.be.revertedWithCustomError(ballista, 'RouterTimelockPending'
     );
     await ethers.provider.send('evm_increaseTime', [DAY - 60]);
     await ethers.provider.send('evm_mine');
-    await expect(ballista.activateRouter(nextAddr)).to.be.revertedWith(
-      'router timelock has not elapsed yet'
+    await expect(ballista.activateRouter(nextAddr)).to.be.revertedWithCustomError(ballista, 'RouterTimelockPending'
     );
     await ethers.provider.send('evm_increaseTime', [120]);
     await ethers.provider.send('evm_mine');
@@ -103,13 +98,11 @@ describe('Ballista — constructor router bootstrap', function () {
     await ballista.revokeRouter(routerAddress);
     expect(await ballista.router()).to.equal(ethers.ZeroAddress);
     expect(await ballista.routerProposedAt(routerAddress)).to.equal(0n);
-    await expect(create(ballista, creator, 'REV')).to.be.revertedWith(
-      'router not set: launches are closed until a DEX is configured'
+    await expect(create(ballista, creator, 'REV')).to.be.revertedWithCustomError(ballista, 'RouterNotSet'
     );
     // Re-approving it needs the full delay, same as anything else.
     await ballista.proposeRouter(routerAddress);
-    await expect(ballista.activateRouter(routerAddress)).to.be.revertedWith(
-      'router timelock has not elapsed yet'
+    await expect(ballista.activateRouter(routerAddress)).to.be.revertedWithCustomError(ballista, 'RouterTimelockPending'
     );
   });
 

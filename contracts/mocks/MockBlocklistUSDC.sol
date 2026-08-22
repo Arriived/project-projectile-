@@ -3,14 +3,6 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-/// @notice Test-only USDC stand-in that can refuse transfers to specific addresses,
-///         mirroring the blocklist real Circle USDC actually enforces.
-/// @dev This is the realistic version of "the creator cannot receive funds". A plain
-///      ERC20 has no recipient callback, so a creator contract cannot reject an
-///      incoming transfer by reverting — but a blocklisted creator address makes the
-///      transfer itself revert, which is exactly the case that would brick every trade
-///      on a token if creator fees were pushed inside buy()/sell() instead of accrued.
-///      Never deploy anything like this to a real network.
 contract MockBlocklistUSDC is ERC20 {
     mapping(address => bool) public blocked;
 

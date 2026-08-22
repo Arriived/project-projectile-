@@ -131,7 +131,7 @@ describe('Ballista — graduation state machine adversarial testing', function (
     const { ballista, creator } = await deployFixtureWithRouter('MockRouter');
     const tokenAddress = await launchToken(ballista, creator, 'Too Early Coin', 'TEC');
 
-    await expect(ballista.graduate(tokenAddress)).to.be.revertedWith('not ready to graduate');
+    await expect(ballista.graduate(tokenAddress)).to.be.revertedWithCustomError(ballista, 'NotReadyToGraduate');
   });
 
   it('graduate() rejects a curve that already fully graduated -- no double-graduation', async function () {
@@ -141,7 +141,7 @@ describe('Ballista — graduation state machine adversarial testing', function (
     await ballista.connect(trader).buy(tokenAddress, 68_000n * ONE_USDC, 0);
     expect((await ballista.curves(tokenAddress)).state).to.equal(GRADUATED); // working router, auto-completes
 
-    await expect(ballista.graduate(tokenAddress)).to.be.revertedWith('not ready to graduate');
+    await expect(ballista.graduate(tokenAddress)).to.be.revertedWithCustomError(ballista, 'NotReadyToGraduate');
   });
 
   it('a GRADUATION_READY curve rejects both buy() and sell() -- trading is genuinely closed, not just pending', async function () {
@@ -153,10 +153,10 @@ describe('Ballista — graduation state machine adversarial testing', function (
 
     await expect(
       ballista.connect(trader).buy(tokenAddress, 100n * ONE_USDC, 0),
-    ).to.be.revertedWith('curve not open for trading: check DEX or wait for graduation');
+    ).to.be.revertedWithCustomError(ballista, 'CurveNotActive');
     await expect(
       ballista.connect(trader).sell(tokenAddress, 1n, 0),
-    ).to.be.revertedWith('curve not open for trading: check DEX or wait for graduation');
+    ).to.be.revertedWithCustomError(ballista, 'CurveNotActive');
   });
 
   it('a zero-liquidity-returning router (not a revert) is caught the same way as an outright revert', async function () {

@@ -1,5 +1,7 @@
 const hre = require("hardhat");
 const { ethers } = hre;
+const fs = require("fs");
+const path = require("path");
 
 // Arc Testnet USDC. Verified on-chain by scripts/preflight.js rather than taken on
 // trust: it reports name/symbol USDC with 6 decimals, and the known-good live
@@ -192,6 +194,52 @@ async function main() {
   console.log(`  ${"TOTAL".padEnd(20)} ${totalGas.toString().padStart(10)} gas`);
   console.log(`  balance spent        ${ethers.formatUnits(startBalance - endBalance, 18)} USDC`);
 
+
+  // ── 7. Deployment record ─────────────────────────────────────────────
+  // The live address has to exist somewhere durable and machine-readable. Before
+  // this it lived only in a commit message and CLAUDE.md, either of which can be
+  // edited away without anyone noticing. Constructor args are recorded too --
+  // verification fails without the exact three, and reconstructing them from
+  // memory is how a redeploy goes wrong.
+  const recordPath = path.join(__dirname, "..", "deployments", `${hre.network.name}.json`);
+  let previous = {};
+  try {
+    previous = JSON.parse(fs.readFileSync(recordPath, "utf8"));
+  } catch {
+    // No prior record: first deploy on this network. Not an error.
+  }
+  // A resume run (BALLISTA_ADDRESS set) never learns the deploy block, so keep the
+  // previously recorded one rather than overwriting a correct value with null.
+  const sameBallista =
+    previous.ballista &&
+    ethers.getAddress(previous.ballista) === ethers.getAddress(ballistaAddress);
+  const deploymentRecord = {
+    network: hre.network.name,
+    chainId: Number(net.chainId),
+    ballista: ballistaAddress,
+    deployBlock: deployBlock ?? (sameBallista ? previous.deployBlock ?? null : null),
+    router: routerAddress,
+    routerSource: EXISTING_ROUTER
+      ? "reused via ROUTER_ADDRESS"
+      : "MockRouter deployed by this script (PLACEHOLDER -- not a real DEX)",
+    routerLive: checks.router !== ethers.ZeroAddress,
+    usdc: ARC_TESTNET_USDC,
+    treasury: checks.treasury,
+    owner: checks.owner,
+    deployer: deployer.address,
+    constructorArgs: [ARC_TESTNET_USDC, treasury, routerAddress],
+    verifyCommand:
+      `npx hardhat verify --network ${hre.network.name} ${ballistaAddress} ` +
+      `${ARC_TESTNET_USDC} ${treasury} ${routerAddress}`,
+    explorer: `https://testnet.arcscan.app/address/${ballistaAddress}`,
+    recordedAt: new Date().toISOString(),
+  };
+  fs.mkdirSync(path.dirname(recordPath), { recursive: true });
+  fs.writeFileSync(recordPath, JSON.stringify(deploymentRecord, null, 2) + "\n");
+  console.log(`\n  record written  deployments/${hre.network.name}.json`);
+  if (deploymentRecord.deployBlock === null) {
+    console.log(`  !! deployBlock unknown (resume run) -- set it by hand before relying on it.`);
+  }
   console.log(`\n================================================================\n  NEXT\n================================================================`);
   console.log(`  Ballista    ${ballistaAddress}`);
   console.log(`  MockRouter  ${routerAddress}  (PLACEHOLDER -- not a real DEX)`);

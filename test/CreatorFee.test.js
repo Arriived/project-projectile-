@@ -168,7 +168,7 @@ describe('Ballista — creator fee share', function () {
     expect((await usdc.balanceOf(creator.address)) - before).to.equal(owed);
     expect(await ballista.creatorFeesAccrued(creator.address)).to.equal(0n);
 
-    await expect(ballista.connect(creator).claimCreatorFees()).to.be.revertedWith('nothing to claim');
+    await expect(ballista.connect(creator).claimCreatorFees()).to.be.revertedWithCustomError(ballista, 'NothingToClaim');
   });
 
   it('a non-creator cannot claim anything', async function () {
@@ -178,8 +178,8 @@ describe('Ballista — creator fee share', function () {
 
     // Fees are keyed to the caller, so a stranger's claim finds an empty balance
     // rather than someone else's.
-    await expect(ballista.connect(other).claimCreatorFees()).to.be.revertedWith('nothing to claim');
-    await expect(ballista.connect(trader).claimCreatorFees()).to.be.revertedWith('nothing to claim');
+    await expect(ballista.connect(other).claimCreatorFees()).to.be.revertedWithCustomError(ballista, 'NothingToClaim');
+    await expect(ballista.connect(trader).claimCreatorFees()).to.be.revertedWithCustomError(ballista, 'NothingToClaim');
     expect(await ballista.creatorFeesAccrued(creator.address)).to.be.greaterThan(0n);
   });
 
@@ -309,8 +309,7 @@ describe('Ballista — creator fee share', function () {
       await ballista.setDefaultCreatorFees(90, 40); // buy unchanged, sell moved
       await expect(
         ballista.connect(creator).createToken('SellOnly', 'SLO', 'ipfs://a', staleHash, false)
-      ).to.be.revertedWith(
-        'economics changed since you last checked -- refresh and confirm the new terms'
+      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged'
       );
     });
 
@@ -322,8 +321,7 @@ describe('Ballista — creator fee share', function () {
 
       await expect(
         ballista.connect(creator).createToken('Late', 'LATE', 'ipfs://a', staleHash, false)
-      ).to.be.revertedWith(
-        'economics changed since you last checked -- refresh and confirm the new terms'
+      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged'
       );
     });
 
@@ -348,11 +346,9 @@ describe('Ballista — creator fee share', function () {
     it('rejects a creator share larger than the fee it is carved from', async function () {
       const { ballista } = await deployFixture();
       // Default fees are 100 bps on each side; 101 would exceed them.
-      await expect(ballista.setDefaultCreatorFees(101, 50)).to.be.revertedWith(
-        'creator buy share cannot exceed the buy fee it is carved from'
+      await expect(ballista.setDefaultCreatorFees(101, 50)).to.be.revertedWithCustomError(ballista, 'CreatorBuyShareExceedsFee'
       );
-      await expect(ballista.setDefaultCreatorFees(90, 101)).to.be.revertedWith(
-        'creator sell share cannot exceed the sell fee it is carved from'
+      await expect(ballista.setDefaultCreatorFees(90, 101)).to.be.revertedWithCustomError(ballista, 'CreatorSellShareExceedsFee'
       );
       await expect(ballista.setDefaultCreatorFees(100, 100)).to.not.be.reverted;
     });
@@ -361,8 +357,7 @@ describe('Ballista — creator fee share', function () {
       const { ballista } = await deployFixture();
       await ballista.setDefaultCreatorFees(80, 80);
 
-      await expect(ballista.setDefaultFees(50, 100)).to.be.revertedWith(
-        'fee would fall below the creator share -- lower the creator share first'
+      await expect(ballista.setDefaultFees(50, 100)).to.be.revertedWithCustomError(ballista, 'FeeBelowCreatorShare'
       );
 
       // Doing it in the correct order works.
