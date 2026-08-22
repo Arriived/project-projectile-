@@ -69,7 +69,7 @@ async function main() {
   graduation can complete on testnet. It creates NO real pool, provides
   NO real liquidity, and the LP tokens it "burns" are meaningless.
 
-  Ballista gates createToken() on a router being set, so testnet cannot
+  LFX1 gates createToken() on a router being set, so testnet cannot
   function at all without one. Replace this the moment a real Arc DEX
   router is confirmed and verified. Swapping it means proposeRouter()
   then activateRouter() after a 24h timelock; revokeRouter() is instant.
@@ -87,27 +87,27 @@ async function main() {
     console.log(`  MockRouter (PLACEHOLDER)  ${routerAddress}   block ${r.blockNumber}`);
   }
 
-  // ── 2. Ballista ──────────────────────────────────────────────────────
-  console.log(`\n================================================================\n  STEP 2 -- Ballista\n================================================================`);
+  // ── 2. LFX1 ──────────────────────────────────────────────────────
+  console.log(`\n================================================================\n  STEP 2 -- LFX1\n================================================================`);
 
   let ballistaAddress = EXISTING_BALLISTA;
   let deployBlock;
   if (ballistaAddress) {
-    console.log(`  reusing existing Ballista ${ballistaAddress} (BALLISTA_ADDRESS was set)`);
+    console.log(`  reusing existing LFX1 ${ballistaAddress} (BALLISTA_ADDRESS was set)`);
   } else {
-    const Ballista = await ethers.getContractFactory("Ballista");
+    const LFX1 = await ethers.getContractFactory("LFX1");
     // Router passed straight into the constructor: the one deliberate timelock
     // bypass, so a fresh deployment is usable immediately instead of rejecting every
     // createToken for 24 hours. Every later change still goes through propose/activate.
-    const ballista = await Ballista.deploy(ARC_TESTNET_USDC, treasury, routerAddress);
-    const r = await record("Ballista deploy", Promise.resolve(ballista.deploymentTransaction()));
+    const ballista = await LFX1.deploy(ARC_TESTNET_USDC, treasury, routerAddress);
+    const r = await record("LFX1 deploy", Promise.resolve(ballista.deploymentTransaction()));
     await ballista.waitForDeployment();
     ballistaAddress = await ballista.getAddress();
     deployBlock = r.blockNumber;
-    console.log(`  Ballista  ${ballistaAddress}   block ${r.blockNumber}`);
+    console.log(`  LFX1  ${ballistaAddress}   block ${r.blockNumber}`);
   }
 
-  const ballista = await ethers.getContractAt("Ballista", ballistaAddress);
+  const ballista = await ethers.getContractAt("LFX1", ballistaAddress);
 
   // ── 3. Wire the router ───────────────────────────────────────────────
   console.log(`\n================================================================\n  STEP 3 -- router (propose / activate, timelocked)\n================================================================`);
@@ -229,7 +229,7 @@ async function main() {
     deployer: deployer.address,
     constructorArgs: [ARC_TESTNET_USDC, treasury, routerAddress],
     verifyCommand:
-      `npx hardhat verify --network ${hre.network.name} ${ballistaAddress} ` +
+      `npx hardhat verify --contract contracts/LFX1.sol:LFX1 --network ${hre.network.name} ${ballistaAddress} ` +
       `${ARC_TESTNET_USDC} ${treasury} ${routerAddress}`,
     explorer: `https://testnet.arcscan.app/address/${ballistaAddress}`,
     recordedAt: new Date().toISOString(),
@@ -241,12 +241,12 @@ async function main() {
     console.log(`  !! deployBlock unknown (resume run) -- set it by hand before relying on it.`);
   }
   console.log(`\n================================================================\n  NEXT\n================================================================`);
-  console.log(`  Ballista    ${ballistaAddress}`);
+  console.log(`  LFX1        ${ballistaAddress}`);
   console.log(`  MockRouter  ${routerAddress}  (PLACEHOLDER -- not a real DEX)`);
   console.log(`  explorer    https://testnet.arcscan.app/address/${ballistaAddress}`);
   console.log(`\n  Verify:`);
   // Third constructor arg is the initial router -- omitting it makes verification fail.
-  console.log(`    npx hardhat verify --network arcTestnet ${ballistaAddress} ${ARC_TESTNET_USDC} ${treasury} ${routerAddress}`);
+  console.log(`    npx hardhat verify --contract contracts/LFX1.sol:LFX1 --network arcTestnet ${ballistaAddress} ${ARC_TESTNET_USDC} ${treasury} ${routerAddress}`);
   console.log(`    npx hardhat verify --network arcTestnet ${routerAddress}`);
   if (deployBlock) {
     console.log(`\n  indexer/.env:`);

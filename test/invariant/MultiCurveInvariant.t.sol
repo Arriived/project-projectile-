@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import "../../contracts/Ballista.sol";
+import "../../contracts/LFX1.sol";
 import "../../contracts/mocks/MockUSDC.sol";
 import "../../contracts/mocks/MockRouter.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -15,7 +15,7 @@ import "./MultiCurveHandler.sol";
 ///         see whether token A's accounting is quietly being covered by token B's
 ///         money, which is exactly the shape a real insolvency would take.
 contract MultiCurveInvariantTest is Test {
-    Ballista factory;
+    LFX1 factory;
     MockUSDC usdc;
     MultiCurveHandler handler;
     address[] tokens;
@@ -26,7 +26,7 @@ contract MultiCurveInvariantTest is Test {
         vm.warp(1_800_000_000);
 
         usdc = new MockUSDC();
-        factory = new Ballista(address(usdc), address(this), address(0));
+        factory = new LFX1(address(usdc), address(this), address(0));
         // Router activation is timelocked now: propose, wait out ROUTER_TIMELOCK, activate.
         address routerAddr = address(new MockRouter());
         factory.proposeRouter(routerAddr);
@@ -65,9 +65,9 @@ contract MultiCurveInvariantTest is Test {
     function invariant_pooledUsdcCoversAllCurvesAndCreatorFees() public view {
         uint256 owed = factory.creatorFeesAccrued(address(this));
         for (uint256 i = 0; i < tokens.length; i++) {
-            Ballista.Curve memory c = factory.curves(tokens[i]);
+            LFX1.Curve memory c = factory.curves(tokens[i]);
             // Only a COMPLETED graduation moves a curve's reserves out to the DEX.
-            if (c.state != Ballista.CurveState.GRADUATED) {
+            if (c.state != LFX1.CurveState.GRADUATED) {
                 owed += c.realUsdcReserves;
             }
         }
@@ -81,8 +81,8 @@ contract MultiCurveInvariantTest is Test {
     /// @notice Each token's own balance must cover its own accounted reserves.
     function invariant_eachTokenBalanceCoversItsReserves() public view {
         for (uint256 i = 0; i < tokens.length; i++) {
-            Ballista.Curve memory c = factory.curves(tokens[i]);
-            if (c.state == Ballista.CurveState.GRADUATED) continue;
+            LFX1.Curve memory c = factory.curves(tokens[i]);
+            if (c.state == LFX1.CurveState.GRADUATED) continue;
             assertGe(
                 IERC20(tokens[i]).balanceOf(address(factory)),
                 c.tokenReserves,

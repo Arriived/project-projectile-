@@ -11,7 +11,7 @@ describe('Ballista — partial-fill adversarial testing', function () {
     const USDC = await ethers.getContractFactory('MockUSDC');
     const usdc = await USDC.deploy();
 
-    const Ballista = await ethers.getContractFactory('Ballista');
+    const Ballista = await ethers.getContractFactory('LFX1');
     const ballista = await Ballista.deploy(await usdc.getAddress(), treasury.address, ethers.ZeroAddress);
     const ballistaAddress = await ballista.getAddress();
 
@@ -42,7 +42,7 @@ describe('Ballista — partial-fill adversarial testing', function () {
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated');
     const tokenAddress = event.args.token;
-    const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+    const token = await ethers.getContractAt('LFX1Token', tokenAddress);
 
     const ballistaAddress = await ballista.getAddress();
     for (const signer of signersToApprove) {

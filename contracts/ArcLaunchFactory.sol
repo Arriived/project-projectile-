@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 
-import "./ArcLaunchToken.sol";
+import "./LFX1Token.sol";
 import "./interfaces/IDEXRouter.sol";
 
 /// @title ArcLaunchFactory
@@ -119,7 +119,7 @@ contract ArcLaunchFactory is Ownable, ReentrancyGuard, Pausable {
         lastLaunchTimestamp[msg.sender] = block.timestamp;
         symbolTaken[symbolHash] = true;
 
-        ArcLaunchToken newToken = new ArcLaunchToken(
+        LFX1Token newToken = new LFX1Token(
             name,
             symbol,
             TOTAL_TOKEN_SUPPLY,

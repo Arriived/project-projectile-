@@ -19,7 +19,7 @@ async function deployFixture() {
   const [owner, treasury, alice, bob] = await ethers.getSigners();
 
   const usdc = await (await ethers.getContractFactory("MockUSDC")).deploy();
-  const factory = await (await ethers.getContractFactory("Ballista")).deploy(
+  const factory = await (await ethers.getContractFactory("LFX1")).deploy(
     await usdc.getAddress(),
     treasury.address,
     ethers.ZeroAddress
@@ -75,7 +75,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
         .find((l) => l && l.name === "TokenCreated");
       const tokenAddr = event.args.token;
 
-      const token = await ethers.getContractAt("ArcLaunchToken", tokenAddr);
+      const token = await ethers.getContractAt("LFX1Token", tokenAddr);
       // 1B = 807M curve supply + 193M LP reserve, from the $8,000 curve derivation.
       expect(await token.balanceOf(await factory.getAddress())).to.equal(TOKENS(1_000_000_000));
       expect(await token.balanceOf(alice.address)).to.equal(0n);
@@ -83,7 +83,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
     });
 
     it("has no mint function reachable from outside the constructor", async function () {
-      const token = await ethers.getContractFactory("ArcLaunchToken");
+      const token = await ethers.getContractFactory("LFX1Token");
       const hasMint = token.interface.fragments.some(
         (f) => f.type === "function" && f.name === "mint"
       );
@@ -204,7 +204,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
       const { factory, alice, bob, usdc } = await deployFixture();
       await createToken(factory, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
-      const token = await ethers.getContractAt("ArcLaunchToken", tokenAddr);
+      const token = await ethers.getContractAt("LFX1Token", tokenAddr);
 
       const startBalance = await usdc.balanceOf(bob.address);
       await factory.connect(bob).buy(tokenAddr, USDC(100), 0);
@@ -288,7 +288,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
     it("refuses to launch at all while no router is configured", async function () {
       const [owner, treasury, alice] = await ethers.getSigners();
       const usdc = await (await ethers.getContractFactory("MockUSDC")).deploy();
-      const bare = await (await ethers.getContractFactory("Ballista")).deploy(
+      const bare = await (await ethers.getContractFactory("LFX1")).deploy(
         await usdc.getAddress(),
         treasury.address,
         ZERO
@@ -309,7 +309,7 @@ describe("Ballista — original ArcLaunchFactory suite", function () {
   describe("constructor validation", function () {
     it("rejects zero addresses", async function () {
       const [, treasury] = await ethers.getSigners();
-      const Factory = await ethers.getContractFactory("Ballista");
+      const Factory = await ethers.getContractFactory("LFX1");
       await expect(Factory.deploy(ZERO, treasury.address, ZERO)).to.be.reverted;
     });
   });

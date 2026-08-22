@@ -23,7 +23,7 @@ describe('Ballista — graduation gap and the dual trigger', function () {
   async function deployFixture() {
     const [deployer, treasury, creator, trader] = await ethers.getSigners();
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
-    const ballista = await (await ethers.getContractFactory('Ballista')).deploy(
+    const ballista = await (await ethers.getContractFactory('LFX1')).deploy(
       await usdc.getAddress(),
       treasury.address,
       ethers.ZeroAddress
@@ -227,7 +227,7 @@ describe('Ballista — graduation gap and the dual trigger', function () {
     it('sell() needs no depletion handling: a sell can never see a depleted ACTIVE curve', async function () {
       const { ballista, creator, trader } = await deployFixture();
       const tokenAddress = await launch(ballista, creator, 'SELL');
-      const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+      const token = await ethers.getContractAt('LFX1Token', tokenAddress);
       await token.connect(trader).approve(await ballista.getAddress(), ethers.MaxUint256);
 
       // Deplete in one buy; the same transaction graduates it.

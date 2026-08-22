@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import "../../contracts/Ballista.sol";
+import "../../contracts/LFX1.sol";
 import "../../contracts/mocks/MockUSDC.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -11,7 +11,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 ///         the "thousands of random inputs" a scanner or a human reviewer wouldn't
 ///         think to try by hand.
 contract CurveHandler {
-    Ballista public immutable factory;
+    LFX1 public immutable factory;
     MockUSDC public immutable usdc;
     address public immutable token;
 
@@ -22,7 +22,7 @@ contract CurveHandler {
     uint256 public buysExecuted;
     uint256 public sellsExecuted;
 
-    constructor(Ballista factory_, MockUSDC usdc_, address token_) {
+    constructor(LFX1 factory_, MockUSDC usdc_, address token_) {
         factory = factory_;
         usdc = usdc_;
         token = token_;

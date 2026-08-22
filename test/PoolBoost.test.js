@@ -14,7 +14,7 @@ describe('Ballista — creator fee to pool boost', function () {
   async function env() {
     const [deployer, treasury, creator, trader] = await ethers.getSigners();
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
-    const ballista = await (await ethers.getContractFactory('Ballista'))
+    const ballista = await (await ethers.getContractFactory('LFX1'))
       .deploy(await usdc.getAddress(), treasury.address, ethers.ZeroAddress);
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());
@@ -42,7 +42,7 @@ describe('Ballista — creator fee to pool boost', function () {
 
   // Churns a token to build up a boost without moving reserves far.
   async function churn(ballista, trader, t, rounds, size) {
-    const token = await ethers.getContractAt('ArcLaunchToken', t);
+    const token = await ethers.getContractAt('LFX1Token', t);
     await token.connect(trader).approve(await ballista.getAddress(), ethers.MaxUint256);
     for (let i = 0; i < rounds; i++) {
       await ballista.connect(trader).buy(t, size, 0);
@@ -96,7 +96,7 @@ describe('Ballista — creator fee to pool boost', function () {
     await ballista.connect(trader).buy(on, 1_000n * ONE, 0);
     const afterBuy = (await ballista.curves(on)).poolBoost;
 
-    const token = await ethers.getContractAt('ArcLaunchToken', on);
+    const token = await ethers.getContractAt('LFX1Token', on);
     const held = await token.balanceOf(trader.address);
     await token.connect(trader).approve(await ballista.getAddress(), held);
     const quote = await ballista.quoteSell(on, held);

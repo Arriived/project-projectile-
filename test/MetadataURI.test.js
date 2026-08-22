@@ -8,7 +8,7 @@ describe('Ballista — mutable metadata URI', function () {
   async function env() {
     const [deployer, treasury, creator, other] = await ethers.getSigners();
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
-    const ballista = await (await ethers.getContractFactory('Ballista'))
+    const ballista = await (await ethers.getContractFactory('LFX1'))
       .deploy(await usdc.getAddress(), treasury.address, ethers.ZeroAddress);
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());
@@ -31,7 +31,7 @@ describe('Ballista — mutable metadata URI', function () {
   it('the creator can update it, and the token reflects the change', async function () {
     const { ballista, creator } = await env();
     const t = await launch(ballista, creator, 'MET');
-    const token = await ethers.getContractAt('ArcLaunchToken', t);
+    const token = await ethers.getContractAt('LFX1Token', t);
     expect(await token.metadataURI()).to.equal('ipfs://original');
 
     await ballista.connect(creator).updateMetadataURI(t, 'ipfs://with-socials');
@@ -66,7 +66,7 @@ describe('Ballista — mutable metadata URI', function () {
   it('ATTACK: call the token directly, bypassing the factory and its audit event', async function () {
     const { ballista, creator } = await env();
     const t = await launch(ballista, creator, 'DIRECT');
-    const token = await ethers.getContractAt('ArcLaunchToken', t);
+    const token = await ethers.getContractAt('LFX1Token', t);
 
     // Even the creator cannot go around the factory -- that would update the URI with
     // no MetadataURIUpdated event, which is the only record of a swap.

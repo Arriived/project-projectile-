@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import "../../contracts/Ballista.sol";
+import "../../contracts/LFX1.sol";
 import "../../contracts/mocks/MockUSDC.sol";
 import "../../contracts/mocks/MockRouter.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -17,7 +17,7 @@ import "./CurveHandler.sol";
 ///         put in" question, tested by brute force across thousands of random
 ///         trade sequences instead of by hand-picked examples.
 contract CurveInvariantTest is Test {
-    Ballista factory;
+    LFX1 factory;
     MockUSDC usdc;
     address token;
     CurveHandler handler;
@@ -29,7 +29,7 @@ contract CurveInvariantTest is Test {
         // Never an issue on any real chain, where timestamps are always this large.
 
         usdc = new MockUSDC();
-        factory = new Ballista(address(usdc), address(this), address(0));
+        factory = new LFX1(address(usdc), address(this), address(0));
 
         // createToken() now refuses to launch without a router, so one is required
         // here. This also means the fuzzer drives curves through a real graduation
@@ -50,7 +50,7 @@ contract CurveInvariantTest is Test {
             factory.currentEconomicsHash()
         , false);
 
-        // Ballista opens trading only in the block AFTER creation. Without this roll,
+        // LFX1 opens trading only in the block AFTER creation. Without this roll,
         // every handler call would revert on that check, fail_on_revert = false would
         // swallow it, and both invariants would pass while testing nothing at all.
         vm.roll(block.number + 1);
@@ -63,14 +63,14 @@ contract CurveInvariantTest is Test {
     function invariant_factoryHoldsEnoughUsdcToBackItsOwnAccounting() public view {
         // curves() returns the struct itself now, rather than a flat tuple that had to
         // be re-counted by hand every time a field was added.
-        Ballista.Curve memory c = factory.curves(token);
+        LFX1.Curve memory c = factory.curves(token);
         // Accrued creator fees are a real USDC obligation sitting in the contract, and
         // unlike curve reserves they are NOT discharged by graduation -- so they are
         // counted in every state. This test contract is the creator of the only token,
         // so its accrual is the whole outstanding creator liability.
         uint256 owed = factory.creatorFeesAccrued(address(this));
         // Only a COMPLETED graduation moves the curve's own reserves out to the DEX.
-        if (c.state != Ballista.CurveState.GRADUATED) {
+        if (c.state != LFX1.CurveState.GRADUATED) {
             owed += c.realUsdcReserves;
         }
         assertGe(
@@ -81,8 +81,8 @@ contract CurveInvariantTest is Test {
     }
 
     function invariant_factoryHoldsEnoughTokenToBackItsOwnAccounting() public view {
-        Ballista.Curve memory c = factory.curves(token);
-        if (c.state == Ballista.CurveState.GRADUATED) return;
+        LFX1.Curve memory c = factory.curves(token);
+        if (c.state == LFX1.CurveState.GRADUATED) return;
         assertGe(
             IERC20(token).balanceOf(address(factory)),
             c.tokenReserves,

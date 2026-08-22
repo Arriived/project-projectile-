@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import "../../contracts/Ballista.sol";
+import "../../contracts/LFX1.sol";
 import "../../contracts/mocks/MockUSDC.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -11,7 +11,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 ///         ONE pooled USDC balance, so an accounting error on one token would be paid
 ///         for out of another token's money.
 contract MultiCurveHandler {
-    Ballista public immutable factory;
+    LFX1 public immutable factory;
     MockUSDC public immutable usdc;
     address[] public tokens;
 
@@ -24,7 +24,7 @@ contract MultiCurveHandler {
     ///         is a curve someone can round-trip for free.
     bool public priceMonotonicityViolated;
 
-    constructor(Ballista factory_, MockUSDC usdc_, address[] memory tokens_) {
+    constructor(LFX1 factory_, MockUSDC usdc_, address[] memory tokens_) {
         factory = factory_;
         usdc = usdc_;
         tokens = tokens_;
@@ -35,14 +35,14 @@ contract MultiCurveHandler {
     }
 
     function _price(address token) internal view returns (uint256) {
-        Ballista.Curve memory c = factory.curves(token);
+        LFX1.Curve memory c = factory.curves(token);
         if (c.virtualTokenReserves == 0) return 0;
         return (c.virtualUsdcReserves * 1e18) / c.virtualTokenReserves;
     }
 
     function buy(uint256 seed, uint256 amountSeed) external {
         address token = _pick(seed);
-        if (factory.curves(token).state != Ballista.CurveState.ACTIVE) return;
+        if (factory.curves(token).state != LFX1.CurveState.ACTIVE) return;
 
         // Retuned for the $8,000 curve. The old 20k ceiling was sized for a $67,000
         // threshold; here a single 20k buy clamps to full depletion and graduates the
@@ -57,7 +57,7 @@ contract MultiCurveHandler {
         try factory.buy(token, usdcIn, 0) {
             buysExecuted++;
             // A buy must never lower the marginal price.
-            if (factory.curves(token).state == Ballista.CurveState.ACTIVE) {
+            if (factory.curves(token).state == LFX1.CurveState.ACTIVE) {
                 if (_price(token) < before) priceMonotonicityViolated = true;
             }
         } catch {}
@@ -65,7 +65,7 @@ contract MultiCurveHandler {
 
     function sell(uint256 seed, uint256 pctSeed) external {
         address token = _pick(seed);
-        if (factory.curves(token).state != Ballista.CurveState.ACTIVE) return;
+        if (factory.curves(token).state != LFX1.CurveState.ACTIVE) return;
 
         uint256 balance = IERC20(token).balanceOf(address(this));
         if (balance == 0) return;

@@ -14,7 +14,7 @@ describe('Ballista — graduation state machine adversarial testing', function (
     const USDC = await ethers.getContractFactory('MockUSDC');
     const usdc = await USDC.deploy();
 
-    const Ballista = await ethers.getContractFactory('Ballista');
+    const Ballista = await ethers.getContractFactory('LFX1');
     const ballista = await Ballista.deploy(await usdc.getAddress(), treasury.address, ethers.ZeroAddress);
     const ballistaAddress = await ballista.getAddress();
 
@@ -62,7 +62,7 @@ describe('Ballista — graduation state machine adversarial testing', function (
     // ANY reason, the entire buy reverted too, including the trade itself.
     const { ballista, creator, trader, usdc } = await deployFixtureWithRouter('MockRevertingRouter');
     const tokenAddress = await launchToken(ballista, creator, 'Revert Coin', 'RVT');
-    const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+    const token = await ethers.getContractAt('LFX1Token', tokenAddress);
 
     const balanceBefore = await usdc.balanceOf(trader.address);
     const buyAmount = 68_000n * ONE_USDC; // crosses the 67k default threshold
@@ -176,7 +176,7 @@ describe('Ballista — graduation state machine adversarial testing', function (
   it('a failed attempt does not leave a stale token approval sitting on the router', async function () {
     const { ballista, creator, trader, usdc } = await deployFixtureWithRouter('MockRevertingRouter');
     const tokenAddress = await launchToken(ballista, creator, 'Approval Coin', 'APR');
-    const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+    const token = await ethers.getContractAt('LFX1Token', tokenAddress);
 
     await ballista.connect(trader).buy(tokenAddress, 68_000n * ONE_USDC, 0);
 

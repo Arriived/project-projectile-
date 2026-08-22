@@ -7,10 +7,10 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 
-import "./ArcLaunchToken.sol";
+import "./LFX1Token.sol";
 import "./interfaces/IDEXRouter.sol";
 
-contract Ballista is Ownable, ReentrancyGuard, Pausable {
+contract LFX1 is Ownable, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     uint256 public constant CURVE_TOKEN_SUPPLY = 807_000_000e18;
@@ -311,7 +311,7 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         lastLaunchTimestamp[msg.sender] = block.timestamp;
         symbolUnlocksAt[symbolHash] = block.timestamp + symbolLockDuration;
 
-        ArcLaunchToken newToken = new ArcLaunchToken(
+        LFX1Token newToken = new LFX1Token(
             name,
             symbol,
             TOTAL_TOKEN_SUPPLY,
@@ -403,8 +403,8 @@ contract Ballista is Ownable, ReentrancyGuard, Pausable {
         if (!(c.token == token)) revert UnknownToken();
         if (!(msg.sender == c.creator)) revert NotCreator();
 
-        string memory oldURI = ArcLaunchToken(token).metadataURI();
-        ArcLaunchToken(token).setMetadataURI(newURI);
+        string memory oldURI = LFX1Token(token).metadataURI();
+        LFX1Token(token).setMetadataURI(newURI);
         emit MetadataURIUpdated(token, msg.sender, oldURI, newURI);
     }
 

@@ -21,7 +21,7 @@ const SPEND = BigInt(process.env.RACE_SPEND_USDC || 2) * ONE;
 async function main() {
   if (!BALLISTA) throw new Error("set BALLISTA_ADDRESS");
   const [me] = await ethers.getSigners();
-  const ballista = await ethers.getContractAt("Ballista", BALLISTA);
+  const ballista = await ethers.getContractAt("LFX1", BALLISTA);
   const usdc = new ethers.Contract(USDC_ADDR, [
     "function balanceOf(address) view returns (uint256)",
     "function allowance(address,address) view returns (uint256)",

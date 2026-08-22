@@ -108,18 +108,28 @@ off the chain without any verification at all. See the bytecode note below.
 
 ## Current deployment (Arc Testnet)
 
+Deployed as **`LFX1`** per the naming policy — the name "Ballista" appears nowhere
+on chain, in the contract name or in any published source path.
+
 | | address |
 |---|---|
-| **Ballista** | `0x19ba1Fd374Ff18366D7C8582047d18430F2501e3` (block 58153740) |
-| MockRouter (placeholder) | `0x73aE2ae8AC7AF1D6a9B3267fd2F6f3F0A62F27B5` |
+| **LFX1** (the launchpad) | `0x7072b0f726526B616101473aB6579A8F58fee1fb` (block 58301503) |
+| MockRouter (placeholder) | `0xe3287055068C662a4f03eA3Ae6ceF032C3A32F37` |
 | USDC | `0x3600000000000000000000000000000000000000` |
 | treasury / owner | `0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb` (EOA — multisig pending) |
 
-Both exact matches on Blockscout. Explorer:
-`https://testnet.arcscan.app/address/0x19ba1Fd374Ff18366D7C8582047d18430F2501e3`
+Both exact matches on Blockscout (`is_fully_verified: true`,
+`is_partially_verified: false`, `is_changed_bytecode: false`). Explorer:
+`https://testnet.arcscan.app/address/0x7072b0f726526B616101473aB6579A8F58fee1fb`
+
+Published source paths are now `contracts/LFX1.sol`, `contracts/LFX1Token.sol` and
+`contracts/interfaces/IDEXRouter.sol` — confirmed via Blockscout's API, no brand
+string anywhere in the closure. `license_type` is still `none`; the licence
+decision is open.
 
 Superseded deployments: `0x63C4...Ec57` (original ArcLaunchFactory),
-`0x874C...1858`, `0x14faEc...0759`, `0x8a6175...44f7`.
+`0x874C...1858`, `0x14faEc...0759`, `0x8a6175...44f7`, `0x19ba1F...01e3`
+(last one under the old name).
 
 The authoritative record is `deployments/arcTestnet.json`, written by
 `scripts/deploy.js` on every deploy. The table above is a convenience copy; if the
@@ -368,13 +378,21 @@ table with a lower t=0 first. Fails loudly at `createToken`.
 
 ## Open items
 
-1. ~~**Creator block-0 buy is unreachable from a normal wallet.**~~ **RESOLVED in
-   code and tests 21 Aug; NOT yet confirmed on testnet.** The check is now
-   `block.timestamp <= creationTimestamp + creatorLaunchWindow`, replacing
-   `block.number == creationBlock`. `creatorLaunchWindow` is a settable uint32,
-   snapshotted per token, default **3 seconds**, and pinned by the economics
-   hash. The remaining step is a live smoke test with a real EOA creator buy —
-   only real Arc timing proves it.
+1. ~~**Creator block-0 buy is unreachable from a normal wallet.**~~ **RESOLVED and
+   PROVEN ON TESTNET 22 Aug.** Live smoke test, 43/43 checks:
+
+   | flow | blocks apart | seconds apart | result |
+   |---|---|---|---|
+   | sequential (wait for receipt, then buy) | +3 | **+1s** | buy succeeded |
+   | back-to-back (predicted address) | +1 | **+1s** | buy succeeded |
+
+   The sequential flow is the one that was impossible before, and the numbers show
+   exactly why: three blocks apart but only ONE second apart. A block-number check
+   had no chance; a 3-second window has 3x margin at observed timing. The check is now
+   The check is `block.timestamp <= creationTimestamp + creatorLaunchWindow`,
+   replacing `block.number == creationBlock`. `creatorLaunchWindow` is a settable
+   uint32, snapshotted per token, default **3 seconds**, pinned by the economics
+   hash.
 2. **Multisig migration.** Owner is still a single EOA. Safe is confirmed live
    on Arc Testnet. 2-of-3, keys **independently generated** — not one seed
    copied three ways. Contract uses plain `Ownable`, so `transferOwnership()` is

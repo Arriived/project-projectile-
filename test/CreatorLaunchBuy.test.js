@@ -10,7 +10,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
   async function env() {
     const [deployer, treasury, creator, sniper, other] = await ethers.getSigners();
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
-    const ballista = await (await ethers.getContractFactory('Ballista'))
+    const ballista = await (await ethers.getContractFactory('LFX1'))
       .deploy(await usdc.getAddress(), treasury.address, ethers.ZeroAddress);
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());
@@ -253,7 +253,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
       .find((l) => l && l.name === 'CreatorLaunchBuy');
     expect(evt, 'CreatorLaunchBuy must fire').to.not.be.undefined;
 
-    const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+    const token = await ethers.getContractAt('LFX1Token', tokenAddress);
     const held = await token.balanceOf(creator.address);
     expect(evt.args.tokensReceived).to.equal(held);
     // The reported bps must match the tokens actually received.
@@ -298,7 +298,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
       await cl.launchAndLoop('LOOP', 8n * ONE, 10);
       const tokenAddress = await cl.token();
 
-      const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+      const token = await ethers.getContractAt('LFX1Token', tokenAddress);
       const held = await token.balanceOf(await cl.getAddress());
       const curve = await ballista.curves(tokenAddress);
 
@@ -339,7 +339,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
       }
 
       const curve = await ballista.curves(t);
-      const token = await ethers.getContractAt('ArcLaunchToken', t);
+      const token = await ethers.getContractAt('LFX1Token', t);
       const held = await token.balanceOf(creator.address);
       const heldBps = (held * BPS) / CURVE_SUPPLY;
       console.log(`        ${landed} landed / ${reverted} reverted across 10 blocks -> ${(Number(heldBps) / 100).toFixed(3)}% of curve supply`);
@@ -360,7 +360,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
       const cap = (CURVE_SUPPLY * 250n) / BPS;
       expect(curve.creatorLaunchPurchased).to.be.lessThanOrEqual(cap);
 
-      const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+      const token = await ethers.getContractAt('LFX1Token', tokenAddress);
       expect(await token.balanceOf(creator.address)).to.equal(curve.creatorLaunchPurchased);
     });
 

@@ -11,7 +11,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
     const USDC = await ethers.getContractFactory('MockUSDC');
     const usdc = await USDC.deploy();
 
-    const Ballista = await ethers.getContractFactory('Ballista');
+    const Ballista = await ethers.getContractFactory('LFX1');
     const ballista = await Ballista.deploy(await usdc.getAddress(), treasury.address, ethers.ZeroAddress);
 
     // createToken() refuses to launch while router is unset, so the fixture has to
@@ -54,7 +54,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
 
   it('is actually named Ballista, not ArcLaunchFactory', async function () {
     const { ballista } = await deployFixture();
-    const artifact = await ethers.getContractFactory('Ballista');
+    const artifact = await ethers.getContractFactory('LFX1');
     expect(artifact).to.not.be.undefined;
   });
 
@@ -221,7 +221,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
         .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
         .find((l) => l && l.name === 'TokenCreated');
       const tokenAddress = event.args.token;
-      const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+      const token = await ethers.getContractAt('LFX1Token', tokenAddress);
 
       await ballista.connect(trader).buy(tokenAddress, 1_000n * ONE_USDC, 0);
       const tokensHeld = await token.balanceOf(trader.address);
@@ -248,7 +248,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
     async function bareDeploy() {
       const [deployer, treasury, creator] = await ethers.getSigners();
       const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
-      const ballista = await (await ethers.getContractFactory('Ballista')).deploy(
+      const ballista = await (await ethers.getContractFactory('LFX1')).deploy(
         await usdc.getAddress(),
         treasury.address,
         ethers.ZeroAddress
@@ -450,7 +450,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated');
     const tokenAddress = event.args.token;
-    const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+    const token = await ethers.getContractAt('LFX1Token', tokenAddress);
 
     await ballista.connect(trader).buy(tokenAddress, 100n * ONE_USDC, 0);
     const tokensHeld = await token.balanceOf(trader.address);

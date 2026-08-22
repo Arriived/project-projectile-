@@ -10,7 +10,7 @@ describe('Ballista — creator fee share', function () {
     const [deployer, treasury, creator, trader, other] = await ethers.getSigners();
 
     const usdc = await (await ethers.getContractFactory(usdcContractName)).deploy();
-    const ballista = await (await ethers.getContractFactory('Ballista')).deploy(
+    const ballista = await (await ethers.getContractFactory('LFX1')).deploy(
       await usdc.getAddress(),
       treasury.address,
       ethers.ZeroAddress
@@ -70,7 +70,7 @@ describe('Ballista — creator fee share', function () {
   it('applies to sells as well as buys', async function () {
     const { ballista, usdc, creator, trader, treasury } = await deployFixture();
     const tokenAddress = await launch(ballista, creator);
-    const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+    const token = await ethers.getContractAt('LFX1Token', tokenAddress);
 
     await ballista.connect(trader).buy(tokenAddress, 1_000n * ONE_USDC, 0);
     const afterBuy = await ballista.creatorFeesAccrued(creator.address);
@@ -96,7 +96,7 @@ describe('Ballista — creator fee share', function () {
     const { ballista, usdc, creator, trader, treasury } = await deployFixture();
     const ballistaAddress = await ballista.getAddress();
     const tokenAddress = await launch(ballista, creator);
-    const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+    const token = await ethers.getContractAt('LFX1Token', tokenAddress);
 
     // Deliberately awkward amounts, to make rounding dust show up if it exists.
     const amounts = [1n, 3n, 7n, 999n, 1_234_567n, 10_000_001n, 77_777_777n];
@@ -214,7 +214,7 @@ describe('Ballista — creator fee share', function () {
     it('buy side pays 90% of the fee, sell side 50%, blending to 70% at equal volume', async function () {
       const { ballista, usdc, creator, trader, treasury } = await deployFixture();
       const tokenAddress = await launch(ballista, creator);
-      const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+      const token = await ethers.getContractAt('LFX1Token', tokenAddress);
 
       // ── buy side ──
       const buyAmount = 1_000n * ONE_USDC;

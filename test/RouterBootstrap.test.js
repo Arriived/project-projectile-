@@ -10,7 +10,7 @@ describe('Ballista — constructor router bootstrap', function () {
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     const routerAddress = await router.getAddress();
-    const ballista = await (await ethers.getContractFactory('Ballista')).deploy(
+    const ballista = await (await ethers.getContractFactory('LFX1')).deploy(
       await usdc.getAddress(),
       treasury.address,
       initialRouter === 'real' ? routerAddress : ethers.ZeroAddress
@@ -36,7 +36,7 @@ describe('Ballista — constructor router bootstrap', function () {
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     const routerAddress = await router.getAddress();
-    const B = await ethers.getContractFactory('Ballista');
+    const B = await ethers.getContractFactory('LFX1');
     const ballista = await B.deploy(await usdc.getAddress(), treasury.address, routerAddress);
     const rc = await ballista.deploymentTransaction().wait();
 

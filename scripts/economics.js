@@ -31,7 +31,7 @@ const pct = (n, d) => d === 0n ? "n/a" : ((Number(n) / Number(d)) * 100).toFixed
 async function freshDeployment({ creationFee, creatorBuy, creatorSell }) {
   const [deployer, treasury, creator, trader] = await ethers.getSigners();
   const usdc = await (await ethers.getContractFactory("MockUSDC")).deploy();
-  const ballista = await (await ethers.getContractFactory("Ballista"))
+  const ballista = await (await ethers.getContractFactory("LFX1"))
     .deploy(await usdc.getAddress(), treasury.address, ethers.ZeroAddress);
   const router = await (await ethers.getContractFactory("MockRouter")).deploy();
   await activateRouter(ballista, await router.getAddress());
@@ -63,7 +63,7 @@ async function launch(ballista, creator, symbol) {
 async function simulate(env, symbol, targetVolume, buyShare) {
   const { ballista, usdc, creator, trader, treasury } = env;
   const tokenAddress = await launch(ballista, creator, symbol);
-  const token = await ethers.getContractAt("ArcLaunchToken", tokenAddress);
+  const token = await ethers.getContractAt("LFX1Token", tokenAddress);
   const ballistaAddr = await ballista.getAddress();
   await token.connect(trader).approve(ballistaAddr, ethers.MaxUint256);
 

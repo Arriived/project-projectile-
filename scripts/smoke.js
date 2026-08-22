@@ -57,7 +57,7 @@ function check(label, pass, detail = "") {
 async function main() {
   if (!BALLISTA) throw new Error("set BALLISTA_ADDRESS");
   const [me] = await ethers.getSigners();
-  const ballista = await ethers.getContractAt("Ballista", BALLISTA);
+  const ballista = await ethers.getContractAt("LFX1", BALLISTA);
   const usdc = new ethers.Contract(USDC_ADDR, [
     "function balanceOf(address) view returns (uint256)",
     "function approve(address,uint256) returns (bool)",
@@ -91,7 +91,7 @@ async function main() {
     ["Smoke Test", symbol, "ipfs://smoke", hash, false]);
   const created = parse(ballista, createRcpt, "TokenCreated")[0];
   const tokenAddress = created.args.token;
-  const token = await ethers.getContractAt("ArcLaunchToken", tokenAddress);
+  const token = await ethers.getContractAt("LFX1Token", tokenAddress);
 
   console.log(`  token ${tokenAddress}  symbol ${symbol}  block ${createRcpt.blockNumber}`);
   check("TokenCreated fired with our creator", created.args.creator === me.address);
@@ -120,9 +120,11 @@ async function main() {
     });
     check("buy evaluated at the creation block is rejected", false, "unexpectedly succeeded");
   } catch (e) {
-    const msg = e.shortMessage || e.message;
+    let name = null;
+    try { name = ballista.interface.parseError(e.data).name; } catch (_) {}
     check("buy evaluated at the creation block is rejected",
-      /trading opens next block/.test(msg), msg.slice(0, 90));
+      name === "TradingNotOpenYet",
+      name || (e.shortMessage || e.message).slice(0, 90));
   }
   const head = await ethers.provider.getBlockNumber();
   check("trading open in later blocks", head > Number(curve0.creationBlock),
@@ -136,7 +138,13 @@ async function main() {
 
   const nowBlk = await ethers.provider.getBlock("latest");
   const elapsedNow = nowBlk.timestamp - t0;
-  const taxNow = Number(await ballista.currentSnipeTaxBps(tokenAddress));
+  // Pin the call to the SAME block the timestamp came from. Reading "latest" and then
+  // issuing a separate eth_call races a 500ms chain: a whole second ticks over between
+  // the two RPCs, so the contract computes a later elapsed than the script did and the
+  // comparison fails against a contract that is behaving correctly.
+  const taxNow = Number(
+    await ballista.currentSnipeTaxBps.staticCall(tokenAddress, { blockTag: nowBlk.number })
+  );
   const expectNow = elapsedNow >= table.length ? 0 : table[elapsedNow];
   check("live tax matches the table for elapsed seconds", taxNow === expectNow,
     `t=${elapsedNow}s -> ${taxNow} bps (expected ${expectNow})`);
@@ -270,59 +278,91 @@ async function main() {
   console.log(`  state ${fin.state} (0=ACTIVE)   realUsdcReserves ${ethers.formatUnits(fin.realUsdcReserves, 6)} USDC`);
   console.log(`  tokenReserves ${ethers.formatUnits(fin.tokenReserves, 18)}   progress ${await ballista.graduationProgressBps(tokenAddress)} bps`);
 
-  // -- creator block-0 buy, on REAL Arc timing ------------------------------
-  // The one thing local tests cannot check. createToken and creatorLaunchBuy must land
-  // in the SAME block; at 500ms blocks that means firing both back to back with
-  // sequential nonces and no wait between them. The token address is predicted from the
-  // factory nonce, because it does not exist until creation is mined.
-  console.log("\nCREATOR BLOCK-0 BUY (real Arc block timing)");
-  try {
-    const n0 = await ethers.provider.getTransactionCount(me.address);
-    const factoryNonce = await ethers.provider.getTransactionCount(BALLISTA);
-    const predicted = ethers.getCreateAddress({ from: BALLISTA, nonce: factoryNonce });
-    const sym2 = "CB0" + (Date.now() % 100000);
-    const h2 = await ballista.currentEconomicsHash();
+  // -- creator launch buy, on REAL Arc timing --------------------------------
+  // The one thing local tests cannot check. The window is TIME-based now, so the buy
+  // no longer has to share the creation block -- it has to land within
+  // creatorLaunchWindow seconds. Two flows are exercised and the FIRST is the one that
+  // was impossible before: wait for the creation receipt, then buy, which is what a
+  // plain wallet or a simple frontend actually does.
+  console.log("");
+  console.log("CREATOR LAUNCH BUY (real Arc block timing)");
+  const windowSecs = await ballista.creatorLaunchWindow();
+  console.log("  creatorLaunchWindow = " + windowSecs + "s");
 
-    const createTx = await ballista.createToken("Block Zero", sym2, "ipfs://b0", h2, false,
-      { nonce: n0, gasLimit: 2000000 });
-    const buyTx = await ballista.creatorLaunchBuy(predicted, 20n * ONE_USDC, 0,
-      { nonce: n0 + 1, gasLimit: 1000000 });
+  async function creatorFlow(label, predictAddress) {
+    const sym = "CB" + (Date.now() % 1000000);
+    const h = await ballista.currentEconomicsHash();
+    let createRc, buyRc, predicted = null, tokenAddr;
+    try {
+      if (predictAddress) {
+        const n0 = await ethers.provider.getTransactionCount(me.address);
+        const fN = await ethers.provider.getTransactionCount(BALLISTA);
+        predicted = ethers.getCreateAddress({ from: BALLISTA, nonce: fN });
+        const cTx = await ballista.createToken("W", sym, "ipfs://w", h, false,
+          { nonce: n0, gasLimit: 2000000 });
+        const bTx = await ballista.creatorLaunchBuy(predicted, 20n * ONE_USDC, 0,
+          { nonce: n0 + 1, gasLimit: 1000000 });
+        createRc = await cTx.wait();
+        buyRc = await bTx.wait().catch((e) => (e && e.receipt) || null);
+      } else {
+        createRc = await send("createToken (seq)", ballista, "createToken",
+          ["W", sym, "ipfs://w", h, false]);
+        tokenAddr = parse(ballista, createRc, "TokenCreated")[0].args.token;
+        const bTx = await ballista.creatorLaunchBuy(tokenAddr, 20n * ONE_USDC, 0,
+          { gasLimit: 1000000 });
+        buyRc = await bTx.wait().catch((e) => (e && e.receipt) || null);
+      }
+    } catch (e) {
+      check(label + ": creator buy landed", false, e.shortMessage || e.message);
+      return;
+    }
+    if (predicted) {
+      const real = parse(ballista, createRc, "TokenCreated")[0].args.token;
+      check(label + ": predicted address matched", predicted.toLowerCase() === real.toLowerCase());
+    }
+    const cBlk = await ethers.provider.getBlock(createRc.blockNumber);
+    const bBlk = buyRc ? await ethers.provider.getBlock(buyRc.blockNumber) : null;
+    const dBlocks = bBlk ? buyRc.blockNumber - createRc.blockNumber : null;
+    const dSecs = bBlk ? bBlk.timestamp - cBlk.timestamp : null;
+    console.log("  " + label + ": create blk " + createRc.blockNumber +
+      " -> buy blk " + (buyRc ? buyRc.blockNumber : "n/a") +
+      "  (+" + dBlocks + " blocks, +" + dSecs + "s)");
 
-    const cRc = await createTx.wait();
-    const bRc = await buyTx.wait().catch((e) => (e && e.receipt) || null);
-
-    const realToken = parse(ballista, cRc, "TokenCreated")[0].args.token;
-    check("predicted token address matched the real one",
-      predicted.toLowerCase() === realToken.toLowerCase(), predicted);
-
-    const sameBlock = bRc && bRc.blockNumber === cRc.blockNumber;
-    console.log("  create block " + cRc.blockNumber + ", buy block " +
-      (bRc ? bRc.blockNumber : "n/a") + "  -> " +
-      (sameBlock ? "SAME BLOCK" : "different blocks"));
-
-    if (bRc && bRc.status === 1) {
-      const ev = parse(ballista, bRc, "CreatorLaunchBuy")[0];
-      check("creator block-0 buy landed on real Arc timing", !!ev);
+    const ok = buyRc && buyRc.status === 1;
+    check(label + ": creator buy SUCCEEDED on real Arc timing", !!ok,
+      ok ? "" : "buy reverted or missing");
+    if (ok) {
+      const ev = parse(ballista, buyRc, "CreatorLaunchBuy")[0];
+      check(label + ": CreatorLaunchBuy event present", !!ev);
       if (ev) {
         const pct = Number(ev.args.bpsOfCurveSupply) / 100;
-        console.log("  creator bought " + pct.toFixed(3) + "% of curve supply for " +
+        console.log("    creator bought " + pct.toFixed(3) + "% for " +
           ethers.formatUnits(ev.args.usdcSpent, 6) + " USDC");
-        check("within the 2.5% cap", ev.args.bpsOfCurveSupply <= 250n, pct + "%");
-        check("no snipe tax on the creator path",
-          parse(ballista, bRc, "SnipeTaxCollected").length === 0);
+        check(label + ": within the 2.5% cap", ev.args.bpsOfCurveSupply <= 250n, pct + "%");
+        check(label + ": no snipe tax on the creator path",
+          parse(ballista, buyRc, "SnipeTaxCollected").length === 0);
       }
-      gas.push({ label: "creatorLaunchBuy", est: 0n, gasUsed: bRc.gasUsed,
-                 cost: bRc.gasUsed * bRc.gasPrice });
-    } else {
-      check("creator block-0 buy landed in the creation block", false,
-        "buy did not share the creation block");
-      console.log("  The privileged window is ONE block. Missing it means the creator");
-      console.log("  falls back to buy() from the next block like anyone else, which is");
-      console.log("  the designed behaviour rather than a contract fault.");
+      gas.push({ label: "creatorLaunchBuy (" + label + ")", est: 0n,
+                 gasUsed: buyRc.gasUsed, cost: buyRc.gasUsed * buyRc.gasPrice });
     }
-  } catch (e) {
-    console.log("  block-0 attempt error: " + (e.shortMessage || e.message));
+    if (dSecs !== null) {
+      check(label + ": elapsed fits inside the window",
+        dSecs <= Number(windowSecs), dSecs + "s of " + windowSecs + "s");
+    }
   }
+
+  // THE REGRESSION TEST: sequential, receipt-then-buy. Impossible under the old rule.
+  await creatorFlow("sequential", false);
+  // launchCooldown is per wallet and the sequential flow launched moments ago, so the
+  // second createToken would revert on cooldown and the buy would then have no token to
+  // hit -- which looks like a window failure and is not one.
+  const cdSecs = Number(await ballista.launchCooldown());
+  if (cdSecs > 0) {
+    console.log("  waiting " + (cdSecs + 2) + "s for the launch cooldown...");
+    await new Promise((r) => setTimeout(r, (cdSecs + 2) * 1000));
+  }
+  // And the optimised flow, which used to be the only one that worked.
+  await creatorFlow("back-to-back", true);
 
   console.log(`\nGAS  (limit sent = 2x estimate)`);
   let total = 0n, totalCost = 0n;

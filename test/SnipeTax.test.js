@@ -17,7 +17,7 @@ describe('Ballista — decaying snipe tax', function () {
     const [deployer, treasury, creator, sniper, trader] = await ethers.getSigners();
 
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
-    const ballista = await (await ethers.getContractFactory('Ballista')).deploy(
+    const ballista = await (await ethers.getContractFactory('LFX1')).deploy(
       await usdc.getAddress(),
       treasury.address,
       ethers.ZeroAddress
@@ -92,7 +92,7 @@ describe('Ballista — decaying snipe tax', function () {
     const quoted = await ballista.quoteBuy(tokenAddress, spend);
     await ballista.connect(sniper).buy(tokenAddress, spend, 0);
 
-    const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+    const token = await ethers.getContractAt('LFX1Token', tokenAddress);
     const received = await token.balanceOf(sniper.address);
 
     // quoteBuy must include the tax, or a frontend preview during the window would
@@ -109,7 +109,7 @@ describe('Ballista — decaying snipe tax', function () {
 
     await atElapsed(ballista, token0, 0);
     await ballista.connect(sniper).buy(token0, 1_000n * ONE_USDC, 0);
-    const early = await (await ethers.getContractAt('ArcLaunchToken', token0)).balanceOf(
+    const early = await (await ethers.getContractAt('LFX1Token', token0)).balanceOf(
       sniper.address
     );
 
@@ -118,7 +118,7 @@ describe('Ballista — decaying snipe tax', function () {
     const token1 = await launch(ballista, creator, 'LATE');
     await atElapsed(ballista, token1, 10); // past the window
     await ballista.connect(trader).buy(token1, 1_000n * ONE_USDC, 0);
-    const late = await (await ethers.getContractAt('ArcLaunchToken', token1)).balanceOf(
+    const late = await (await ethers.getContractAt('LFX1Token', token1)).balanceOf(
       trader.address
     );
 
@@ -194,7 +194,7 @@ describe('Ballista — decaying snipe tax', function () {
     await atElapsed(ballista, tokenAddress, 10); // buy cleanly, outside the window
     await ballista.connect(trader).buy(tokenAddress, 2_000n * ONE_USDC, 0);
 
-    const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+    const token = await ethers.getContractAt('LFX1Token', tokenAddress);
     const held = await token.balanceOf(trader.address);
     await token.connect(trader).approve(await ballista.getAddress(), held);
 
@@ -247,7 +247,7 @@ describe('Ballista — decaying snipe tax', function () {
       await expect(ballista.connect(sniper).buy(tokenAddress, huge, 0)).to.not.be.reverted;
 
       // Execution matched the clamped quote exactly, at the maximum possible fee.
-      const token = await ethers.getContractAt('ArcLaunchToken', tokenAddress);
+      const token = await ethers.getContractAt('LFX1Token', tokenAddress);
       expect(await token.balanceOf(sniper.address)).to.equal(quoted.tokensOut);
     });
 
