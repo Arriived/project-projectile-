@@ -213,8 +213,21 @@ async function main() {
   const sameBallista =
     previous.ballista &&
     ethers.getAddress(previous.ballista) === ethers.getAddress(ballistaAddress);
+  // Record the commit the deployment was built from. Without it, a later HEAD whose
+  // bytecode has moved on cannot be told apart from the one actually deployed, and
+  // verifyCommand silently stops reproducing it.
+  let commit = null, commitDirty = null;
+  try {
+    commit = require("child_process").execSync("git rev-parse HEAD").toString().trim();
+    commitDirty = require("child_process")
+      .execSync("git status --porcelain").toString().trim().length > 0;
+  } catch (_) { /* not a git checkout; leave null rather than guessing */ }
+
   const deploymentRecord = {
     network: hre.network.name,
+    commit,
+    commitShort: commit ? commit.slice(0, 7) : null,
+    commitDirty,
     chainId: Number(net.chainId),
     ballista: ballistaAddress,
     deployBlock: deployBlock ?? (sameBallista ? previous.deployBlock ?? null : null),

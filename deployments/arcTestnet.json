@@ -17,5 +17,8 @@
   ],
   "verifyCommand": "npx hardhat verify --contract contracts/LFX1.sol:LFX1 --network arcTestnet 0x7072b0f726526B616101473aB6579A8F58fee1fb 0x3600000000000000000000000000000000000000 0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb 0xe3287055068C662a4f03eA3Ae6ceF032C3A32F37",
   "explorer": "https://testnet.arcscan.app/address/0x7072b0f726526B616101473aB6579A8F58fee1fb",
-  "recordedAt": "2026-08-22T12:28:50.583Z"
+  "recordedAt": "2026-08-22T12:28:50.583Z",
+  "commit": "60a3cbfb8a8ee266c4c3f846d3984b0e74241766",
+  "commitShort": "60a3cbf",
+  "provenance": "COMMIT: this deployment was built from 60a3cbf. Later commits changed the bytecode -- the ClampExceededOffer split altered the error selector table at byte 1546 -- so verifyCommand will NOT reproduce this deployment from a later HEAD. Check out the recorded commit first."
 }
