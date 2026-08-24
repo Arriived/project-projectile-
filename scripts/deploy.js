@@ -5,7 +5,7 @@ const path = require("path");
 
 // Arc Testnet USDC. Verified on-chain by scripts/preflight.js rather than taken on
 // trust: it reports name/symbol USDC with 6 decimals, and the known-good live
-// ArcLaunchFactory deployment returns this exact address from its own usdc().
+// Ballista deployment returns this exact address from its own usdc().
 // TESTNET ONLY -- Arc mainnet addresses are not published yet. A wrong quote-asset
 // address here is unrecoverable fund loss, not a revert.
 const ARC_TESTNET_USDC = "0x3600000000000000000000000000000000000000";

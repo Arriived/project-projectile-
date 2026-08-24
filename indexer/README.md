@@ -1,7 +1,7 @@
 # Arc Launch — indexer
 
 Watches `TokenCreated`, `Trade`, `GraduationReady`, and `Graduated` events from the
-deployed `Ballista` contract (formerly `ArcLaunchFactory`) and keeps the Supabase
+deployed `Ballista` contract (formerly `Ballista`) and keeps the Supabase
 `tokens`/`trades` tables in sync.
 
 ## Migrations

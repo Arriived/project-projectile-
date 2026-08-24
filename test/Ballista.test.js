@@ -4,7 +4,7 @@ const { activateRouter } = require('./routerHelper');
 
 const ONE_USDC = 1_000_000n;
 
-describe('Ballista — changes from ArcLaunchFactory', function () {
+describe('Ballista — changes since the original build', function () {
   async function deployFixture() {
     const [deployer, treasury, creator, trader] = await ethers.getSigners();
 
@@ -52,7 +52,7 @@ describe('Ballista — changes from ArcLaunchFactory', function () {
     return event.args.token;
   }
 
-  it('is actually named Ballista, not ArcLaunchFactory', async function () {
+  it('the LFX1 artifact resolves -- contracts/ keeps the neutral name', async function () {
     const { ballista } = await deployFixture();
     const artifact = await ethers.getContractFactory('LFX1');
     expect(artifact).to.not.be.undefined;

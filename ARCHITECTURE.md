@@ -1333,14 +1333,14 @@ now the only copy of it.
 
 ---
 
-## `contracts/ArcLaunchToken.sol`  —  5 blocks
+## `contracts/BallistaToken.sol`  —  5 blocks
 
-### `contract ArcLaunchToken is ERC20`
-<sub>was line 6 of contracts/ArcLaunchToken.sol</sub>
+### `contract BallistaToken is ERC20`
+<sub>was line 6 of contracts/BallistaToken.sol</sub>
 
 ```solidity
-/// @title ArcLaunchToken
-/// @notice Fixed-supply ERC20 deployed by ArcLaunchFactory for each new token launch.
+/// @title BallistaToken
+/// @notice Fixed-supply ERC20 deployed by Ballista for each new token launch.
 /// @dev Entire supply is minted ONCE, in the constructor, to the factory. There is no
 ///      mint() function anywhere in this contract — this is deliberate. A mintable
 ///      post-launch token is the single most common rug-pull vector (creator quietly
@@ -1350,7 +1350,7 @@ now the only copy of it.
 ```
 
 ### `string public metadataURI;`
-<sub>was line 15 of contracts/ArcLaunchToken.sol</sub>
+<sub>was line 15 of contracts/BallistaToken.sol</sub>
 
 ```solidity
     /// @notice Off-chain metadata pointer (e.g. IPFS/Arweave URI) holding image, description,
@@ -1359,7 +1359,7 @@ now the only copy of it.
 ```
 
 ### `address public immutable creator;`
-<sub>was line 20 of contracts/ArcLaunchToken.sol</sub>
+<sub>was line 20 of contracts/BallistaToken.sol</sub>
 
 ```solidity
     /// @notice The wallet that requested this token's creation. Recorded on-chain (not just
@@ -1369,7 +1369,7 @@ now the only copy of it.
 ```
 
 ### `address public immutable factory;`
-<sub>was line 26 of contracts/ArcLaunchToken.sol</sub>
+<sub>was line 26 of contracts/BallistaToken.sol</sub>
 
 ```solidity
     /// @notice The Ballista factory that deployed this token.
@@ -1380,7 +1380,7 @@ now the only copy of it.
 ```
 
 ### `function setMetadataURI(string calldata newURI) external`
-<sub>was line 47 of contracts/ArcLaunchToken.sol</sub>
+<sub>was line 47 of contracts/BallistaToken.sol</sub>
 
 ```solidity
     /// @notice Replaces the off-chain metadata pointer. Factory-only; the factory
@@ -1610,7 +1610,7 @@ now the only copy of it.
 ```solidity
 /// @notice Simulates a router that "succeeds" (doesn't revert) but returns zero
 ///         liquidity — the exact case the `require(liquidity > 0)` check in
-///         ArcLaunchFactory._graduate is there to catch.
+///         Ballista._graduate is there to catch.
 ```
 
 ### `contract MockRevertingRouter is IDEXRouter`

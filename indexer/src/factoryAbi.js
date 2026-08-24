@@ -1,4 +1,4 @@
-// Hand-picked subset of Ballista's ABI (the contract formerly named ArcLaunchFactory).
+// Hand-picked subset of Ballista's ABI (the contract formerly named Ballista).
 // Kept minimal and independent of the contracts project's build output so this indexer
 // doesn't silently break if that build folder is regenerated or restructured — if the
 // real contract's interface changes, update this file deliberately.

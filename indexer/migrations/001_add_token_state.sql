@@ -2,7 +2,7 @@
 --
 -- Adds a three-valued `state` column to `tokens`.
 --
--- Why: Ballista replaced ArcLaunchFactory's `graduated` bool with a three-state
+-- Why: Ballista replaced Ballista's `graduated` bool with a three-state
 -- enum (ACTIVE / GRADUATION_READY / GRADUATED). A boolean cannot express the
 -- middle state, so a token that has finished its bonding curve and is waiting on
 -- the DEX hand-off currently displays exactly like one that is still trading.

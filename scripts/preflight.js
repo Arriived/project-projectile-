@@ -3,7 +3,7 @@
 const hre = require("hardhat");
 const { ethers } = hre;
 
-// The address the existing ArcLaunchFactory deployment used. Verified below rather
+// The address the existing Ballista deployment used. Verified below rather
 // than trusted: a wrong quote-asset address is unrecoverable fund loss, not a revert.
 const EXPECTED_USDC = "0x3600000000000000000000000000000000000000";
 
@@ -58,7 +58,7 @@ async function main() {
     throw new Error(`decimals is ${decimals}, expected 6 -- every amount in Ballista assumes 6dp`);
   }
 
-  // Cross-check: whatever the LIVE ArcLaunchFactory is actually pointed at is the
+  // Cross-check: whatever the LIVE Ballista is actually pointed at is the
   // strongest available confirmation, since that deployment is known-good.
   const liveCode = await ethers.provider.getCode(LIVE_FACTORY);
   if (liveCode !== "0x") {

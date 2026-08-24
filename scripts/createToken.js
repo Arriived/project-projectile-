@@ -25,7 +25,7 @@ async function main() {
   }
 
   const [signer] = await hre.ethers.getSigners();
-  const factory = await hre.ethers.getContractAt("ArcLaunchFactory", FACTORY_ADDRESS, signer);
+  const factory = await hre.ethers.getContractAt("LFX1", FACTORY_ADDRESS, signer);
   const usdc = new hre.ethers.Contract(ARC_TESTNET_USDC, ERC20_MIN_ABI, signer);
 
   console.log(`Calling createToken from: ${signer.address}`);

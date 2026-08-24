@@ -12,7 +12,7 @@ const GRADUATED = 2n;
 
 // Originally this suite loaded hand-built bytecode out of artifacts-manual/ via a
 // local loadArtifact() helper. That directory is a frozen snapshot, so the suite
-// silently kept testing July's ArcLaunchFactory no matter what contracts/ said.
+// silently kept testing July's build no matter what contracts/ said.
 // Everything now goes through hardhat's own compiled output, which is what makes
 // these tests actually exercise Ballista.sol.
 async function deployFixture() {
@@ -57,7 +57,7 @@ async function createToken(factory, creator, name, symbol, uri = "uri") {
     .createToken(name, symbol, uri, await factory.currentEconomicsHash(), false);
 }
 
-describe("Ballista — original ArcLaunchFactory suite", function () {
+describe("Ballista — the original pre-rename suite", function () {
   describe("createToken", function () {
     it("mints the full fixed supply to the factory, not the creator", async function () {
       const { factory, alice } = await deployFixture();

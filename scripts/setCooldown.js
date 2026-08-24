@@ -10,7 +10,7 @@ async function main() {
   }
 
   const [signer] = await hre.ethers.getSigners();
-  const factory = await hre.ethers.getContractAt("ArcLaunchFactory", FACTORY_ADDRESS, signer);
+  const factory = await hre.ethers.getContractAt("LFX1", FACTORY_ADDRESS, signer);
 
   const current = await factory.launchCooldown();
   console.log(`Current cooldown: ${current} seconds`);

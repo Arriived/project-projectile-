@@ -11,6 +11,24 @@ on Arc and several have already damaged their reputations (a phishing "bridge"
 site took real funds before mainnet even opened). Ours is the one with a
 deployed, verified, adversarially-tested contract anyone can read.
 
+**⚠ THE REPO IS "Ballista"; `contracts/` IS DELIBERATELY NOT.** Everything outside
+`contracts/` — docs, tests, scripts, the indexer — says Ballista. Everything inside
+`contracts/` keeps the neutral `LFX1` / `LFX1Token` naming, **filenames included**, and
+so do the `getContractFactory('LFX1')` strings that tests and scripts use to reach
+them. This is not an oversight and it is not half-finished work.
+
+The reason: Blockscout publishes the SOURCE PATH, not just the contract name. The live
+verified deployment currently serves `contracts/LFX1.sol` and `contracts/LFX1Token.sol`
+to anyone browsing the explorer. Renaming those files would publish the brand to every
+competitor scanning ArcScan, which is the entire thing the neutral naming exists to
+prevent. Renaming only the *contract* and not the file achieves nothing for the same
+reason. **Do not "finish" this rename.** The switch happens at mainnet, on instruction.
+
+**Repo location: `C:\dev\arc-launch`, pushed to a private GitHub remote.** It was moved
+off OneDrive on 24 Aug after OneDrive corrupted 29 of 54 mutation-test results into
+phantom compile failures and failed a git ref write outright in one session — it
+falsified audit data and nearly ate a commit. Do not move it back.
+
 **How to read this file: it is a starting point to verify, not ground truth.**
 It is written by the same assistant that writes the code, from sessions that have
 since ended, and it goes stale the moment a constant, address or table changes.
@@ -53,7 +71,7 @@ at mainnet, on instruction only.
 
 **The source FILENAME leaks too — renaming only the contract is not enough.**
 Verified on the live deployment: Blockscout's API publishes
-`file_path: contracts/Ballista.sol`, plus `contracts/ArcLaunchToken.sol` and
+`file_path: contracts/Ballista.sol`, plus `contracts/BallistaToken.sol` and
 `contracts/interfaces/IDEXRouter.sol` in `additional_sources`. Hardhat is happy
 to compile contract `LFX1` inside `Ballista.sol`, so the two *can* diverge — it
 just achieves nothing, because the path is published verbatim on the explorer.
@@ -144,7 +162,7 @@ Published source paths are now `contracts/LFX1.sol`, `contracts/LFX1Token.sol` a
 string anywhere in the closure. `license_type` is still `none`; the licence
 decision is open.
 
-Superseded deployments: `0x63C4...Ec57` (original ArcLaunchFactory),
+Superseded deployments: `0x63C4...Ec57` (original Ballista),
 `0x874C...1858`, `0x14faEc...0759`, `0x8a6175...44f7`, `0x19ba1F...01e3`
 (last one under the old name).
 
@@ -481,12 +499,12 @@ inverts the pool price.
   failure legible without a lookup table.
   - **Comments are not compiled; stripping them frees zero.** Revert strings are,
     and they are readable straight off the chain with no verification at all.
-  - **`ArcLaunchToken` counts against Ballista's limit.** `new ArcLaunchToken(...)`
+  - **`BallistaToken` counts against Ballista's limit.** `new BallistaToken(...)`
     embeds its **4,077-byte creation bytecode** into Ballista — ~18% of the
     contract, and the single largest block in it. It is not "a separate small
     contract"; if headroom ever gets tight again this is where the leverage is,
     though most of those 4KB are OpenZeppelin ERC20 rather than anything ours.
-  - Still unconverted, deliberately: `ArcLaunchToken` (1 string, ~100 bytes) and
+  - Still unconverted, deliberately: `BallistaToken` (1 string, ~100 bytes) and
     the mocks (not deployed). Churn is risk and the margin no longer needs them.
 - **Arc RPC requires `batchMaxCount: 1`** in every **raw ethers.js** provider
   config (the indexer, the frontend). Hardhat's own provider doesn't route
