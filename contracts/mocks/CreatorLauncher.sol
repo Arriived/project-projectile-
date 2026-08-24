@@ -10,6 +10,7 @@ interface IBallistaLaunch {
         external returns (address);
     function currentEconomicsHash() external view returns (bytes32);
     function creatorLaunchBuy(address token, uint256 usdcIn, uint256 minTokensOut) external;
+    function sell(address token, uint256 tokensIn, uint256 minUsdcOut) external;
 }
 
 contract CreatorLauncher {
@@ -36,5 +37,21 @@ contract CreatorLauncher {
             try ballista.creatorLaunchBuy(token, usdcEach, 0) {} catch {}
         }
         return token;
+    }
+
+    function launchBuyApproveAndDump(string calldata symbol, uint256 usdcIn)
+        external
+        returns (bool sellReverted, bytes memory err)
+    {
+        token = ballista.createToken("Dump", symbol, "ipfs://x", ballista.currentEconomicsHash(), false);
+        ballista.creatorLaunchBuy(token, usdcIn, 0);
+        uint256 held = IERC20(token).balanceOf(address(this));
+        IERC20(token).approve(address(ballista), held);
+        try ballista.sell(token, held, 0) {
+            sellReverted = false;
+        } catch (bytes memory reason) {
+            sellReverted = true;
+            err = reason;
+        }
     }
 }
