@@ -1,145 +1,128 @@
-# Arc Launch — contracts (testnet build)
+# Ballista
 
-Compiles clean against Solidity 0.8.24 with OpenZeppelin 5.1, and now has a real test
-suite (19 tests, all passing) exercising actual contract execution, not just compilation.
-Not deployed anywhere yet, not audited by a third party, no real funds should touch this.
+A memecoin launchpad native to [Arc](https://docs.arc.io), Circle's stablecoin L1 where
+USDC is the native gas token. Tokens launch on a bonding curve and graduate to a DEX
+pool once the curve fills.
 
-## Security pass — what was found and fixed
+The contract is deployed and verified on Arc Testnet under the neutral name **`LFX1`**.
+That is deliberate — see [Naming](#naming).
 
-A close re-read of the original draft surfaced six real issues, fixed before this was
-tested further:
+---
 
-1. **Rounding leaked value to traders on every single trade.** The constant-product math
-rounded in the trader's favor instead of the protocol's — meaning the curve was
-quietly bleeding a tiny amount of value on every buy and sell, forever. Fixed by
-rounding the intermediate virtual-reserve calculation up (ceiling division) instead
-of down, the same direction production AMMs like Uniswap use and for the same reason.
-2. **Global fee/threshold changes retroactively hit every live token.** `buy()`/`sell()`
-read fee and graduation-threshold values live from storage, so changing the default
-fee instantly changed the deal for tokens that had already launched under a different
-one. Fixed by snapshotting fee and threshold into each token's own curve state at
-creation — a token now trades under the terms it launched with, permanently, no
-matter what the global defaults change to later. Covered by a dedicated test.
-3. **Graduation could silently "succeed" with zero liquidity.** If the DEX router
-returned without reverting but handed back zero LP liquidity, the contract would mark
-the token graduated and move on as if nothing was wrong. Added a `require(liquidity > 0)` check — verified with a mock router built specifically to return zero.
-4. **Checks-effects-interactions ordering was loose.** `buy()`/`sell()` fired external
-token transfers before finalizing internal state. The `nonReentrant` guard already
-blocked exploitation of this given the token set involved (standard ERC20s, no
-transfer hooks), but it's fixed properly now regardless — all state changes happen
-before any external call, which is the correct pattern independent of what tokens
-happen to be in play today.
-5. **Case-sensitive symbol matching was trivially bypassable.** "CAT" and "cat" hashed
-differently, so the on-chain uniqueness check could be dodged with a single
-capitalization change. Symbols are now uppercased before hashing.
-6. **No emergency stop.** Added `pause()`/`unpause()`, gated to the owner (multisig,
-before real funds are at stake), covering `createToken`, `buy`, and `sell`. Existing
-balances are untouched by a pause — it only blocks new actions.
+## Status
 
-None of this replaces a real third-party audit before mainnet. It does mean what ships
-to an auditor is meaningfully tighter than a first draft.
+| | |
+|---|---|
+| Solidity | 0.8.24, optimizer on, 200 runs |
+| Tests | 207 Hardhat, 6 Foundry (5 invariants + reachability) |
+| Bytecode | 22,888 / 24,576 bytes (1,688 free) |
+| Network | Arc Testnet, chainId 5042002 |
+| Audit | **None.** No third-party audit has been done. |
 
-## Running the tests
+---
+
+## Curve parameters
+
+These six values are one derivation, not six independent knobs — changing any in
+isolation breaks the graduation gap and the price multiple.
 
 ```
-npx hardhat test
+INITIAL_VIRTUAL_USDC_RESERVES   2_667e6
+INITIAL_VIRTUAL_TOKEN_RESERVES  1_075_000_000e18
+CURVE_TOKEN_SUPPLY                807_000_000e18
+LP_TOKEN_RESERVE                  193_000_000e18
+TOTAL_TOKEN_SUPPLY              1_000_000_000e18
+graduation threshold                    8_000e6   (8,000 USDC)
 ```
 
-56 tests currently pass across four files: the original suite (19, now run against
-Ballista rather than Ballista), Ballista.test.js (18), the partial-fill
-adversarial suite (10), and the graduation state-machine adversarial suite (9).
+Measured on these constants: depletion ceiling **$8,030.85**, graduation gap **+4.16%**,
+launch-to-graduation multiple **16.05x**, graduation market cap ~**$39,687**.
 
-An earlier version of this project compiled with the `solc` npm package directly and
-loaded the resulting bytecode from `artifacts-manual/`, because network sandboxing
-blocked Hardhat's compiler downloader. That path has been removed. It was a real
-hazard, not just clutter: the frozen artifacts meant the test suite kept exercising a
-months-old build no matter what `contracts/` actually said, and the breakage went
-unnoticed for weeks. Use Hardhat's own compile step.
+Graduation fires on either arm of a dual trigger — `realUsdcReserves >= threshold` **or**
+`tokenReserves == 0`. The state machine is `ACTIVE → GRADUATION_READY → GRADUATED`,
+one-way. `graduate()` is permissionless and retryable, so no backend of ours can block a
+token reaching the DEX.
 
-The Foundry invariant tests under `test/invariant/` are a separate runner:
+## Fees
 
+- **1%** on buys and sells, snapshotted per token at creation.
+- Creator share: **90%** of the buy-side fee, **50%** of the sell-side — blending to
+  **70%** at an even mix.
+- Creation fee: **0.5 USDC**.
+- All fees **accrue and are claimed**. Nothing is pushed to a payee inside a trade, so a
+  payee that cannot receive USDC can never break trading or launching.
+- A decaying snipe tax applies to buys for the first seven seconds of a token's life:
+  `[9800, 9500, 9000, 8000, 6000, 4000, 2000, 0]` bps by elapsed second. Tables are
+  immutable per version; each token snapshots the version it launched under.
+
+---
+
+## Build and test
+
+```bash
+npm install
+git submodule update --init      # forge-std, for the Foundry suite
+npx hardhat compile
+npx hardhat test                 # 207 passing
+forge test                       # 6 passing
 ```
-forge test
+
+Guard coverage — disables each revert guard in turn and reports whether any test notices:
+
+```bash
+python scripts/guard-coverage.py
 ```
 
-## What's here
+Copy `.env.example` to `.env` and fill it in before running anything against a network.
+Use a wallet created for this purpose; never one holding real funds.
 
-* **`contracts/BallistaToken.sol`** — the ERC20 deployed per launch. Fixed supply,
-minted once in the constructor, no `mint()` function exists in the contract at all.
-Records the creator's address on-chain so launch history is queryable directly from
-the chain, not from a backend you control (and could quietly edit).
-* **`contracts/Ballista.sol`** — everything else: token creation, the bonding
-curve (buy/sell), graduation to a DEX, fees, the anti-spam guards, and the pause switch.
-* **`contracts/interfaces/IDEXRouter.sol`** — minimal interface for the graduation step.
-No DEX has been publicly confirmed as an Arc launch partner yet — `router` is unset
-until you call `setRouter()` with a real, verified address.
-* **`contracts/mocks/`** — `MockUSDC` (mintable test stand-in), `MockRouter` (simulates
-a working DEX router), `MockBrokenRouter` (simulates one that fails silently) — test
-infrastructure only, never deploy these anywhere real.
-* **`test/Ballista.test.js`** — 19 tests running against actual contract
-execution on a local EVM, not just a compile check.
+---
 
-## The two features this build has that a vanilla clone wouldn't
+## Deployed
 
-1. **Per-wallet launch cooldown + on-chain symbol uniqueness.** This is a direct
-response to what actually killed Noxa.fi on Robinhood Chain — not a hypothetical
-risk, a thing that already happened: 60,000+ launches in \~10 days, bot spam and
-copycat tokens flooding faster than moderation could keep up. `launchCooldown`
-(default 1 hour) and the on-chain `symbolTaken` mapping block the cheapest version
-of that. Note: this only stops *exact* symbol reuse and *rate*, not fuzzy near-copies
-("CASHCAT" vs "CASHCATT") — that detection belongs in your off-chain indexer feeding
-the discovery UI, where string-similarity checks are actually practical.
-2. **LP burned at graduation, by the contract, automatically.** Not a team promise to
-lock liquidity "soon" — by the time `\\\\\\\_graduate()` finishes, the LP tokens are at
-`0x000...dEaD` and there is no function anywhere in this contract that can move them
-back out. Anyone can verify this by reading the code instead of trusting an announcement.
+Arc Testnet. Both exact-match verified on Blockscout.
 
-## Parameters you need to actually decide (currently illustrative placeholders)
+| | address |
+|---|---|
+| **LFX1** | `0x7072b0f726526B616101473aB6579A8F58fee1fb` (block 58301503) |
+| MockRouter (**placeholder, not a real DEX**) | `0xe3287055068C662a4f03eA3Ae6ceF032C3A32F37` |
+| USDC | `0x3600000000000000000000000000000000000000` |
 
-|Constant|Current value|Notes|
-|-|-|-|
-|`CURVE\\\\\\\_TOKEN\\\\\\\_SUPPLY` / `LP\\\\\\\_TOKEN\\\\\\\_RESERVE`|800M / 200M|80/20 split sold-via-curve vs. reserved-for-DEX|
-|`INITIAL\\\\\\\_VIRTUAL\\\\\\\_TOKEN\\\\\\\_RESERVES` / `INITIAL\\\\\\\_VIRTUAL\\\\\\\_USDC\\\\\\\_RESERVES`|1.073B / 30,000 USDC|Loosely modeled on Pump.fun's publicly documented curve shape, translated to USDC — not verified against any Arc-specific decision|
-|`graduationThresholdUsdc`|69,000 USDC|Owner-adjustable via `setGraduationThreshold`|
-|`buyFeeBps` / `sellFeeBps`|1% / 1%, hard-capped at 10% (`MAX\\\\\\\_FEE\\\\\\\_BPS`)|Owner can't raise fees above the cap even if compromised|
-|`creationFeeUsdc`|5 USDC|Your primary anti-spam economic lever alongside the cooldown|
+Explorer: https://testnet.arcscan.app/address/0x7072b0f726526B616101473aB6579A8F58fee1fb
 
-None of these are "correct" — they're a reasonable starting point to argue with, not a
-spec. Assumes USDC uses 6 decimals, matching standard USDC across chains.
+`deployments/arcTestnet.json` is the authoritative record, written by `scripts/deploy.js`
+on every deploy. It records the commit the deployment was built from — the live
+deployment predates later commits, so verifying from `HEAD` will not reproduce it.
 
-## What's deliberately NOT in this build yet
+---
 
-* **No third-party audit.** The self-review above catches real issues, but it is not a
-substitute for one. Get a real audit before this touches a mainnet with real USDC,
-full stop.
-* **No confirmed router.** `setRouter()` is a no-op placeholder until an Arc DEX is
-actually live and verified.
-* **No fuzzy-match anti-copycat, no off-chain indexer, no discovery feed, no reputation
-scoring layer.** This is the trading engine only — Launch Health Score and the
-discovery UI are separate pieces we haven't built yet.
-* **Owner is a single address right now.** `pause()`, `setRouter()`, `setDefaultFees()`,
-and `setTreasury()` are all owner-gated — before any real money is at stake, `owner`
-needs to be transferred to a multisig, not left on a single EOA.
-* **No deployment scripts yet.** Contracts are proven on a local test EVM; actually
-deploying to Arc testnet (with real testnet USDC from `faucet.circle.com`) is the
-next concrete step.
+## Naming
 
-## Deploying to Arc testnet
+Everything outside `contracts/` says Ballista. Everything inside `contracts/` keeps the
+neutral `LFX1` / `LFX1Token` naming, **filenames included**, and so do the
+`getContractFactory('LFX1')` strings that tests and scripts use to reach them.
 
-1. Get testnet USDC from Circle's official faucet: `https://faucet.circle.com`
-2. Point your deploy script (Foundry/Hardhat — not included here, ask if you want one
-scaffolded) at the Arc testnet RPC.
-3. Deploy `Ballista` with `usdc\\\\\\\_` = the testnet USDC token address and
-`treasury\\\\\\\_` = your treasury wallet.
-4. Leave `router` unset until a real DEX is confirmed — `createToken()` and trading
-both work fine pre-graduation without it; only `\\\\\\\_graduate()` needs it, and it will
-revert safely (not silently) if called before `setRouter()`.
+This is not half-finished work. Blockscout publishes the source *path*, not just the
+contract name, so the verified deployment serves `contracts/LFX1.sol` to anyone browsing
+the explorer. Renaming those files would publish the brand to every competitor scanning
+ArcScan; renaming only the contract and not the file achieves nothing for the same
+reason. The switch happens at mainnet.
 
-## Honest caveat
+## Layout
 
-This gets you a working, testable curve on testnet. It does not manufacture retail
-demand on Arc, and testnet activity doesn't carry over to mainnet as any kind of
-reserved "position" — mainnet is a fresh deployment, fresh state, fresh users. What
-building this now actually buys you: contracts that are debugged and ready to redeploy
-the moment a real mainnet date drops, instead of starting from a blank file at T+0.
+- `contracts/LFX1.sol` — token creation, the bonding curve, graduation, fees, the snipe
+  tax, and the admin surface.
+- `contracts/LFX1Token.sol` — the fixed-supply ERC20 minted once per launch. It has no
+  `mint` function.
+- `contracts/interfaces/IDEXRouter.sol` — the graduation interface.
+- `contracts/mocks/` — test infrastructure only. Never deploy these.
+- `test/` — Hardhat suites; Foundry invariants under `test/invariant/`.
+- `scripts/` — deploy, preflight, smoke test, guard coverage.
+- `indexer/` — event indexer writing into Supabase.
+- `ARCHITECTURE.md` — the reasoning behind the code, kept out of the deployed source.
 
+## Licence
+
+**BUSL-1.1.** Source-available; commercial use restricted until the Change Date of
+**2030-09-16**, when it converts to **GPL-2.0-or-later**. See [`LICENSE`](LICENSE).
+OpenZeppelin's sources remain MIT and are unaffected.
