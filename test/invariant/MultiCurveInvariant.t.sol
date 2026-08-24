@@ -116,6 +116,60 @@ contract MultiCurveInvariantTest is Test {
     ///         successful sell -- asserting it there fails on sequencing luck rather
     ///         than on a real defect. This proves the path is reachable deterministically
     ///         instead, so "sells never execute" still cannot pass unnoticed.
+    /// The drained-on-graduation property, as a DETERMINISTIC test rather than an
+    /// invariant. As an invariant it was vacuous: the handler caps buys at ~250 USDC to
+    /// keep curves alive, so nothing ever reaches the 8,000 threshold and the assertion
+    /// never ran -- commenting out `c.realUsdcReserves = 0` in _performGraduation left
+    /// it passing. Raising the handler's cap would have graduated every curve on the
+    /// fuzzer's first call and hollowed out the solvency invariants instead, which is
+    /// the trade the handler comment already warns about. Forcing the state here proves
+    /// the property without touching the fuzz.
+    function test_graduatedCurveIsFullyDrained() public {
+        usdc.mint(address(this), 1_000_000e6);
+        usdc.approve(address(factory), type(uint256).max);
+        vm.roll(block.number + 1);
+        // Past the snipe window, so the spend actually reaches the curve.
+        vm.warp(block.timestamp + 30);
+
+        // BOTH graduation arms, because they drain differently. A depleting buy leaves
+        // tokenReserves already at zero, so `c.tokenReserves = 0` is redundant on that
+        // path -- an earlier version of this test used only a depleting buy and passed
+        // happily with that assignment commented out.
+        //
+        // Threshold arm: cross 8,000 USDC with tokens still on the curve.
+        address viaThreshold = tokens[0];
+        factory.buy(viaThreshold, 8_100e6, 0);
+        LFX1.Curve memory c = factory.curves(viaThreshold);
+        assertTrue(c.state == LFX1.CurveState.GRADUATED, "threshold arm did not graduate");
+        assertEq(c.realUsdcReserves, 0, "threshold-graduated curve still holds USDC");
+        assertEq(c.tokenReserves, 0, "threshold-graduated curve still holds tokens");
+        assertEq(c.poolBoost, 0, "threshold-graduated curve still holds pool boost");
+
+        // Depletion arm: a buy far larger than the curve can fill.
+        address viaDepletion = tokens[1];
+        factory.buy(viaDepletion, 400_000e6, 0);
+        c = factory.curves(viaDepletion);
+        assertTrue(c.state == LFX1.CurveState.GRADUATED, "depletion arm did not graduate");
+        assertEq(c.realUsdcReserves, 0, "depletion-graduated curve still holds USDC");
+        assertEq(c.tokenReserves, 0, "depletion-graduated curve still holds tokens");
+
+        // A POOL-BOOST-ENABLED token, because every token above has boost off, which
+        // leaves poolBoost at zero anyway and makes `c.poolBoost = 0` redundant. Without
+        // this arm, commenting that assignment out still passed.
+        factory.setLaunchCooldown(0);
+        address boosted = factory.createToken(
+            "Boosted", "BOOST", "ipfs://b", factory.currentEconomicsHash(), true
+        );
+        vm.roll(block.number + 1);
+        vm.warp(block.timestamp + 30);
+        factory.buy(boosted, 4_000e6, 0);
+        assertGt(factory.curves(boosted).poolBoost, 0, "setup failed: no boost accrued");
+        factory.buy(boosted, 8_100e6, 0);
+        c = factory.curves(boosted);
+        assertTrue(c.state == LFX1.CurveState.GRADUATED, "boosted token did not graduate");
+        assertEq(c.poolBoost, 0, "graduated curve still holds pool boost");
+    }
+
     function test_sellPathIsReachable() public {
         handler.buy(0, 100e6);
         assertGt(handler.buysExecuted(), 0, "handler buy path is broken");

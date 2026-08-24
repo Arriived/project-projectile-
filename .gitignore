@@ -8,3 +8,7 @@ cache/
 .DS_Store
 Thumbs.db
 out/
+
+# Static-analysis output (regenerate with scripts, do not commit)
+slither.json
+slither.err

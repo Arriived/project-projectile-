@@ -88,5 +88,11 @@ contract MultiCurveHandler {
         try factory.claimCreatorFees() { claimsExecuted++; } catch {}
     }
 
+    // Treasury fees accrue rather than being pushed, so the claim path is now part of
+    // the state machine and has to be driven or the accrual only ever grows.
+    function claimTreasury() external {
+        try factory.claimTreasuryFees() {} catch {}
+    }
+
     function tokenCount() external view returns (uint256) { return tokens.length; }
 }

@@ -14,6 +14,9 @@ interface IBallista {
     function createToken(string calldata, string calldata, string calldata, bytes32, bool)
         external returns (address);
     function currentEconomicsHash() external view returns (bytes32);
+    function claimTreasuryFees() external returns (uint256);
+    function creatorLaunchBuy(address token, uint256 usdcIn, uint256 minTokensOut) external;
+    function updateMetadataURI(address token, string calldata newURI) external;
 }
 
 contract MaliciousRouter is IDEXRouter {
@@ -42,8 +45,19 @@ contract MaliciousRouter is IDEXRouter {
 contract ReentrantRouter is IDEXRouter {
     IBallista public immutable ballista;
     address public token;
-    string public lastFailure;
     bool public reenterAttempted;
+
+    // One flag per external function, recorded individually rather than concatenated
+    // into a string, so a test can assert each pair separately. TRUE means the reentrant
+    // call SUCCEEDED, which is the failure condition.
+    bool public buyReentered;
+    bool public sellReentered;
+    bool public graduateReentered;
+    bool public claimCreatorReentered;
+    bool public claimTreasuryReentered;
+    bool public createTokenReentered;
+    bool public creatorLaunchBuyReentered;
+    bool public updateMetadataReentered;
 
     constructor(address ballista_) { ballista = IBallista(ballista_); }
     function setToken(address t) external { token = t; }
@@ -53,14 +67,20 @@ contract ReentrantRouter is IDEXRouter {
     ) external returns (uint256, uint256, uint256) {
         reenterAttempted = true;
 
-        try ballista.buy(token, 1e6, 0) { lastFailure = "BUY REENTERED"; }
-        catch { lastFailure = "buy blocked"; }
-        try ballista.sell(token, 1e18, 0) { lastFailure = "SELL REENTERED"; }
-        catch { lastFailure = string.concat(lastFailure, " | sell blocked"); }
-        try ballista.graduate(token) { lastFailure = string.concat(lastFailure, " | GRADUATE REENTERED"); }
-        catch { lastFailure = string.concat(lastFailure, " | graduate blocked"); }
-        try ballista.claimCreatorFees() { lastFailure = string.concat(lastFailure, " | CLAIM REENTERED"); }
-        catch { lastFailure = string.concat(lastFailure, " | claim blocked"); }
+        try ballista.buy(token, 1e6, 0) { buyReentered = true; } catch {}
+        try ballista.sell(token, 1e18, 0) { sellReentered = true; } catch {}
+        try ballista.graduate(token) { graduateReentered = true; } catch {}
+        try ballista.claimCreatorFees() { claimCreatorReentered = true; } catch {}
+        try ballista.claimTreasuryFees() { claimTreasuryReentered = true; } catch {}
+        try ballista.creatorLaunchBuy(token, 1e6, 0) { creatorLaunchBuyReentered = true; } catch {}
+        try ballista.createToken("R", "REENT", "u", ballista.currentEconomicsHash(), false) {
+            createTokenReentered = true;
+        } catch {}
+        // updateMetadataURI carries NO reentrancy guard. It is creator-gated, so this
+        // router is rejected on authorisation rather than on the guard -- the point of
+        // recording it separately is that the distinction is visible.
+        try ballista.updateMetadataURI(token, "reentered") { updateMetadataReentered = true; } catch {}
+
         return (a, b, 1);
     }
 }

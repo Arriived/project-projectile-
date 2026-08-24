@@ -580,6 +580,80 @@ inverts the pool price.
 
 ---
 
+## Foundry — depth, and a vacuous invariant caught by inversion
+
+**1000 runs x 250 depth = 250,000 calls per invariant**, up from 256 x 50 = 12,800.
+Handler gained `claimTreasury()`, since treasury fees now accrue and the claim path is
+part of the state machine — it is exercised ~62k times per run.
+
+**A new invariant was written, proved vacuous, and replaced.**
+`invariant_graduatedCurvesAreFullyDrained` asserted that a GRADUATED curve holds no
+reserves. It passed 250,000 calls — and it still passed with
+`c.realUsdcReserves = 0` commented out of `_performGraduation`, because **the handler
+caps buys at ~250 USDC to keep curves alive, so no curve ever reaches the 8,000
+threshold and the assertion never ran.** Raising the cap would graduate every curve on
+the fuzzer's first call and hollow out the solvency invariants instead — the trade the
+handler comment already warns about. It is now a deterministic test that forces the
+state, `test_graduatedCurveIsFullyDrained`.
+
+**That test needed three arms before every assertion was load-bearing**, and each was
+found the same way — by mutating and watching it stay green:
+- a **depleting** buy leaves `tokenReserves` already zero, so `c.tokenReserves = 0` is
+  redundant on that path; the **threshold** arm is needed to make it bite
+- every fuzz token is created with pool boost OFF, so `c.poolBoost = 0` is redundant
+  unless a **boost-enabled** token is launched and graduated
+
+All three drain assignments now fail the test when removed. **The lesson generalises: an
+assertion is only load-bearing on the paths that actually reach it, and "the invariant
+passed" says nothing until the mutation says otherwise.**
+
+## Static analysis — Slither 0.11.6, 24 Aug
+
+17 findings. What was acted on, and what was dismissed and why — the dismissals matter
+more than the acceptances, because a tool's output is a starting point.
+
+**Medium — `reentrancy-no-eth`, `c.state` written after `addLiquidity`. REAL as
+structure, safe by guard placement rather than by ordering.** `_performGraduation` sets
+`c.state = GRADUATED` *after* the router call, which does violate CEI. It is reachable
+from exactly two places, both `nonReentrant`: `_settleBuy` (from `buy`/`creatorLaunchBuy`)
+and `graduate()`. The cross-function targets Slither names — `currentPrice`,
+`currentSnipeTaxBps` — are `view`. Verified by enumeration: **the only state-changing
+external function that is neither `nonReentrant` nor `onlyOwner` is `updateMetadataURI`**,
+which is creator-gated and only writes a string. A hostile router driving all eight
+external functions from inside graduation is blocked on every one, and that test goes red
+if any single guard is removed.
+⚠ This is safe because of WHERE THE GUARDS ARE, not because the ordering is correct. Add
+one unguarded state-changing external function and it becomes live.
+
+**Medium — `incorrect-equality`, `liquidity == 0`. Dismissed.** The detector targets
+equality on balances and timestamps, where an exact match is fragile. Here zero is a
+distinguished value — "the router returned no LP tokens at all" — not an approximate one.
+
+**Medium — `unused-return`, `amountA`/`amountB` from `addLiquidity` ignored. Valid, not a
+bug, worth doing later.** Only `liquidity` is read. Consuming the amounts would let
+graduation detect a partially-consuming router and zero the residual approval on the
+success path. Today that residual is bounded by orphaned funds nobody is owed and is
+already regression-tested, so this is a tightening, not a fix.
+
+**Low — `events-maths` ×5. VALID and unaddressed.** `setLaunchCooldown`,
+`setSymbolLockDuration`, `setCreationFee`, `setDefaultGraduationThreshold` and
+`setDefaultFees` all change owner-controlled economics **with no event**. This project
+already treats "monitoring `RouterProposed` is a launch requirement" as doctrine; by the
+same logic these are unmonitorable admin actions. The economics hash protects anyone
+mid-launch from a surprise, but nothing makes the change *observable*. Decide before
+mainnet.
+
+**Low — `timestamp` ×6. Inherent, bounded, dismissed.** The snipe tax, creator window,
+router timelock, symbol lock and launch cooldown are all deliberately time-based. A
+validator nudging `block.timestamp` a second or two could drop a sniper into a cheaper
+tax tier; the tier decays in seconds anyway, so the gain is small and bounded.
+
+**Low — `missing-zero-check` on `LFX1Token`'s `creator_`. Dismissed.** `LFX1` always
+passes `msg.sender`, and the token is only ever deployed by the factory.
+
+**Low — `reentrancy-events` on `updateMetadataURI`. Dismissed.** Event after an external
+call to our own non-hooking token.
+
 ## Working style
 
 - One feature at a time: build it, then genuinely try to break it, then move on.
