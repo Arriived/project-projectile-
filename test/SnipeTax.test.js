@@ -148,7 +148,7 @@ describe('Ballista — decaying snipe tax', function () {
     await atElapsed(ballista, tokenAddress, 6); // 20% tax, small enough to reason about
 
     const before = await ballista.curves(tokenAddress);
-    const treasuryBefore = await usdc.balanceOf(treasury.address);
+    const treasuryBefore = await ballista.treasuryFeesAccrued();
 
     const spend = 1_000n * ONE_USDC;
     const receipt = await (await ballista.connect(sniper).buy(tokenAddress, spend, 0)).wait();
@@ -167,7 +167,7 @@ describe('Ballista — decaying snipe tax', function () {
     // Treasury receives its snipe share plus the base fee net of the creator carve-out.
     const baseFee = (spend * 100n) / BPS;
     const creatorCut = (spend * 90n) / BPS; // buy side: 0.90%
-    expect((await usdc.balanceOf(treasury.address)) - treasuryBefore).to.equal(
+    expect((await ballista.treasuryFeesAccrued()) - treasuryBefore).to.equal(
       baseFee - creatorCut + expectedToTreasury
     );
 
@@ -223,10 +223,10 @@ describe('Ballista — decaying snipe tax', function () {
 
     // Selling the FIRST token while a window is open elsewhere is unaffected either way;
     // what matters is that this token's own sell path charges only sellFeeBps.
-    const treasuryBefore = await usdc.balanceOf(treasury.address);
+    const treasuryBefore = await ballista.treasuryFeesAccrued();
     const quote = await ballista.quoteSell(tokenAddress, held);
     await ballista.connect(trader).sell(tokenAddress, held, 0);
-    const treasuryGot = (await usdc.balanceOf(treasury.address)) - treasuryBefore;
+    const treasuryGot = (await ballista.treasuryFeesAccrued()) - treasuryBefore;
 
     const creatorShare = (quote.usdcOutGross * 50n) / BPS; // sell side: 0.50%
     expect(quote.fee).to.equal((quote.usdcOutGross * 100n) / BPS); // 1%, no tax added
@@ -334,7 +334,7 @@ describe('Ballista — decaying snipe tax', function () {
       await ballista.setDefaultSnipeTaxTreasuryBps(1000); // 10/90 for FUTURE launches
 
       await atElapsed(ballista, tokenAddress, 6);
-      const treasuryBefore = await usdc.balanceOf(treasury.address);
+      const treasuryBefore = await ballista.treasuryFeesAccrued();
       const spend = 1_000n * ONE_USDC;
       const receipt = await (await ballista.connect(sniper).buy(tokenAddress, spend, 0)).wait();
       const taxEvent = receipt.logs

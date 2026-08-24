@@ -69,6 +69,11 @@ contract CurveInvariantTest is Test {
         // counted in every state. This test contract is the creator of the only token,
         // so its accrual is the whole outstanding creator liability.
         uint256 owed = factory.creatorFeesAccrued(address(this));
+        // Treasury fees accrue rather than being pushed inline, so they are a real USDC
+        // obligation sitting in the contract exactly like creator fees. Omitting them
+        // would let the accrued balance read as surplus and mask a genuine shortfall of
+        // up to that amount.
+        owed += factory.treasuryFeesAccrued();
         // Only a COMPLETED graduation moves the curve's own reserves out to the DEX.
         if (c.state != LFX1.CurveState.GRADUATED) {
             owed += c.realUsdcReserves;
@@ -76,7 +81,7 @@ contract CurveInvariantTest is Test {
         assertGe(
             usdc.balanceOf(address(factory)),
             owed,
-            "factory's USDC balance fell below curve reserves plus unclaimed creator fees"
+            "factory's USDC balance fell below curve reserves plus unclaimed creator and treasury fees"
         );
     }
 

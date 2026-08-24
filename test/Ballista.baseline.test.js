@@ -132,9 +132,9 @@ describe("Ballista — the original pre-rename suite", function () {
 
     it("charges the creation fee to treasury", async function () {
       const { factory, alice, treasury, usdc } = await deployFixture();
-      const before = await usdc.balanceOf(treasury.address);
+      const before = await factory.treasuryFeesAccrued();
       await createToken(factory, alice, "First", "CAT");
-      const after = await usdc.balanceOf(treasury.address);
+      const after = await factory.treasuryFeesAccrued();
       // 0.5 USDC, down from 5 -- see the note on creationFeeUsdc in Ballista.sol.
       expect(after - before).to.equal(ethers.parseUnits("0.5", 6));
     });
@@ -161,10 +161,10 @@ describe("Ballista — the original pre-rename suite", function () {
 
       // Bob buys into the OLD token — should still be charged the 1% it launched with,
       // not the new 9% default.
-      const treasuryBefore = await usdc.balanceOf(treasury.address);
+      const treasuryBefore = await factory.treasuryFeesAccrued();
       const creatorBefore = await factory.creatorFeesAccrued(alice.address);
       await factory.connect(bob).buy(tokenAddr, USDC(100), 0);
-      const treasuryAfter = await usdc.balanceOf(treasury.address);
+      const treasuryAfter = await factory.treasuryFeesAccrued();
       const creatorAfter = await factory.creatorFeesAccrued(alice.address);
 
       // The 1% fee is now split 0.7% treasury / 0.3% to the creator (alice), so the

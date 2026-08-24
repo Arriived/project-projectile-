@@ -470,6 +470,6 @@ describe('Ballista — changes since the original build', function () {
       ballista.connect(trader).buy(tokenAddress, 1n * ONE_USDC, 0),
     ).to.be.revertedWithCustomError(ballista, 'CurveNotActive');
 
-    expect(await usdc.balanceOf(treasury.address)).to.be.gt(0n);
+    expect(await ballista.treasuryFeesAccrued()).to.be.gt(0n);
   });
 });

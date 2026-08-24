@@ -307,8 +307,24 @@ Unwatched, it is 24 hours of decoration.
   on a verified contract in thirty seconds, and the honest claims — "70%,
   matching the market leader" and "90% on every buy" — are already
   market-leading. Push back if this comes up again.
-- Creator fees **accrue and are claimed**, never pushed inside a trade. A
-  creator contract that reverts must never be able to break trading.
+- **ALL fees accrue and are claimed — creator AND treasury.** Nothing is pushed to a
+  payee inside a trade. A payee that reverts must never be able to break trading.
+  - The treasury was brought under this rule on 24 Aug. Before that, every buy, every
+    sell **and every `createToken`** pushed to the treasury inline, so a blocklisted
+    treasury address bricked trading *and* launching. Circle can blocklist an address;
+    that made a third party able to halt the launchpad. Cost: **+260 bytes**.
+  - **`claimTreasuryFees()` is deliberately PERMISSIONLESS.** It can only ever move
+    protocol funds to `treasury`, so there is nothing to gain by calling it and nothing
+    to grief. This matters for the multisig migration: sweeping treasury fees does
+    **not** become a 2-of-3 Safe transaction — anyone, including a keeper or a hot
+    wallet, can trigger the sweep, and the USDC still lands at `treasury`. Only
+    `setTreasury` needs the Safe.
+  - **The solvency identity changed.** The contract now legitimately holds unclaimed
+    treasury fees, so every check of the form "balance covers reserves + creator fees"
+    is now WRONG — it reads the accrued balance as surplus and would stay green while a
+    real shortfall of up to that amount existed. Both Foundry invariants and two Hardhat
+    checks were extended to add `treasuryFeesAccrued()`. Proven red by paying the
+    treasury inline *and* accruing it.
 - Creation fee: **0.5 USDC.** Not 0.1 — at 0.1 one wallet could push 8,640
   launches/day for ~$1,063. Noxa earned $12M in fees and still had to stop
   accepting launches because the feed became unusable; revenue from spam doesn't

@@ -49,12 +49,12 @@ describe('Ballista — creator fee share', function () {
 
     const buyAmount = 1_000n * ONE_USDC;
     const traderBefore = await usdc.balanceOf(trader.address);
-    const treasuryBefore = await usdc.balanceOf(treasury.address);
+    const treasuryBefore = await ballista.treasuryFeesAccrued();
 
     await ballista.connect(trader).buy(tokenAddress, buyAmount, 0);
 
     const traderSpent = traderBefore - (await usdc.balanceOf(trader.address));
-    const treasuryGot = (await usdc.balanceOf(treasury.address)) - treasuryBefore;
+    const treasuryGot = (await ballista.treasuryFeesAccrued()) - treasuryBefore;
     const creatorAccrued = await ballista.creatorFeesAccrued(creator.address);
 
     // The whole point: trader-facing cost is unchanged by the creator share existing.
@@ -78,9 +78,9 @@ describe('Ballista — creator fee share', function () {
     const held = await token.balanceOf(trader.address);
     await token.connect(trader).approve(await ballista.getAddress(), held);
 
-    const treasuryBefore = await usdc.balanceOf(treasury.address);
+    const treasuryBefore = await ballista.treasuryFeesAccrued();
     await ballista.connect(trader).sell(tokenAddress, held, 0);
-    const treasuryGot = (await usdc.balanceOf(treasury.address)) - treasuryBefore;
+    const treasuryGot = (await ballista.treasuryFeesAccrued()) - treasuryBefore;
 
     const sellAccrual = (await ballista.creatorFeesAccrued(creator.address)) - afterBuy;
     expect(sellAccrual).to.be.greaterThan(0n);
@@ -103,24 +103,26 @@ describe('Ballista — creator fee share', function () {
     let treasuryTotal = 0n;
 
     for (const amount of amounts) {
-      const before = await usdc.balanceOf(treasury.address);
+      const before = await ballista.treasuryFeesAccrued();
       await ballista.connect(trader).buy(tokenAddress, amount, 0);
-      treasuryTotal += (await usdc.balanceOf(treasury.address)) - before;
+      treasuryTotal += (await ballista.treasuryFeesAccrued()) - before;
     }
 
     const held = await token.balanceOf(trader.address);
     await token.connect(trader).approve(ballistaAddress, held);
-    const beforeSell = await usdc.balanceOf(treasury.address);
+    const beforeSell = await ballista.treasuryFeesAccrued();
     await ballista.connect(trader).sell(tokenAddress, held / 3n, 0);
-    treasuryTotal += (await usdc.balanceOf(treasury.address)) - beforeSell;
+    treasuryTotal += (await ballista.treasuryFeesAccrued()) - beforeSell;
 
     const creatorTotal = await ballista.creatorFeesAccrued(creator.address);
     const curve = await ballista.curves(tokenAddress);
 
     // Every USDC the contract holds is accounted for: curve reserves plus unclaimed
-    // creator fees, exactly. Anything unexplained here would be leaked or stranded value.
+    // creator fees plus unclaimed TREASURY fees, exactly. Treasury fees now accrue
+    // rather than being pushed inline, so the contract legitimately holds them and an
+    // identity that omits them reads real balance as leaked value.
     expect(await usdc.balanceOf(ballistaAddress)).to.equal(
-      curve.realUsdcReserves + creatorTotal
+      curve.realUsdcReserves + creatorTotal + (await ballista.treasuryFeesAccrued())
     );
     expect(creatorTotal).to.be.greaterThan(0n);
     expect(treasuryTotal).to.be.greaterThan(0n);
@@ -218,22 +220,22 @@ describe('Ballista — creator fee share', function () {
 
       // ── buy side ──
       const buyAmount = 1_000n * ONE_USDC;
-      let tBefore = await usdc.balanceOf(treasury.address);
+      let tBefore = await ballista.treasuryFeesAccrued();
       let cBefore = await ballista.creatorFeesAccrued(creator.address);
       await ballista.connect(trader).buy(tokenAddress, buyAmount, 0);
       const buyCreator = (await ballista.creatorFeesAccrued(creator.address)) - cBefore;
-      const buyTreasury = (await usdc.balanceOf(treasury.address)) - tBefore;
+      const buyTreasury = (await ballista.treasuryFeesAccrued()) - tBefore;
       const buyFee = buyCreator + buyTreasury;
 
       // ── sell side ──
       const held = await token.balanceOf(trader.address);
       await token.connect(trader).approve(await ballista.getAddress(), held);
-      tBefore = await usdc.balanceOf(treasury.address);
+      tBefore = await ballista.treasuryFeesAccrued();
       cBefore = await ballista.creatorFeesAccrued(creator.address);
       const quote = await ballista.quoteSell(tokenAddress, held);
       await ballista.connect(trader).sell(tokenAddress, held, 0);
       const sellCreator = (await ballista.creatorFeesAccrued(creator.address)) - cBefore;
-      const sellTreasury = (await usdc.balanceOf(treasury.address)) - tBefore;
+      const sellTreasury = (await ballista.treasuryFeesAccrued()) - tBefore;
       const sellFee = sellCreator + sellTreasury;
 
       // Assert against the contract's own floor-division rather than dividing a rate

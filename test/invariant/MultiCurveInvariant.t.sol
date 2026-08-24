@@ -64,6 +64,9 @@ contract MultiCurveInvariantTest is Test {
     ///         every curve's reserves PLUS every unclaimed creator fee, simultaneously.
     function invariant_pooledUsdcCoversAllCurvesAndCreatorFees() public view {
         uint256 owed = factory.creatorFeesAccrued(address(this));
+        // Unclaimed treasury fees are pooled in the same balance and owed just as
+        // creator fees are -- see the note in CurveInvariant.
+        owed += factory.treasuryFeesAccrued();
         for (uint256 i = 0; i < tokens.length; i++) {
             LFX1.Curve memory c = factory.curves(tokens[i]);
             // Only a COMPLETED graduation moves a curve's reserves out to the DEX.
@@ -74,7 +77,7 @@ contract MultiCurveInvariantTest is Test {
         assertGe(
             usdc.balanceOf(address(factory)),
             owed,
-            "pooled USDC fell below curve reserves plus unclaimed creator fees"
+            "pooled USDC fell below curve reserves plus unclaimed creator and treasury fees"
         );
     }
 

@@ -41,6 +41,8 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
 
     uint32 public creatorLaunchWindow = 3;
 
+    uint256 public treasuryFeesAccrued;
+
     uint16 public defaultCreatorBuyFeeBps = 90;
     uint16 public defaultCreatorSellFeeBps = 50;
 
@@ -162,6 +164,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
     event RouterRevoked(address indexed router, bool wasLive);
     event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount);
     event CreatorFeesClaimed(address indexed creator, uint256 amount);
+    event TreasuryFeesClaimed(address indexed treasury, uint256 amount);
     event DefaultCreatorFeesSet(uint16 creatorBuyFeeBps, uint16 creatorSellFeeBps);
     event SnipeTaxTablePublished(uint32 indexed version, uint16[] table, uint16 maxBps);
     event DefaultSnipeTaxTreasuryBpsSet(uint16 treasuryBps);
@@ -308,7 +311,8 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
         if (!(unlocksAt == 0 || block.timestamp >= unlocksAt)) revert SymbolLocked(unlocksAt);
 
         if (creationFeeUsdc > 0) {
-            usdc.safeTransferFrom(msg.sender, treasury, creationFeeUsdc);
+            usdc.safeTransferFrom(msg.sender, address(this), creationFeeUsdc);
+            treasuryFeesAccrued += creationFeeUsdc;
         }
 
         lastLaunchTimestamp[msg.sender] = block.timestamp;
@@ -434,7 +438,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
         }
 
         usdc.safeTransferFrom(msg.sender, address(this), q.actualUsdcIn);
-        if (f.treasuryCut > 0) usdc.safeTransfer(treasury, f.treasuryCut);
+        if (f.treasuryCut > 0) treasuryFeesAccrued += f.treasuryCut;
         IERC20(token).safeTransfer(msg.sender, q.tokensOut);
         emit Trade(token, msg.sender, true, q.actualUsdcIn, q.tokensOut);
 
@@ -555,7 +559,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
 
         IERC20(token).safeTransferFrom(msg.sender, address(this), q.actualTokensIn);
         uint256 treasuryCut = q.fee - creatorCut;
-        if (treasuryCut > 0) usdc.safeTransfer(treasury, treasuryCut);
+        if (treasuryCut > 0) treasuryFeesAccrued += treasuryCut;
         usdc.safeTransfer(msg.sender, usdcOut);
 
         emit Trade(token, msg.sender, false, usdcOut, q.actualTokensIn);
@@ -603,6 +607,14 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
             creatorFeesAccrued[c.creator] += cut;
             emit CreatorFeeAccrued(token, c.creator, cut);
         }
+    }
+
+    function claimTreasuryFees() external nonReentrant returns (uint256 amount) {
+        amount = treasuryFeesAccrued;
+        if (!(amount > 0)) revert NothingToClaim();
+        treasuryFeesAccrued = 0;
+        usdc.safeTransfer(treasury, amount);
+        emit TreasuryFeesClaimed(treasury, amount);
     }
 
     function claimCreatorFees() external nonReentrant returns (uint256 amount) {

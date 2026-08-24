@@ -173,7 +173,12 @@ describe('LFX1 — audit: fresh adversarial pass', function () {
   });
 
   describe('external-token assumptions', function () {
-    it('ATTACK: blocklist the TREASURY and see whether trading survives', async function () {
+    // END TO END. Before the accrue-and-claim change every buy, every sell AND every
+    // createToken pushed to the treasury inline, so a blocklisted treasury bricked the
+    // whole launchpad. The project had already decided a payee that reverts must never
+    // break trading and applied that to creators only; this is the same fix on the
+    // other payee.
+    it('ATTACK: blocklist the TREASURY -- trading, launching and recovery all survive', async function () {
       const { ballista, usdc, creator, a, treasury, deployer } =
         await env('MockBlocklistUSDC');
       const t = await launch(ballista, creator, 'TBLOCK');
@@ -182,15 +187,52 @@ describe('LFX1 — audit: fresh adversarial pass', function () {
 
       await usdc.setBlocked(treasury.address, true);
 
-      // Every buy and sell pushes treasuryCut to treasury inside the trade.
-      const buyBlocked = await ballista.connect(a).buy(t, 100n * ONE, 0)
-        .then(() => false).catch(() => true);
-      console.log(`        treasury blocklisted -> buy reverts: ${buyBlocked}`);
-      expect(buyBlocked, 'a blocklisted treasury halts buys').to.equal(true);
-
-      // Recovery must not need a redeploy: point treasury elsewhere and trade again.
-      await ballista.connect(deployer).setTreasury(a.address);
+      // 1. Trading survives.
       await expect(ballista.connect(a).buy(t, 100n * ONE, 0)).to.not.be.reverted;
+      const token = await ethers.getContractAt('LFX1Token', t);
+      const held = await token.balanceOf(a.address);
+      await token.connect(a).approve(await ballista.getAddress(), held / 4n);
+      await expect(ballista.connect(a).sell(t, held / 4n, 0)).to.not.be.reverted;
+
+      // 2. Launching survives -- the creation fee accrues instead of being pushed.
+      const t2 = await launch(ballista, creator, 'TBLOCK2');
+      expect(t2, 'a launch must still succeed while the treasury is blocked')
+        .to.properAddress;
+
+      // 3. Fees really did accrue rather than vanish.
+      const accrued = await ballista.treasuryFeesAccrued();
+      expect(accrued, 'treasury fees must accumulate while blocked').to.be.greaterThan(0n);
+
+      // 4. Only the sweep fails, and only while blocked.
+      await expect(ballista.claimTreasuryFees()).to.be.reverted;
+
+      // 5. setTreasury recovers it, and everything accrued is still claimable.
+      await ballista.connect(deployer).setTreasury(a.address);
+      const before = await usdc.balanceOf(a.address);
+      await expect(ballista.claimTreasuryFees()).to.not.be.reverted;
+      expect((await usdc.balanceOf(a.address)) - before,
+        'the whole accrued balance survives the blocklist').to.equal(accrued);
+      expect(await ballista.treasuryFeesAccrued()).to.equal(0n);
+    });
+
+    it('claimTreasuryFees is permissionless but can only ever pay the treasury', async function () {
+      const { ballista, usdc, creator, a, b, treasury } = await env();
+      const t = await launch(ballista, creator, 'PERM');
+      await past();
+      await ballista.connect(a).buy(t, 500n * ONE, 0);
+
+      const accrued = await ballista.treasuryFeesAccrued();
+      expect(accrued).to.be.greaterThan(0n);
+
+      // A stranger calling it moves protocol funds to the protocol, never to themselves.
+      const strangerBefore = await usdc.balanceOf(b.address);
+      const treasuryBefore = await usdc.balanceOf(treasury.address);
+      await ballista.connect(b).claimTreasuryFees();
+      expect(await usdc.balanceOf(b.address), 'caller gains nothing').to.equal(strangerBefore);
+      expect((await usdc.balanceOf(treasury.address)) - treasuryBefore).to.equal(accrued);
+
+      await expect(ballista.connect(b).claimTreasuryFees())
+        .to.be.revertedWithCustomError(ballista, 'NothingToClaim');
     });
   });
 
@@ -214,7 +256,8 @@ describe('LFX1 — audit: fresh adversarial pass', function () {
 
         const curve = await ballista.curves(t);
         const owed = curve.realUsdcReserves
-          + (await ballista.creatorFeesAccrued(creator.address));
+          + (await ballista.creatorFeesAccrued(creator.address))
+          + (await ballista.treasuryFeesAccrued());
         const held = await usdc.balanceOf(addr);
         const slack = held - owed;
         if (worstSlack === null || slack < worstSlack) worstSlack = slack;
