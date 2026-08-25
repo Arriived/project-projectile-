@@ -43,6 +43,8 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
 
     uint256 public treasuryFeesAccrued;
 
+    address public lpRecipient = BURN_ADDRESS;
+
     uint16 public defaultCreatorBuyFeeBps = 90;
     uint16 public defaultCreatorSellFeeBps = 50;
 
@@ -98,6 +100,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
         uint16 maxCreatorLaunchBps;
         uint32 creatorLaunchWindow;
 
+        address lpRecipient;
         bool poolBoostEnabled;
 
         uint256 poolBoost;
@@ -165,6 +168,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
     event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount);
     event CreatorFeesClaimed(address indexed creator, uint256 amount);
     event TreasuryFeesClaimed(address indexed treasury, uint256 amount);
+    event LpRecipientSet(address oldRecipient, address newRecipient);
     event LaunchCooldownSet(uint256 oldValue, uint256 newValue);
     event SymbolLockDurationSet(uint256 oldValue, uint256 newValue);
     event CreationFeeSet(uint256 oldValue, uint256 newValue);
@@ -288,6 +292,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
             defaultCreatorSellFeeBps,
             maxCreatorLaunchBps,
             creatorLaunchWindow,
+            lpRecipient,
             activeSnipeTaxTableVersion,
             defaultSnipeTaxTreasuryBps,
             caseSensitiveSymbols,
@@ -352,6 +357,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
             snipeTaxTreasuryBps: defaultSnipeTaxTreasuryBps,
             maxCreatorLaunchBps: maxCreatorLaunchBps,
             creatorLaunchWindow: creatorLaunchWindow,
+            lpRecipient: lpRecipient,
             creatorLaunchPurchased: 0,
             poolBoostEnabled: poolBoostEnabled,
             poolBoost: 0
@@ -648,7 +654,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
             usdcLiquidity,
             0,
             0,
-            BURN_ADDRESS,
+            c.lpRecipient,
             block.timestamp + 15 minutes
         ) returns (uint256, uint256, uint256 liquidity) {
             if (liquidity == 0) {
@@ -780,6 +786,12 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
     function setCreationFee(uint256 creationFeeUsdc_) external onlyOwner {
         emit CreationFeeSet(creationFeeUsdc, creationFeeUsdc_);
         creationFeeUsdc = creationFeeUsdc_;
+    }
+
+    function setLpRecipient(address lpRecipient_) external onlyOwner {
+        if (!(lpRecipient_ != address(0))) revert ZeroAddress();
+        emit LpRecipientSet(lpRecipient, lpRecipient_);
+        lpRecipient = lpRecipient_;
     }
 
     function setLaunchCooldown(uint256 launchCooldown_) external onlyOwner {

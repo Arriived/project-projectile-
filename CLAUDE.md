@@ -296,6 +296,39 @@ is precisely the power you would not want an owner to have.
 24h timelock only defends anything if a human is watching the event during it.
 Unwatched, it is 24 hours of decoration.
 
+### LP recipient — added 24 Aug, SNAPSHOTTED not global
+
+`lpRecipient` decides where graduation sends the LP position. Defaults to
+`BURN_ADDRESS`, rejects `address(0)`, owner-settable with an event carrying old and new.
+It exists so the V4 locker work is purely additive — `LFX1` should not be reopened for it.
+
+**It is snapshotted per curve and pinned by the economics hash, not read live at
+graduation. That was a deliberate deviation from a plain global setter, and it is the
+whole point.** Graduation approves the entire LP allocation, so whoever `lpRecipient`
+names at that instant receives it. Read live, an owner could let tokens launch
+advertising burned LP and then redirect every pending graduation to an address they
+control — the same magnitude of lever as swapping the router, which this contract
+already protects with a 24h timelock precisely because "a malicious router takes ~the
+whole pot." Snapshotting removes the lever for anything already launched instead of
+merely delaying it, and it matches how every other economic term here behaves: a token
+trades under the terms it launched with, permanently.
+
+Cost measured both ways: global mutable **+278 bytes**, snapshotted **+426**. The extra
+148 buys the trust property. A snapshot needs its own storage slot — the packed struct
+slot had 13 of 32 bytes used and an address needs 20.
+
+**Consequence: tokens launched BEFORE the flip keep burning.** The locker only ever
+receives LP from tokens launched after `setLpRecipient` points at it. That is correct
+and safe, and it is also an operational fact worth knowing on the day.
+
+**⚠ "LP Auto-Burned" becomes "LP Permanently Locked" the moment this points at a
+locker, and the two claims are not interchangeable.** A burn address needs zero trust —
+anyone can read `0x...dEaD` and stop thinking. A locker needs someone to verify its lock
+logic, and that verification is a claim about code somebody wrote rather than about an
+address nobody controls. **Nobody should market the burn claim after the flip.** For a
+project whose entire position is verifiability, overstating this is the specific way to
+lose it.
+
 ### Fees
 
 - 1% buy and sell, per-token snapshotted at creation.

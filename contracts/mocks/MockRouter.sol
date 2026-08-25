@@ -8,6 +8,8 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "../interfaces/IDEXRouter.sol";
 
 contract MockRouter is IDEXRouter {
+    address public lastLpRecipient;
+
     using SafeERC20 for IERC20;
 
     function addLiquidity(
@@ -23,7 +25,10 @@ contract MockRouter is IDEXRouter {
         IERC20(tokenA).safeTransferFrom(msg.sender, address(this), amountADesired);
         IERC20(tokenB).safeTransferFrom(msg.sender, address(this), amountBDesired);
 
-        to;
+        // Recorded so a test can assert WHERE the LP went, not merely that graduation
+        // succeeded. lpRecipient is snapshotted per curve, and a snapshot nobody reads
+        // back is indistinguishable from one that is ignored.
+        lastLpRecipient = to;
         return (amountADesired, amountBDesired, amountADesired + amountBDesired);
     }
 }
