@@ -154,6 +154,39 @@ describe('LFX1 — guards the coverage sweep found untested', function () {
     });
   });
 
+  // Slither's only undismissed finding: five owner setters changed economics with no
+  // event, so an owner could move fees, the graduation threshold or the creation fee
+  // with nothing observable off-chain. This project already treats monitoring
+  // RouterProposed as a launch requirement, so by its own standard those were
+  // unmonitorable admin actions. Old AND new values, so a watcher sees the delta.
+  describe('admin changes are observable', function () {
+    it('every economics setter emits old and new values', async function () {
+      const { ballista } = await env();
+
+      // env() already sets the cooldown to 0, so the pre-change value here is 0, not
+      // the contract's 10-second default.
+      await expect(ballista.setLaunchCooldown(99))
+        .to.emit(ballista, 'LaunchCooldownSet').withArgs(0n, 99n);
+      await expect(ballista.setSymbolLockDuration(1234))
+        .to.emit(ballista, 'SymbolLockDurationSet').withArgs(300n, 1234n);
+      await expect(ballista.setCreationFee(7_000_000n))
+        .to.emit(ballista, 'CreationFeeSet').withArgs(500_000n, 7_000_000n);
+      await expect(ballista.setDefaultGraduationThreshold(9_000_000_000n))
+        .to.emit(ballista, 'DefaultGraduationThresholdSet')
+        .withArgs(8_000_000_000n, 9_000_000_000n);
+      await expect(ballista.setDefaultFees(250, 300))
+        .to.emit(ballista, 'DefaultFeesSet').withArgs(100n, 250n, 100n, 300n);
+    });
+
+    it('the emitted OLD value is the pre-change value, not the new one', async function () {
+      const { ballista } = await env();
+      // Emitting (new, new) would satisfy a test that only checked the event fired.
+      await ballista.setCreationFee(1_000_000n);
+      await expect(ballista.setCreationFee(2_000_000n))
+        .to.emit(ballista, 'CreationFeeSet').withArgs(1_000_000n, 2_000_000n);
+    });
+  });
+
   describe('the recovery lever and the views', function () {
     it('setTreasury rejects the zero address -- this is the blocklist recovery lever', async function () {
       const { ballista, deployer } = await env();

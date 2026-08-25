@@ -165,6 +165,11 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
     event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount);
     event CreatorFeesClaimed(address indexed creator, uint256 amount);
     event TreasuryFeesClaimed(address indexed treasury, uint256 amount);
+    event LaunchCooldownSet(uint256 oldValue, uint256 newValue);
+    event SymbolLockDurationSet(uint256 oldValue, uint256 newValue);
+    event CreationFeeSet(uint256 oldValue, uint256 newValue);
+    event DefaultGraduationThresholdSet(uint256 oldValue, uint256 newValue);
+    event DefaultFeesSet(uint16 oldBuyFeeBps, uint16 newBuyFeeBps, uint16 oldSellFeeBps, uint16 newSellFeeBps);
     event DefaultCreatorFeesSet(uint16 creatorBuyFeeBps, uint16 creatorSellFeeBps);
     event SnipeTaxTablePublished(uint32 indexed version, uint16[] table, uint16 maxBps);
     event DefaultSnipeTaxTreasuryBpsSet(uint16 treasuryBps);
@@ -745,6 +750,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
         if (!(buyFeeBps_ <= MAX_FEE_BPS && sellFeeBps_ <= MAX_FEE_BPS)) revert FeeExceedsCeiling();
 
         if (!(defaultCreatorBuyFeeBps <= buyFeeBps_ && defaultCreatorSellFeeBps <= sellFeeBps_)) revert FeeBelowCreatorShare();
+        emit DefaultFeesSet(defaultBuyFeeBps, buyFeeBps_, defaultSellFeeBps, sellFeeBps_);
         defaultBuyFeeBps = buyFeeBps_;
         defaultSellFeeBps = sellFeeBps_;
     }
@@ -772,18 +778,22 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
     }
 
     function setCreationFee(uint256 creationFeeUsdc_) external onlyOwner {
+        emit CreationFeeSet(creationFeeUsdc, creationFeeUsdc_);
         creationFeeUsdc = creationFeeUsdc_;
     }
 
     function setLaunchCooldown(uint256 launchCooldown_) external onlyOwner {
+        emit LaunchCooldownSet(launchCooldown, launchCooldown_);
         launchCooldown = launchCooldown_;
     }
 
     function setSymbolLockDuration(uint256 symbolLockDuration_) external onlyOwner {
+        emit SymbolLockDurationSet(symbolLockDuration, symbolLockDuration_);
         symbolLockDuration = symbolLockDuration_;
     }
 
     function setDefaultGraduationThreshold(uint256 thresholdUsdc_) external onlyOwner {
+        emit DefaultGraduationThresholdSet(defaultGraduationThresholdUsdc, thresholdUsdc_);
         defaultGraduationThresholdUsdc = thresholdUsdc_;
     }
 
