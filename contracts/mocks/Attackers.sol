@@ -164,12 +164,24 @@ contract LauncherFactory {
 
 contract PartialConsumeRouter is IDEXRouter {
     address public immutable beneficiary;
+    // Offered vs taken, recorded so a test can compare the Graduated event against the
+    // amounts the router ACTUALLY consumed rather than against a figure the test derives
+    // itself -- a derived baseline is how an earlier version of that test passed while
+    // the event reported the offered amounts.
+    uint256 public lastOfferedA;
+    uint256 public lastOfferedB;
+    uint256 public lastTakenA;
+    uint256 public lastTakenB;
     constructor(address b) { beneficiary = b; }
 
     function addLiquidity(
         address tokenA, address tokenB, uint256 amountADesired, uint256 amountBDesired,
         uint256, uint256, address to, uint256
     ) external returns (uint256, uint256, uint256) {
+        lastOfferedA = amountADesired;
+        lastOfferedB = amountBDesired;
+        lastTakenA = amountADesired / 2;
+        lastTakenB = amountBDesired / 2;
 
         IERC20(tokenA).transferFrom(msg.sender, to, amountADesired / 2);
         IERC20(tokenB).transferFrom(msg.sender, address(this), amountBDesired / 2);

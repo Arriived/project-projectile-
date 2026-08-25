@@ -656,11 +656,14 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
             0,
             c.lpRecipient,
             block.timestamp + 15 minutes
-        ) returns (uint256, uint256, uint256 liquidity) {
-            if (liquidity == 0) {
+        ) returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
+            // Clear whatever the router did not consume, on every path. A router that
+            // takes less than it was offered otherwise leaves a live allowance over the
+            // pooled balance for as long as it stays configured.
+            IERC20(token).forceApprove(router, 0);
+            usdc.forceApprove(router, 0);
 
-                IERC20(token).forceApprove(router, 0);
-                usdc.forceApprove(router, 0);
+            if (liquidity == 0) {
                 return false;
             }
 
@@ -668,7 +671,8 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
             c.tokenReserves = 0;
             c.realUsdcReserves = 0;
             c.poolBoost = 0;
-            emit Graduated(token, tokenLiquidity, usdcLiquidity, liquidity);
+            // The amounts the router ACTUALLY took, not the amounts it was offered.
+            emit Graduated(token, amountA, amountB, liquidity);
             return true;
         } catch {
             IERC20(token).forceApprove(router, 0);
