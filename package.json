@@ -14,5 +14,9 @@
     "hardhat": "^2.22.15",
     "solhint": "^6.2.3",
     "solidity-coverage": "^0.8.17"
+  },
+  "scripts": {
+    "gen:abi": "node scripts/gen-indexer-abi.js",
+    "build": "hardhat compile && node scripts/gen-indexer-abi.js"
   }
 }

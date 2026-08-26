@@ -1,7 +1,9 @@
 require("dotenv").config();
 const { ethers } = require("ethers");
 const { createClient } = require("@supabase/supabase-js");
-const factoryAbi = require("./factoryAbi");
+// Generated from the Hardhat artifact by scripts/gen-indexer-abi.js. Never hand-edit:
+// the previous hand-maintained subset silently truncated the Curve struct.
+const factoryAbi = require("./generated/lfx1Abi.json");
 const { fetchAndSanitizeMetadata } = require("./metadata");
 const { getLastProcessedBlock, saveCheckpoint } = require("./recovery");
 
@@ -119,6 +121,23 @@ const ERC20_MIN_ABI = [
 // ── Handlers ────────────────────────────────────────────────────────────
 
 let cachedChainId = null;
+let cachedCurveSupply = null;
+
+// "Creator bought X% at launch" is the disclosure that protects buyers -- the 2.5% cap
+// limits only the PRIVILEGED path and does not cap total creator holdings, so the
+// number itself is the protection. It was unrenderable until now: the hand-maintained
+// ABI truncated the Curve struct before creatorLaunchPurchased.
+//
+// The percentage is derived from the contract's own CURVE_TOKEN_SUPPLY rather than a
+// hardcoded 807e24, because a hardcoded constant here is the same trap as the hardcoded
+// ABI was.
+async function creatorLaunchBps(purchased) {
+  if (cachedCurveSupply === null) {
+    cachedCurveSupply = await withRetry(() => factory.CURVE_TOKEN_SUPPLY());
+  }
+  if (cachedCurveSupply === 0n) return null;
+  return Number((purchased * 10000n) / cachedCurveSupply);
+}
 
 async function upsertTokenFromChain(tokenAddress) {
   const curve = await withRetry(() => factory.curves(tokenAddress));
@@ -155,6 +174,9 @@ async function upsertTokenFromChain(tokenAddress) {
       virtual_token_reserves: curve.virtualTokenReserves.toString(),
       graduated: isGraduated(curve),
       state: stateLabel(curve),
+      creator_launch_purchased: curve.creatorLaunchPurchased.toString(),
+      creator_launch_bps: await creatorLaunchBps(curve.creatorLaunchPurchased),
+      lp_recipient: curve.lpRecipient,
     },
     { onConflict: "contract_address" }
   );
@@ -172,6 +194,8 @@ async function updateReservesFromChain(tokenAddress) {
       virtual_token_reserves: curve.virtualTokenReserves.toString(),
       graduated: isGraduated(curve),
       state: stateLabel(curve),
+      creator_launch_purchased: curve.creatorLaunchPurchased.toString(),
+      creator_launch_bps: await creatorLaunchBps(curve.creatorLaunchPurchased),
     })
     .eq("contract_address", tokenAddress);
   if (error) throw error;
