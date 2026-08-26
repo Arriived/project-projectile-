@@ -53,6 +53,21 @@ describe('LFX1 — lpRecipient', function () {
     expect(await ballista.lpRecipient()).to.equal(locker.address);
   });
 
+  it('rejects the factory itself -- LP sent there is unrecoverable', async function () {
+    const { ballista } = await env();
+    // The factory can only ever move usdc and launched tokens; there is no rescue path
+    // for an arbitrary ERC20, so LP delivered to it would be stranded permanently.
+    await expect(ballista.setLpRecipient(await ballista.getAddress()))
+      .to.be.revertedWithCustomError(ballista, 'ZeroAddress');
+  });
+
+  it('LpRecipientSet indexes both addresses so a watcher can filter', async function () {
+    const { ballista } = await env();
+    const frag = ballista.interface.getEvent('LpRecipientSet');
+    expect(frag.inputs.map((i) => i.indexed),
+      'both address params must be indexed').to.deep.equal([true, true]);
+  });
+
   it('emits old and new', async function () {
     const { ballista, locker } = await env();
     await expect(ballista.setLpRecipient(locker.address))

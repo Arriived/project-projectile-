@@ -12,6 +12,8 @@ const ERC20_ABI = [
   "function symbol() view returns (string)",
   "function decimals() view returns (uint8)",
   "function totalSupply() view returns (uint256)",
+  "function balanceOf(address) view returns (uint256)",
+  "function transfer(address to, uint256 amount) returns (bool)",
 ];
 
 const LIVE_FACTORY = "0x63C4c5b7D7add4dbE9Bf8f155711dd00F566Ec57";
@@ -56,6 +58,57 @@ async function main() {
   console.log(`  decimals         ${decimals}`);
   if (decimals !== 6n && decimals !== 6) {
     throw new Error(`decimals is ${decimals}, expected 6 -- every amount in Ballista assumes 6dp`);
+  }
+
+  // ── Transfer integrity, at zero bytecode cost ────────────────────────────
+  // LFX1 credits realUsdcReserves from the amount REQUESTED. The in-contract check
+  // catches a short transfer at runtime and reverts loudly, but that only helps after
+  // deployment; this catches "USDC is not what we think" BEFORE we point a factory at
+  // it, for free, because the address is fixed and immutable at construction.
+  //
+  // A SELF-transfer is the probe: a well-behaved token leaves the balance exactly
+  // unchanged, while a fee-on-transfer token that burns its fee shows a drop. It moves
+  // no value, so it is safe to run against a funded deployer.
+  const [signer] = await ethers.getSigners();
+  const usdcRW = new ethers.Contract(EXPECTED_USDC, ERC20_ABI, signer);
+  const bal = await usdcRW.balanceOf(signer.address);
+  if (bal === 0n) {
+    console.log(`  transfer probe   SKIPPED -- deployer holds no USDC`);
+    console.log(`                   fund it and re-run; this is the only free check that`);
+    console.log(`                   USDC moves the full amount before we deploy against it`);
+  } else {
+    // ARC SPECIFIC, AND IT PRODUCES A FALSE ALARM IF IGNORED: USDC is the native gas
+    // token here, so the transaction's own gas comes out of the balance being measured.
+    // A raw self-transfer looks like a fee-on-transfer token -- the first run of this
+    // probe reported a 897-wei "fee" that was simply the gas. Gas is charged in 18dp
+    // native units against the same pot the 6dp ERC20 view reads, so it is divided down
+    // by 1e12 before comparing.
+    //
+    // The in-contract check is NOT affected by this: it reads the CONTRACT's balance,
+    // and the contract never pays gas -- the caller does.
+    const probe = bal < 1_000_000n ? bal : 1_000_000n;
+    const before = await usdcRW.balanceOf(signer.address);
+    const est = await usdcRW.transfer.estimateGas(signer.address, probe);
+    const rcpt = await (await usdcRW.transfer(signer.address, probe, { gasLimit: est * 2n })).wait();
+    const after = await usdcRW.balanceOf(signer.address);
+
+    const gasNative = rcpt.gasUsed * rcpt.gasPrice;      // 18dp
+    const gasIn6dp = gasNative / 1_000_000_000_000n;     // -> 6dp, the ERC20 view
+    const drop = before - after;
+    const unexplained = drop > gasIn6dp ? drop - gasIn6dp : 0n;
+
+    console.log(`  transfer probe   moved ${probe}, balance fell ${drop}`);
+    console.log(`                   gas accounted for ${gasIn6dp} (USDC is the gas token on Arc)`);
+    // One unit of slack for the 18dp->6dp truncation, which cannot hide a 1bp fee: at
+    // the 1,000,000 probe a 1bp fee is 100 units.
+    if (unexplained > 1n) {
+      throw new Error(
+        `USDC is NOT transfer-exact: a self-transfer of ${probe} lost ${unexplained} ` +
+        `beyond gas. LFX1 credits reserves from the requested amount and would ` +
+        `under-collateralise the pooled balance on every buy. Do not deploy against this token.`
+      );
+    }
+    console.log(`  transfer probe   OK -- exact once gas is accounted for`);
   }
 
   // Cross-check: whatever the LIVE Ballista is actually pointed at is the

@@ -168,7 +168,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
     event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount);
     event CreatorFeesClaimed(address indexed creator, uint256 amount);
     event TreasuryFeesClaimed(address indexed treasury, uint256 amount);
-    event LpRecipientSet(address oldRecipient, address newRecipient);
+    event LpRecipientSet(address indexed oldRecipient, address indexed newRecipient);
     event LaunchCooldownSet(uint256 oldValue, uint256 newValue);
     event SymbolLockDurationSet(uint256 oldValue, uint256 newValue);
     event CreationFeeSet(uint256 oldValue, uint256 newValue);
@@ -206,6 +206,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
     error TradingNotOpenYet();
     error UnknownToken();
     error ZeroAddress();
+    error UsdcTransferMismatch();
     error ZeroAmount();
 
     constructor(address usdc_, address treasury_, address initialRouter_) Ownable(msg.sender) {
@@ -448,7 +449,14 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
             emit SnipeTaxCollected(token, msg.sender, f.snipeToTreasury, f.curveCut);
         }
 
+        // The only site that CREDITS realUsdcReserves from a requested amount, so the
+        // only one where a short transfer under-collateralises the pool rather than
+        // merely short-paying the caller. Both reads are inside ReentrancyGuard's
+        // nonReentrant, held by buy() and creatorLaunchBuy() -- the only two callers of
+        // _settleBuy -- so nothing else can move USDC between them.
+        uint256 balBeforeBuy = usdc.balanceOf(address(this));
         usdc.safeTransferFrom(msg.sender, address(this), q.actualUsdcIn);
+        if (usdc.balanceOf(address(this)) - balBeforeBuy != q.actualUsdcIn) revert UsdcTransferMismatch();
         if (f.treasuryCut > 0) treasuryFeesAccrued += f.treasuryCut;
         IERC20(token).safeTransfer(msg.sender, q.tokensOut);
         emit Trade(token, msg.sender, true, q.actualUsdcIn, q.tokensOut);
@@ -793,7 +801,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
     }
 
     function setLpRecipient(address lpRecipient_) external onlyOwner {
-        if (!(lpRecipient_ != address(0))) revert ZeroAddress();
+        if (!(lpRecipient_ != address(0) && lpRecipient_ != address(this))) revert ZeroAddress();
         emit LpRecipientSet(lpRecipient, lpRecipient_);
         lpRecipient = lpRecipient_;
     }

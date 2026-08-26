@@ -321,6 +321,28 @@ slot had 13 of 32 bytes used and an address needs 20.
 receives LP from tokens launched after `setLpRecipient` points at it. That is correct
 and safe, and it is also an operational fact worth knowing on the day.
 
+**⚠ HARD PRECONDITION — the pre-flip gate.** `setLpRecipient` is **never** called with
+a non-burn address until the recipient is (1) deployed, (2) verified on the explorer,
+and (3) proven on a fork to receive a v4 position and to operate it. The snapshot is
+immutable by design: there is no owner override and no rescue path, so a wrong recipient
+cannot be corrected for anything already launched. That is the trust property, and the
+mitigation is this gate rather than a contract escape hatch. **The default is
+`BURN_ADDRESS`, which is safe under both V2 and V4, so nothing about this blocks the
+freeze — it is a pre-flip item, not a pre-freeze one.**
+
+**CORRECTION, checked against the real API 24 Aug.** An earlier version of this note said
+a recipient that does not implement `onERC721Received` would make graduation revert.
+**That is wrong.** Uniswap v4-periphery `PositionManager.sol` mints with `_mint(owner,
+tokenId)` at **L369** (internal handler at L353, dispatched from `MINT_POSITION` at
+L213/L224) — **not `_safeMint`** — and its ERC721 base is **solmate**, whose `_mint`
+performs no receiver check. There is no callback on the mint path, so graduation will
+NOT revert regardless of what the recipient implements.
+
+The real risk is different and still serious: the position would be delivered into a
+contract that cannot *operate* it. The locker requirement is therefore "must be able to
+call `PositionManager` to collect fees and manage the position", **not** "must implement
+`onERC721Received`". Write the locker against that.
+
 **⚠ "LP Auto-Burned" becomes "LP Permanently Locked" the moment this points at a
 locker, and the two claims are not interchangeable.** A burn address needs zero trust —
 anyone can read `0x...dEaD` and stop thinking. A locker needs someone to verify its lock
