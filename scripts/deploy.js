@@ -219,8 +219,12 @@ async function main() {
   let commit = null, commitDirty = null;
   try {
     commit = require("child_process").execSync("git rev-parse HEAD").toString().trim();
+    // -uno: ignore UNTRACKED files. Plain --porcelain counts them, so a stray archive
+    // sitting in the repo root flags every deployment as irreproducible and the flag
+    // becomes noise. contracts/ is fully tracked, so tracked modifications are what
+    // actually determine whether this build can be reproduced from the commit.
     commitDirty = require("child_process")
-      .execSync("git status --porcelain").toString().trim().length > 0;
+      .execSync("git status --porcelain -uno").toString().trim().length > 0;
   } catch (_) { /* not a git checkout; leave null rather than guessing */ }
 
   const deploymentRecord = {

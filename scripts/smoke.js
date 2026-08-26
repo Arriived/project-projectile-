@@ -155,6 +155,7 @@ async function main() {
     console.log(`  attribute fees. All fee checks below read USDC Transfer events instead.`);
   }
   const accruedBefore = await ballista.creatorFeesAccrued(me.address);
+  const treasuryAccruedBefore = await ballista.treasuryFeesAccrued();
 
   const buyRcpt = await send("buy", ballista, "buy", [tokenAddress, spend, 0]);
   const buyBlk = await ethers.provider.getBlock(buyRcpt.blockNumber);
@@ -204,12 +205,17 @@ async function main() {
     feeEvents.length > 0 && feeEvents[0].args.amount === (spend * 90n) / 10_000n,
     feeEvents.length ? `${ethers.formatUnits(feeEvents[0].args.amount, 6)} USDC` : "no event");
 
-  const treasuryPaid = usdcTransferTo(buyRcpt, treasuryAddr);
+  // Treasury fees ACCRUE now rather than being pushed inside the trade, so there is no
+  // USDC Transfer to treasury in this receipt at all -- measuring one asserts the old
+  // behaviour. The obligation is what to check.
+  const treasuryDelta = (await ballista.treasuryFeesAccrued()) - treasuryAccruedBefore;
   const expectedTreasury = (spend * 100n) / 10_000n - (spend * 90n) / 10_000n
     + (totalTax * 7000n) / 10_000n;
-  check("treasury received base fee minus creator share, plus its tax share",
-    treasuryPaid === expectedTreasury,
-    `${ethers.formatUnits(treasuryPaid, 6)} USDC transferred (expected ${ethers.formatUnits(expectedTreasury, 6)})`);
+  check("treasury ACCRUED base fee minus creator share, plus its tax share",
+    treasuryDelta === expectedTreasury,
+    `${ethers.formatUnits(treasuryDelta, 6)} USDC accrued (expected ${ethers.formatUnits(expectedTreasury, 6)})`);
+  check("nothing was pushed to treasury inside the trade",
+    usdcTransferTo(buyRcpt, treasuryAddr) === 0n);
 
   // ── decay ────────────────────────────────────────────────────────────
   console.log("\nDECAY");
@@ -252,8 +258,10 @@ async function main() {
     sellTrade.args.usdcAmount === sellPayout,
     `quoted ${ethers.formatUnits(sellPayout, 6)}, Trade says ${ethers.formatUnits(sellTrade.args.usdcAmount, 6)}`);
   // Full reconciliation of every USDC unit the contract sent out on this sell.
-  check("sell USDC out reconciles: seller payout + treasury cut, creator share retained",
-    paidToSeller === sellPayout + sellTreasuryCut,
+  // Same change on the sell side: the treasury cut stays in the contract as an accrual,
+  // so the only USDC that leaves is the seller's payout.
+  check("sell USDC out reconciles: only the seller is paid, treasury cut retained",
+    paidToSeller === sellPayout,
     `transferred ${ethers.formatUnits(paidToSeller, 6)} = payout ${ethers.formatUnits(sellPayout, 6)} + treasury ${ethers.formatUnits(sellTreasuryCut, 6)}`);
   check("tokens left our balance", (await token.balanceOf(me.address)) === held - sellAmount);
   check("sell accrued more creator fees",

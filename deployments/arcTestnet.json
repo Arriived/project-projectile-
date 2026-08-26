@@ -1,9 +1,12 @@
 {
   "network": "arcTestnet",
+  "commit": "e5e937db68d5ce360cd26a14bac5b617b931aed3",
+  "commitShort": "e5e937d",
+  "commitDirty": false,
   "chainId": 5042002,
-  "ballista": "0x7072b0f726526B616101473aB6579A8F58fee1fb",
-  "deployBlock": 58301503,
-  "router": "0xe3287055068C662a4f03eA3Ae6ceF032C3A32F37",
+  "ballista": "0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802",
+  "deployBlock": 59003480,
+  "router": "0xFa159dDbE46B732AfAc14Bb7097505cdccD76438",
   "routerSource": "MockRouter deployed by this script (PLACEHOLDER -- not a real DEX)",
   "routerLive": true,
   "usdc": "0x3600000000000000000000000000000000000000",
@@ -13,12 +16,12 @@
   "constructorArgs": [
     "0x3600000000000000000000000000000000000000",
     "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
-    "0xe3287055068C662a4f03eA3Ae6ceF032C3A32F37"
+    "0xFa159dDbE46B732AfAc14Bb7097505cdccD76438"
   ],
-  "verifyCommand": "npx hardhat verify --contract contracts/LFX1.sol:LFX1 --network arcTestnet 0x7072b0f726526B616101473aB6579A8F58fee1fb 0x3600000000000000000000000000000000000000 0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb 0xe3287055068C662a4f03eA3Ae6ceF032C3A32F37",
-  "explorer": "https://testnet.arcscan.app/address/0x7072b0f726526B616101473aB6579A8F58fee1fb",
-  "recordedAt": "2026-08-22T12:28:50.583Z",
-  "commit": "60a3cbfb8a8ee266c4c3f846d3984b0e74241766",
-  "commitShort": "60a3cbf",
-  "provenance": "COMMIT: this deployment was built from 60a3cbf. Later commits changed the bytecode -- the ClampExceededOffer split altered the error selector table at byte 1546 -- so verifyCommand will NOT reproduce this deployment from a later HEAD. Check out the recorded commit first."
+  "verifyCommand": "npx hardhat verify --contract contracts/LFX1.sol:LFX1 --network arcTestnet 0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802 0x3600000000000000000000000000000000000000 0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb 0xFa159dDbE46B732AfAc14Bb7097505cdccD76438",
+  "explorer": "https://testnet.arcscan.app/address/0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802",
+  "recordedAt": "2026-08-26T21:31:59.169Z",
+  "commitDirtyNote": "recorded true by a bug in scripts/deploy.js -- plain `git status --porcelain` counts UNTRACKED files, and an unrelated archive sits in the repo root. The tracked tree was clean at e5e937d when this was deployed. The script now uses -uno.",
+  "deployedBytecodeKeccak": "0x664364c94891ea9f61fa17e7abcc235fb824cb1542c5fc7b83f9272f9bae15cd",
+  "bytecodeNote": "Deployed code matches the HEAD build except at 12 immutable reference sites, each differing in exactly ONE byte because Arc's USDC address 0x3600..00 has a single non-zero byte. `IERC20 public immutable usdc` is zeroed in the artifact's deployedBytecode and real on chain. Blockscout: is_fully_verified true, is_partially_verified false, is_changed_bytecode false."
 }
