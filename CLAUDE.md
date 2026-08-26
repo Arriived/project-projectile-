@@ -635,6 +635,32 @@ inverts the pool price.
 
 ---
 
+## Freeze gate — the mutation score, not the test count
+
+**52/56 guards killed = 92.9%**, on a clean run at `C:\dev\arc-launch`. Zero
+inconclusive, zero compile failures — contrast the OneDrive run that produced 29 phantom
+compile failures and a false UNDETECTED. The test count is not the gate and never was:
+228 passing tests coexisted with a real gap.
+
+**One survivor was a REAL GAP and is now closed.** `quoteBuy`'s `UnknownToken` guard had
+no test — three of the four view guards were asserted and this one was missed. Without
+it, `quoteBuy` on a non-existent token returns `tokensOut = 0` with `actualUsdcIn` set to
+the full amount and **does not revert**: "pay 1 USDC, receive nothing", which a frontend
+renders as a real quote. Exactly the misleading zero the guard exists to prevent.
+
+**The remaining four are equivalent mutants**, classified rather than waved through:
+
+| survivor | basis |
+|---|---|
+| `_quoteBuy` / `CurveMathError` | **Proven.** `ceilDiv` is non-increasing in its denominator and `newVirtualUsdc >= virtualUsdcReserves`, so `newVirtualToken <= ceilDiv(k, vUsdc) = vToken` always. |
+| `_quoteSell` / `CurveMathError` | **Proven**, symmetric. |
+| `_quoteBuy` / `ClampCostExceededOffer` | **Evidence, not proof.** 2,000,000 fuzzed cases, ~1,000,000 exercising the clamp path, zero firings. |
+| `_quoteSell` / `ClampInputExceededOffer` | **Evidence, not proof.** Same fuzz, same result. |
+
+The two clamp guards are defensive against a rounding case nobody has produced. Keep
+them: they cost little and they are the kind of guard whose absence is only discovered
+by the thing it would have caught.
+
 ## Foundry — depth, and a vacuous invariant caught by inversion
 
 **1000 runs x 250 depth = 250,000 calls per invariant**, up from 256 x 50 = 12,800.

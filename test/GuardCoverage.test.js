@@ -197,6 +197,13 @@ describe('LFX1 — guards the coverage sweep found untested', function () {
 
     it('views reject unknown tokens rather than returning a misleading zero', async function () {
       const { ballista, a } = await env();
+      // quoteBuy was MISSED here until the freeze-gate mutation run surfaced it: three of
+      // the four view guards were asserted and this one was not. Without it, quoteBuy on
+      // a non-existent token returns tokensOut = 0 with actualUsdcIn = the full amount
+      // and does NOT revert -- "pay 1 USDC, receive nothing", which a frontend renders as
+      // a real quote. That is precisely the misleading zero this test is named after.
+      await expect(ballista.quoteBuy(a.address, 1_000_000n))
+        .to.be.revertedWithCustomError(ballista, 'UnknownToken');
       await expect(ballista.quoteSell(a.address, 1n))
         .to.be.revertedWithCustomError(ballista, 'UnknownToken');
       await expect(ballista.currentPrice(a.address))
