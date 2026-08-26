@@ -148,14 +148,39 @@ on chain, in the contract name or in any published source path.
 
 | | address |
 |---|---|
-| **LFX1** (the launchpad) | `0x7072b0f726526B616101473aB6579A8F58fee1fb` (block 58301503) |
-| MockRouter (placeholder) | `0xe3287055068C662a4f03eA3Ae6ceF032C3A32F37` |
+| **LFX1** (the launchpad) | `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` (block 59003480) |
+| MockRouter (placeholder) | `0xFa159dDbE46B732AfAc14Bb7097505cdccD76438` |
 | USDC | `0x3600000000000000000000000000000000000000` |
 | treasury / owner | `0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb` (EOA — multisig pending) |
 
 Both exact matches on Blockscout (`is_fully_verified: true`,
 `is_partially_verified: false`, `is_changed_bytecode: false`). Explorer:
 `https://testnet.arcscan.app/address/0x7072b0f726526B616101473aB6579A8F58fee1fb`
+
+**⚠ LFX1 IS FROZEN AS OF THIS DEPLOYMENT.** From here the V4 build touches only NEW
+contracts — the adapter and the locker — never the core. `lpRecipient` exists precisely
+so that work is additive; if it ever appears to need a change inside `LFX1`, something
+has gone wrong with the additive design and that is worth stopping to ask about rather
+than reopening the contract.
+
+| | |
+|---|---|
+| commit | `e5e937db68d5ce360cd26a14bac5b617b931aed3` (`e5e937d`) |
+| deployed bytecode keccak256 | `0x664364c94891ea9f61fa17e7abcc235fb824cb1542c5fc7b83f9272f9bae15cd` |
+| size | 24,019 / 24,576 — **557 bytes free** |
+| mutation score at freeze | **52/56 = 92.9%**, the 4 survivors equivalent |
+| live smoke test | **44/44** |
+
+**The deployed code matches the HEAD build.** It differs from the artifact at 12
+immutable reference sites, each in exactly ONE byte, because `IERC20 public immutable
+usdc` is zeroed in the artifact's `deployedBytecode` and real on chain — and Arc's USDC
+address `0x3600..00` has a single non-zero byte, so only one byte per site differs. On
+any other chain this would be ~20 bytes per site. Blockscout confirms
+`is_fully_verified: true`, `is_partially_verified: false`, `is_changed_bytecode: false`.
+
+**`license_type` is still `none` on the explorer.** `hardhat verify` does not send one;
+BUSL-1.1 must be set through Blockscout's UI or a direct API call as `bsl_1_1`, and it
+still needs the `[LICENSOR]` entity name.
 
 Published source paths are now `contracts/LFX1.sol`, `contracts/LFX1Token.sol` and
 `contracts/interfaces/IDEXRouter.sol` — confirmed via Blockscout's API, no brand
@@ -164,7 +189,7 @@ decision is open.
 
 Superseded deployments: `0x63C4...Ec57` (original Ballista),
 `0x874C...1858`, `0x14faEc...0759`, `0x8a6175...44f7`, `0x19ba1F...01e3`
-(last one under the old name).
+(last under the old name), `0x7072b0...e1fb` (first LFX1, pre-freeze).
 
 The authoritative record is `deployments/arcTestnet.json`, written by
 `scripts/deploy.js` on every deploy. The table above is a convenience copy; if the
