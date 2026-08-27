@@ -660,8 +660,8 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
             address(usdc),
             tokenLiquidity,
             usdcLiquidity,
-            0,
-            0,
+            tokenLiquidity,
+            usdcLiquidity,
             c.lpRecipient,
             block.timestamp + 15 minutes
         ) returns (uint256 amountA, uint256 amountB, uint256 liquidity) {

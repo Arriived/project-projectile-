@@ -582,6 +582,48 @@ inverts the pool price.
 
 ---
 
+## Residual risk register
+
+Kept deliberately non-empty. A register that closes everything is the same failure as a
+test that cannot go red.
+
+### PERMANENT, UNMITIGABLE — Circle can pause USDC
+
+`paused()` exists on Arc USDC at `0x3600...0000` (verified live, alongside
+`isBlacklisted(address)` and `blacklister()`). **If Circle pauses USDC, every buy, sell,
+fee claim and graduation reverts.** Nothing in our design changes that and nothing can:
+USDC is both the quote asset and the gas token, so there is no fallback path. This is not
+a bug to fix, it is a dependency to disclose — it belongs in public risk copy, not only
+in this file.
+
+The same contract enforces a **blocklist on both sender and recipient** at runtime, and
+reverts consume gas. The treasury case is closed by accrue-and-claim; the remaining paths
+are enumerated in the blocklist section below.
+
+### LOAD-BEARING PARAMETER — the 807M : 193M curve/LP split
+
+This ratio is **not only curve economics. It is what makes the flash-loan buy-out-and-dump
+structurally unprofitable**, and it must not be changed without re-deriving that bound.
+
+Measured against the real contract with the snipe tax at zero (the attacker's best case):
+
+```
+buy out the entire curve      8,111.97 USDC spent, 807,000,000 tokens acquired
+pool seeded at graduation     193,000,000 tokens / 8,030.85 USDC
+dump ALL tokens (V2 0.3% fee) 6,477.14 USDC returned
+NET                          -1,634.84 USDC
+```
+
+The attacker acquires **4.18x more supply than the pool is seeded with**, so dumping the
+full curve into it moves price catastrophically against them. The bound is structural,
+not parametric: **the pool cannot return more than the 8,030.85 it holds, which is
+already less than the 8,111.97 spent** — so even a zero-slippage, zero-fee dump loses
+money. Holding cheaper tokens bought earlier does not rescue it; those are additional
+supply into the same bounded pool.
+
+**Narrow the curve:LP ratio and this margin erodes.** Re-derive before touching either
+constant.
+
 ## Hard-won constraints — these have caused real bugs
 
 - **Bytecode: 22,628 / 24,576 — 1,948 bytes free.** Was 5 bytes. Recovered by
