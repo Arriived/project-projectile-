@@ -28,8 +28,18 @@ import "../interfaces/IDEXRouter.sol";
 ///         attack turns on, and nothing else -- no real pair contract, no LP token
 ///         accounting, no fee-on mint, no k-invariant. Conclusions drawn from it are
 ///         "mock-verified against transcribed V2 logic", NOT "fork-executed". A fork run
-///         against the real router is what would settle it, and this file exists because
-///         that run is blocked on an archive RPC, not as a substitute for it.
+///         against the real router is what would settle it.
+///
+///         It also does not model TOKEN ORDERING: the real router sorts (tokenA, tokenB)
+///         internally, while this keys its pretend reserves by the order the caller passes
+///         them. A sorting bug cannot show up here, and about half of all launched tokens
+///         sort below USDC.
+///
+///         An earlier version of this note said the fork run was "blocked on an archive
+///         RPC". That is no longer true and was corrected: at the pinned block a
+///         historical eth_call to the V2 factory and getReserves() on the returned pair
+///         both succeed, so the configured endpoint serves archive state. The fork suite
+///         is empty, not blocked.
 contract MockV2Router is IDEXRouter {
     using SafeERC20 for IERC20;
 

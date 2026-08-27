@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| HEAD **when this was written** | `646e2ed` |
+| HEAD **when this was written** | `46386dd` |
 | bytecode | **24,018 / 24,576 — 558 free** |
 | tests | **233 Hardhat, 13 Foundry** |
 | deployed address | **none current.** `0xDF714C3b...` is STALE — see §7 |
@@ -379,6 +379,60 @@ they are destination properties, and a blocklist rejects a party, on either side
 user-side is R2: untestable, not covered. Do not let "simulated on testnet" read as
 "closed".
 
+## Mock-only sweep — what each stub does NOT reach
+
+Every component whose only coverage is a stub, and the gap in each. `MockV2Router`'s own
+header is the model: a stub that states its limits stays usable evidence; one that does not
+gets read as the real thing.
+
+### The V2 router — the largest gap, and it is NOT blocked
+
+**Every graduation test in the repo runs against a mock.** `MockRouter` returns exactly the
+amounts it was offered; `MockV2Router` transcribes `_addLiquidity`'s optimal-amount
+branching. Neither is Uniswap. Not reached by either:
+
+- **Token ordering.** V2 sorts `(tokenA, tokenB)` internally. `MockV2Router` keys its
+  pretend reserves by *the order the caller passes them*, so a sorting bug is invisible to
+  it — and roughly half of all launched tokens sort below USDC.
+- Real pair contract, LP token minting, the k-invariant, the protocol fee-on mint.
+- `quote()`'s rounding at real reserve magnitudes.
+- Whether `assert(amountAOptimal <= amountADesired)` can trip against real reserves.
+- `TransferHelper` semantics and deadline handling.
+
+**§1.1's attack was executed against a transcription, not against Uniswap.** That is strong
+evidence; it is not the same claim, and the section should not be read as if it were.
+
+**The fork is available — verified, not assumed.** At the pinned block 25,846,000 a
+historical `eth_call` to the V2 factory returns the USDC/WETH pair, and `getReserves()` on
+that pair returns real reserves, so the configured endpoint serves archive **state**, not
+merely code. Nothing in `test/` references `FORK`: the fork suite is **empty, not blocked**.
+
+### USDC
+
+`MockUSDC` is a plain 6dp ERC-20; `MockBlocklistUSDC` and `MockFeeOnTransferUSDC` cover the
+blocklist and short-transfer paths. Not reached:
+
+- **USDC as the gas token.** Every local test pays gas in ETH, so no test has ever executed
+  a path where the settlement asset and the gas asset are the same balance. That is the
+  configuration every real deployment runs in.
+- The truncating 6dp `balanceOf` over an 18dp native balance. §1.6's proof is arithmetic;
+  nothing executes it.
+- EIP-7708 native `Transfer` logs, `paused()` (R1), and sender-side blocklisting (R2 — the
+  substitution table above already scopes why).
+
+### `lpRecipient` and the burn
+
+`MockRouter` records `lastLpRecipient`, which proves the argument is **passed**. **No test
+mints a real LP token**, so nothing has confirmed LP actually arrives at `BURN_ADDRESS` and
+is irrecoverable there. "LP Auto-Burned" (§1.8) currently rests on argument passing, not on
+an observed burn.
+
+### Not even a stub
+
+- **Indexer** — migrations 001 and 002 unapplied, `SUPABASE_URL` does not resolve. The
+  generated-ABI test covers generation; nothing covers ingestion.
+- **Frontend** — not started (§8).
+
 **There is no clamped-buy refund path.** The clamp never pulls the excess: `_quoteBuy`
 computes `actualUsdcIn` for exactly the tokens available and `safeTransferFrom` pulls only
 that. Closed by structure, not by a fix.
@@ -490,7 +544,7 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| HEAD **when this was written** | `646e2ed` |
+| HEAD **when this was written** | `46386dd` |
 | bytecode | **24,018 / 24,576 — 558 free** |
 | tests | **233 Hardhat, 13 Foundry** |
 | last mutation score | 52/56 = 92.9% — **pre-dates this session's changes; must be re-run before re-freeze** |
