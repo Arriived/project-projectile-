@@ -20,7 +20,11 @@ Rebuilt after the first version produced results that were wrong in BOTH directi
   * The run was stopped externally and left a disabled guard sitting in the working
     tree, which could have poisoned every result after it. The source is now restored
     from git after EVERY site, on signals, and via atexit -- so a kill leaves at most
-    one mutation behind, and the next start self-heals before doing anything.
+    one mutation behind. It also took the mutation lease, so a leftover blocks commits
+    until a human clears it.
+  * That self-heal used to RESTORE a dirty SRC at start. It now refuses and prints the
+    diff. The tool cannot distinguish a killed run leftover from real uncommitted work,
+    and discarding the latter is unrecoverable.
 """
 import atexit
 import io
@@ -73,12 +77,20 @@ def parse_result(out):
 
 
 def main():
+    # REFUSE on dirty; never auto-restore. This used to self-heal by discarding whatever
+    # it found, on the assumption that a dirty SRC could only be a killed run's leftover
+    # mutation. It cannot tell that from real uncommitted work, and discarding the latter
+    # is unrecoverable -- the sibling tool did exactly that to an unstaged fix. Least of
+    # all should the freeze gate do it silently.
     if not is_clean():
-        print("!! %s was dirty at start (previous run killed mid-mutation). Restoring."
-              % SRC, flush=True)
-        restore()
-        if not is_clean():
-            sys.exit("refusing to run: %s still differs from HEAD" % SRC)
+        _, diff = run('git diff --stat -- "%s"' % SRC)
+        sys.exit(
+            "refusing to run: %s has uncommitted changes.\n\n%s\n"
+            "If this is a killed run's leftover mutation, discard it:\n"
+            "    git checkout -- %s\n"
+            "If it is real work, commit or stash it first -- a guard sweep restores from\n"
+            "git after every site and would destroy it." % (SRC, diff.strip(), SRC)
+        )
 
     try:
         mutation_lease.acquire("guard-coverage.py", "full guard sweep over " + SRC)

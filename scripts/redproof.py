@@ -71,6 +71,19 @@ def mut_treasury(s):
     return s.replace(a, "        if (false) treasuryFeesAccrued += f.treasuryCut; // MUTATED")
 
 
+def mut_fix_router_reactivation(s):
+    """The candidate FIX for R12, used to prove the characterisation test is real: make
+    approval single-use by clearing it on activation."""
+    a = _anchor(s, "        router = router_;")
+    return s.replace(a, "        routerProposedAt[router_] = 0; // MUTATED\n" + a)
+
+
+def mut_fix_creationfee_hash(s):
+    """The candidate FIX for R13: pin creationFeeUsdc in the economics hash."""
+    a = _anchor(s, "            symbolLockDuration\n        ));")
+    return s.replace(a, "            symbolLockDuration,\n            creationFeeUsdc // MUTATED\n        ));")
+
+
 def mut_multicurve_claim_prank(s):
     a = _anchor(s, "        vm.prank(creator);")
     return s.replace(a, "        // MUTATED: prank removed, restoring the dead-claim bug")
@@ -94,6 +107,18 @@ MUTATIONS = {
         "suite": CROSS_SUITE,
         "fn": mut_treasury,
         "doc": "drops the treasury accrual; unaccounted funds read as surplus to a >= check",
+    },
+    "fix-router-reactivation": {
+        "file": SRC,
+        "suite": None,
+        "fn": mut_fix_router_reactivation,
+        "doc": "candidate fix for R12; the R12 characterisation test must go RED under it",
+    },
+    "fix-creationfee-hash": {
+        "file": SRC,
+        "suite": None,
+        "fn": mut_fix_creationfee_hash,
+        "doc": "candidate fix for R13; the R13 characterisation test must go RED under it",
     },
     "multicurve-claim-prank": {
         "file": MULTI_HANDLER,

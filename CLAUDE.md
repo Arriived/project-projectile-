@@ -6,9 +6,9 @@
 
 | | |
 |---|---|
-| HEAD **when this was written** | `46386dd` |
+| HEAD **when this was written** | `e079cc3` |
 | bytecode | **24,018 / 24,576 — 558 free** |
-| tests | **233 Hardhat, 13 Foundry** |
+| tests | **241 Hardhat, 13 Foundry** |
 | deployed address | **none current.** `0xDF714C3b...` is STALE — see §7 |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
@@ -327,6 +327,80 @@ test that cannot go red. Each entry: **structure** (closed by construction), **p
 | R9 | Fee-on-transfer creation fee over-credits `treasuryFeesAccrued` | **OPEN — priced and declined** | +339 bytes to close, in a scenario where buys already revert. |
 | R10 | `SELFDESTRUCT` beneficiary push can put sub-6dp native dust in the factory | **OPEN — trivial** | Permanently stranded (no native-send path out). Does **not** corrupt the delta check — see 1.6. |
 | R11 | `license_type: none` on the explorer | **OPEN — blocked** | Needs `[LICENSOR]`. |
+| R12 | **Router approval is permanent, not single-use.** Any router that has ever matured stays instantly re-activatable, and the re-activation emits only `RouterActivated` | **OPEN** | `activateRouter` never clears `routerProposedAt`. Proven both ways in `ActorPhase.adversarial.test.js`. Clearing it on activation closes R12b but **not** R12a — the constructor seeds the mapping directly without routing through `activateRouter`, so the bootstrap router's approval survives that fix untouched (red-proved). `revokeRouter` is the only thing that clears it today. **§1.5's monitoring requirement is insufficient as written: watch `RouterActivated`, not just `RouterProposed`.** |
+| R13 | **`creationFeeUsdc` is absent from `currentEconomicsHash()`** — the one fee the creator pays directly is the one pinning does not cover | **OPEN** | Owner can raise it between the creator seeing terms and their transaction landing; the pinned hash is unchanged so the guard cannot fire. Proven: creator pinned the old terms and paid a 1000x fee. **Exposure is bounded by the creator's approval** — an exact-amount approval is safe, `MaxUint256` is not. The frontend must not approve max for the creation fee. |
+| R14 | USDC or launched tokens sent directly to the factory are **permanently stranded** | **OPEN — unrecoverable** | Every payout path is bounded by accounting, never by balance, so nothing can pay a donation out. Also means §1.10's exact conservation is a **closed-system** property: a donation breaks the equality on-chain, though nothing in the handler performs one. Do not read it as "the factory can never hold unaccounted USDC". |
+| R15 | **No local test pays gas in USDC** | **OPEN — structural** | Every Hardhat and fork test pays gas in ETH, so the one-balance configuration every real deployment runs in — settlement asset and gas asset as the same balance — is only ever exercised on Arc testnet. §1.6's delta proof is arithmetic, not executed. |
+| R16 | `setTreasury` emits no event | **OPEN — trivial** | Every other setter emits one. An owner redirecting the treasury is invisible to indexers and to monitoring. |
+
+---
+
+## Actor/phase pass — the four questions answered
+
+⚠ §7 called these "the five specific questions" but lists **four**. Answered as listed;
+if a fifth was intended it was lost before this file was written.
+
+**1. Owner-key blast radius, severity order.**
+
+1. **`activateRouter` to a hostile router.** Takes the whole LP allocation plus all
+   accumulated USDC of every graduating token. Nominally gated by 24h — but see R12: any
+   previously-matured address, *including the constructor's bootstrap router*, is instantly
+   re-activatable with no proposal event. This is the top of the list and the timelock is
+   weaker than §1.5 reads.
+2. **`setLpRecipient`.** No timelock at all. Bounded to launches *after* the change by the
+   per-curve snapshot (§1.8), which is exactly what that snapshot buys, but it is instant
+   and it silently invalidates the "LP Auto-Burned" claim for everything launched after.
+3. **`setTreasury`.** Redirects all accrued protocol fees, and emits **no event** (R16).
+   Bounded to protocol revenue, not user funds.
+4. **`setCreationFee`.** Unbounded and unhashed (R13). Bounded in practice only by what
+   creators have approved.
+5. **`setDefaultFees` / `setDefaultCreatorFees` / `publishSnipeTaxTable` /
+   `setDefaultGraduationThreshold`.** All snapshotted per curve and covered by the
+   economics hash, so they reach new launches only and a pinned creator is protected.
+6. **`pause()`.** Halts create/buy/sell. Cannot stop `graduate()` — deliberate (§1.5). No
+   fund loss.
+7. **`transferOwnership`.** Plain `Ownable`: immediate, irreversible (R8).
+
+**2. The 24h timelock window's realistic exposure.**
+
+Narrower than it looks, and for the wrong reason. The window only ever applies to an
+address's **first** maturation. After that the approval stands for the life of the contract
+unless explicitly revoked, so the set of instantly-activatable routers only grows. The
+realistic case is mundane rather than exotic: rotating V2 → a V4 adapter later without
+revoking V2 leaves V2 permanently one transaction away, and a mock router used on a testnet
+deployment would be too. **Revoke on rotation, not just on suspicion.** Within a genuine
+24h window the exposure is the documented one — it defends only if a human is watching, and
+per R12 they must watch `RouterActivated` to see a re-activation at all.
+
+**3. Donation and direct-transfer paths.**
+
+Both directions land in R14: stranded, unrecoverable, harmless to accounting. Graduation
+computes `tokenLiquidity` from `LP_TOKEN_RESERVE + c.tokenReserves`, never from
+`balanceOf`, so donated tokens cannot inflate a pool or shift a ratio — proven. Donated
+USDC likewise cannot be withdrawn by anyone, including the owner. The only real consequence
+is on the *test* side: §1.10's exact equality holds for the closed system the handler
+drives, and would not hold on a chain where anyone can transfer in.
+
+There is no `receive()` or `fallback()`, so a plain native send reverts; the SELFDESTRUCT
+push remains the one bypass (R10).
+
+**4. Can a token be launched that can never graduate? No.**
+
+The depletion arm (`tokenReserves == 0`) is reachable regardless of what the threshold was
+snapshotted at, because buying out the curve costs a bounded ~$8.1k no matter how the
+threshold is set. So even an absurd `setDefaultGraduationThreshold` cannot strand a token
+permanently — it only removes the threshold arm. `createToken` also refuses while
+`router == address(0)`, so nothing can be launched into a routerless state.
+
+The failure modes that do exist are all **recoverable, not permanent**: an adversarial pair
+parks the curve at `GRADUATION_READY` with reserves intact until the ratio is corrected
+(§1.1, R6/R7); a revoked router blocks `graduate()` until one is live; USDC being paused
+halts everything (R1). Each of those is a stall with a key, not a lock without one.
+
+Two supporting facts checked rather than assumed: the graduation approval can never exceed
+the factory's token balance, because `LP_TOKEN_RESERVE + tokenReserves` and the held balance
+are the same quantity by construction; and threshold `0` does not divide by zero in
+`graduationProgressBps`, because the `>=` early-return fires first.
 
 ---
 
@@ -544,9 +618,9 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| HEAD **when this was written** | `46386dd` |
+| HEAD **when this was written** | `e079cc3` |
 | bytecode | **24,018 / 24,576 — 558 free** |
-| tests | **233 Hardhat, 13 Foundry** |
+| tests | **241 Hardhat, 13 Foundry** |
 | last mutation score | 52/56 = 92.9% — **pre-dates this session's changes; must be re-run before re-freeze** |
 
 ## ⚠ `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` IS STALE
