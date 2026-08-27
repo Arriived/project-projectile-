@@ -1,5 +1,52 @@
 # Ballista
 
+---
+
+# RESUME HERE
+
+| | |
+|---|---|
+| HEAD | `2d92cfe` |
+| bytecode | **24,018 / 24,576 — 558 free** |
+| tests | **233 Hardhat, 7 Foundry** |
+| deployed address | **none current.** `0xDF714C3b...` is STALE — see §7 |
+
+## First run in a fresh clone — do this before anything else
+
+```bash
+npm install
+git submodule update --init          # forge-std
+git config core.hooksPath .githooks  # REQUIRED: see below
+npm run build                        # compile + regenerate the indexer ABI
+```
+
+**`git config core.hooksPath .githooks` is not optional.** Without it the pre-commit
+mutation guard is silently inert — a fresh clone gets **no error, just no protection**,
+and a red-proof mutation can reach a commit unnoticed. Nothing will tell you it is
+missing.
+
+## The exact next action
+
+**Write the cross-curve contamination invariant** (Foundry): assert that the sum of every
+curve's `realUsdcReserves` + `treasuryFeesAccrued` + all creator accruals never exceeds
+the contract's actual USDC balance. The factory holds **one pooled USDC balance across all
+curves**, so this is the property that says one curve cannot reach another's reserves.
+**Prove it can go red** before trusting it — see §5 for why that is not optional here.
+
+Then, in this order:
+
+1. Cross-curve contamination invariant *(next action, above)*
+2. Mock-only sweep — every component whose sole coverage is a stub
+3. Actor/phase adversarial pass, including the five specific questions in §7
+4. Graduation helper — external contract, no `LFX1` bytecode
+5. Fork suite proper against real Uniswap V2
+6. Re-freeze — clean mutation run, redeploy, new address
+
+**The fork is gated behind `FORK=1` and pinned to block 25,846,000.** Ordinary test runs
+are local and unforked. Do not re-pin without re-running the presence checks — see §4.
+
+---
+
 A memecoin launchpad native to Arc (Circle's stablecoin L1, USDC as native gas).
 Bonding-curve launches that graduate to a DEX pool.
 
@@ -404,6 +451,17 @@ real docs.
 - **Frontend: not started. This is the critical path.** Price impact must be a headline number — a $500 buy at launch takes ~21% of supply with ~19% slippage. `minTokensOut` must never default to zero. Show "creator bought X% at launch" on every token page — the 2.5% cap limits only the *privileged* path and does not cap total creator holdings, so disclosure is the actual protection. A quote taken during the snipe window is stale within **one second** and can understate the received amount by ~9x (favourable to the buyer, so `minTokensOut` never trips — but a frozen quote is simply wrong).
 - **Indexer:** migrations 001 and 002 **both unapplied**; `SUPABASE_URL` does not resolve. Goldsky vs Envio undecided pending their answers on Arc mainnet support; Supabase is the default if neither lands. The ABI is **generated** from build artifacts (`npm run build`) — the hand-maintained one silently truncated the `Curve` struct from 22 fields to 16 and hid `creatorLaunchPurchased`, the disclosure that protects buyers. **Never hand-edit it.**
 - **Licence:** BUSL-1.1, change licence GPL-2.0-or-later, Change Date 2030-09-16, `[LICENSOR]` **still unfilled** and blocking Blockscout's `license_type` (value `bsl_1_1`; `hardhat verify` does not send one, so it needs the UI or a direct API call). ⚠ Verifying on a public explorer arguably **starts** the four-year BUSL clock.
+- **CCTP V2 bridging is REQUIRED non-contract scope — it is NOT descoped.** It is the
+  day-one frontend onramp and sits at the **top of the entire funnel**: a user on
+  Base / Ethereum / Solana must be able to buy an Arc-native token without manually
+  bridging first. What was removed from this file was the claim that it is a *contract*
+  feature — `LFX1` does not and will not implement bridging. The frontend does.
+  **Do not read its absence from the contract sections as descoped.**
+  Use Circle's **Forwarding Service** (Bridge Kit, or `depositForBurnWithHook`) rather
+  than a custom relayer: no wallets to fund, no retries to manage, and fees are taken from
+  the minted USDC so users need no destination gas. Arc testnet is CCTP **domain 26** and
+  is a supported Forwarding Service destination; **Arc mainnet is still absent from
+  Circle's published CCTP address list — verify before relying on it.**
 - **Owner is a single EOA** by the operator's deliberate decision. Do not re-raise.
 - **`ARCHITECTURE.md`** holds 140 comment blocks / 748 lines moved out of the deployed source. Published nowhere; it is the only copy of that reasoning.
 
@@ -413,4 +471,4 @@ real docs.
 
 Solidity 0.8.24 · Hardhat · Foundry · Slither · Node.js · Supabase (Postgres + RLS) ·
 plain HTML/CSS/JS frontend, no build step · Arc Testnet (chainId 5042002) · Blockscout ·
-Circle CCTP V2 (deferred, out of launch scope)
+Circle CCTP V2 — **required non-contract scope, see §8**
