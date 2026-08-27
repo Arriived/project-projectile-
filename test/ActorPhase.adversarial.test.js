@@ -36,57 +36,84 @@ describe('Ballista — actor/phase pass: compromised owner', function () {
       .map((l) => l.name);
   }
 
-  // FINDING R12. activateRouter never clears routerProposedAt, so approval is permanent
-  // rather than single-use. Any router that has ever matured stays instantly
-  // re-activatable for the life of the contract, and the re-activation emits only
-  // RouterActivated. 1.5 names monitoring RouterProposed as a launch requirement; that
-  // monitor does not fire here.
+  // R12 -- FIXED. Router approval is single-use. It was permanent: activateRouter never
+  // cleared routerProposedAt, so any address that had ever matured stayed one transaction
+  // away for the life of the contract, and the re-activation emitted only RouterActivated.
+  // A compromised owner key could therefore skip the 24h timelock entirely by re-using a
+  // previously-approved address, with no RouterProposed for a monitor to catch.
   //
-  // Split in two because the obvious fix -- clearing routerProposedAt inside
-  // activateRouter -- closes only the second case. The constructor seeds the mapping
-  // directly and never routes through activateRouter, so the bootstrap router's approval
-  // survives that fix untouched. Proven: under the candidate fix, R12b goes red and R12a
-  // stays green.
+  // The fix has two halves and BOTH are needed. Clearing on activation closes the normal
+  // path; the constructor also had to stop writing routerProposedAt at all, because it
+  // seeded the mapping directly without ever routing through activateRouter, leaving the
+  // bootstrap router permanently approved even once the first half was in place.
 
-  // R12a: the bootstrap router. Approval seeded in the constructor, consumed by nothing.
-  it('R12a: the BOOTSTRAP router is instantly re-activatable forever', async function () {
+  // R12a: the bootstrap router leaves no standing approval behind it.
+  it('R12a: the BOOTSTRAP router leaves NO standing approval', async function () {
     const { ballista, a, b } = await deploy();
+
+    // Live from block zero, as the bootstrap is meant to be.
+    expect(await ballista.router()).to.equal(a);
+    // But with no approval banked for later re-use.
+    expect(await ballista.routerProposedAt(a)).to.equal(0n);
 
     await ballista.proposeRouter(b);
     await time.increase(DAY + 1);
     await ballista.activateRouter(b);
     expect(await ballista.router()).to.equal(b);
 
-    // Never revoked, so the constructor's proposal timestamp still stands.
-    expect(await ballista.routerProposedAt(a)).to.not.equal(0n);
-
-    const rc = await (await ballista.activateRouter(a)).wait();
-    expect(await ballista.router()).to.equal(a);
-
-    const names = eventNames(rc, ballista);
-    expect(names).to.include('RouterActivated');
-    expect(names, 'a watcher of RouterProposed sees nothing here').to.not.include('RouterProposed');
+    // The bootstrap router cannot be flipped back to without a fresh proposal.
+    await expect(ballista.activateRouter(a))
+      .to.be.revertedWithCustomError(ballista, 'RouterNotProposed');
   });
 
-  // R12b: a router approved the normal way. Same permanence, and this is the half a
-  // single-use fix would close.
-  it('R12b: a router activated via activateRouter is also instantly re-activatable', async function () {
+  // R12b: activation consumes the approval.
+  it('R12b: activation CONSUMES the approval -- no instant re-activation', async function () {
     const { ballista, b, c } = await deploy();
 
     await ballista.proposeRouter(b);
     await time.increase(DAY + 1);
     await ballista.activateRouter(b);
+    expect(await ballista.routerProposedAt(b), 'approval must be spent').to.equal(0n);
 
     await ballista.proposeRouter(c);
     await time.increase(DAY + 1);
     await ballista.activateRouter(c);
     expect(await ballista.router()).to.equal(c);
 
-    // B's approval is still standing even though it was already consumed once.
-    expect(await ballista.routerProposedAt(b)).to.not.equal(0n);
-    const rc = await (await ballista.activateRouter(b)).wait();
+    // Going back to B costs a fresh proposal and a fresh 24h, in the open.
+    await expect(ballista.activateRouter(b))
+      .to.be.revertedWithCustomError(ballista, 'RouterNotProposed');
+
+    await ballista.proposeRouter(b);
+    await expect(ballista.activateRouter(b))
+      .to.be.revertedWithCustomError(ballista, 'RouterTimelockPending');
+    await time.increase(DAY + 1);
+    await ballista.activateRouter(b);
     expect(await ballista.router()).to.equal(b);
-    expect(eventNames(rc, ballista)).to.not.include('RouterProposed');
+  });
+
+  // The property the fix exists for, stated directly: every route to a live router now
+  // passes through a RouterProposed event and a 24h wait. There is no path that reaches
+  // activateRouter without one, so a monitor watching proposals cannot be stepped around.
+  it('R12: no router can go live without a fresh RouterProposed and a full timelock', async function () {
+    const { ballista, b } = await deploy();
+
+    // No proposal at all.
+    await expect(ballista.activateRouter(b))
+      .to.be.revertedWithCustomError(ballista, 'RouterNotProposed');
+
+    // Proposal, but early.
+    await ballista.proposeRouter(b);
+    await time.increase(DAY - 60);
+    await expect(ballista.activateRouter(b))
+      .to.be.revertedWithCustomError(ballista, 'RouterTimelockPending');
+
+    // Only after the full wait.
+    await time.increase(120);
+    const rc = await (await ballista.activateRouter(b)).wait();
+    expect(eventNames(rc, ballista)).to.include('RouterActivated');
+    // And the approval is spent again, so this is not a one-off.
+    expect(await ballista.routerProposedAt(b)).to.equal(0n);
   });
 
   // The lever that does close it, so the finding is actionable rather than abstract.

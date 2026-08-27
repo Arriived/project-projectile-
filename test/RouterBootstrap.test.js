@@ -53,8 +53,13 @@ describe('Ballista — constructor router bootstrap', function () {
     // activatableAt is simply "now" -- honest, and reconstructable from logs.
     const blk = await ethers.provider.getBlock(rc.blockNumber);
     expect(proposed.args.activatableAt).to.equal(BigInt(blk.timestamp));
-    // The proposal ledger reflects an approved router.
-    expect(await ballista.routerProposedAt(routerAddress)).to.equal(BigInt(blk.timestamp));
+    // The proposal ledger is left EMPTY -- see R12. This assertion used to require the
+    // opposite, that the constructor bank a proposal timestamp for the bootstrap router.
+    // That is precisely what made the bootstrap router permanently re-activatable: nothing
+    // ever consumed the entry, so a compromised owner could flip back to it later with no
+    // proposal and no timelock. The events above are the audit trail; the ledger is for
+    // pending approvals only, and the bootstrap router has none outstanding.
+    expect(await ballista.routerProposedAt(routerAddress)).to.equal(0n);
   });
 
   it('address(0) preserves the old behaviour exactly -- gated until the timelock clears', async function () {

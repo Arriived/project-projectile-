@@ -6,9 +6,9 @@
 
 | | |
 |---|---|
-| HEAD **when this was written** | `c6db7f9` |
-| bytecode | **24,018 / 24,576 — 558 free** |
-| tests | **241 Hardhat + 3 fork (FORK=1), 13 Foundry** |
+| HEAD **when this was written** | `f05f4a4` |
+| bytecode | **24,030 / 24,576 — 546 free** |
+| tests | **242 Hardhat + 3 fork (FORK=1), 13 Foundry** |
 | deployed address | **none current.** `0xDF714C3b...` is STALE — see §7 |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
@@ -188,6 +188,21 @@ so revocation is a hard stop.
 **Monitoring `RouterProposed` is a launch requirement.** Unwatched, the 24h timelock is 24
 hours of decoration.
 
+**Router approval is SINGLE-USE, and that is load-bearing (R12, fixed).** `activateRouter`
+consumes `routerProposedAt` and the constructor banks nothing, so **every** route to a live
+router passes through a fresh `RouterProposed` and a full 24h wait. There is no path to
+`activateRouter` that skips one.
+
+This was not true until it was fixed, and the earlier version of this section was wrong in a
+way worth keeping visible: approval used to be permanent, so any address that had ever
+matured stayed one transaction from live for the life of the contract, and the
+re-activation emitted **only `RouterActivated`**. A compromised owner key could therefore
+skip the timelock entirely by re-using a previously-approved address, and a monitor
+watching `RouterProposed` — exactly what this section told you to watch — would see
+nothing at all. Watching proposals is sufficient again **because** approval is now
+single-use; the two facts are not independent, and neither should be changed without the
+other.
+
 ## 1.6 Variant B's balance-delta check is exact despite Arc's truncating `balanceOf`
 
 `_settleBuy` measures the actual balance delta around the USDC pull and reverts on any
@@ -330,7 +345,7 @@ test that cannot go red. Each entry: **structure** (closed by construction), **p
 | R9 | Fee-on-transfer creation fee over-credits `treasuryFeesAccrued` | **OPEN — priced and declined** | +339 bytes to close, in a scenario where buys already revert. |
 | R10 | `SELFDESTRUCT` beneficiary push can put sub-6dp native dust in the factory | **OPEN — trivial** | Permanently stranded (no native-send path out). Does **not** corrupt the delta check — see 1.6. |
 | R11 | `license_type: none` on the explorer | **OPEN — blocked** | Needs `[LICENSOR]`. |
-| R12 | **Router approval is permanent, not single-use.** Any router that has ever matured stays instantly re-activatable, and the re-activation emits only `RouterActivated` | **OPEN** | `activateRouter` never clears `routerProposedAt`. Proven both ways in `ActorPhase.adversarial.test.js`. Clearing it on activation closes R12b but **not** R12a — the constructor seeds the mapping directly without routing through `activateRouter`, so the bootstrap router's approval survives that fix untouched (red-proved). `revokeRouter` is the only thing that clears it today. **§1.5's monitoring requirement is insufficient as written: watch `RouterActivated`, not just `RouterProposed`.** |
+| R12 | Router approval was **permanent, not single-use** — a compromised owner key could skip the 24h timelock by re-activating any previously-approved address, emitting only `RouterActivated` | **CLOSED — structure** | Fixed in two halves, both required and both red-proved (`regress-router-single-use`, `regress-router-bootstrap`). `activateRouter` now consumes `routerProposedAt`; the constructor no longer banks one for the bootstrap router. Clearing on activation alone was **not** enough — the constructor seeds the mapping without routing through `activateRouter`, so the bootstrap router stayed permanently approved under that partial fix. **+12 bytes** (24,018 → 24,030). Every route to a live router now passes a fresh `RouterProposed` and a full wait. |
 | R13 | **`creationFeeUsdc` is absent from `currentEconomicsHash()`** — the one fee the creator pays directly is the one pinning does not cover | **OPEN** | Owner can raise it between the creator seeing terms and their transaction landing; the pinned hash is unchanged so the guard cannot fire. Proven: creator pinned the old terms and paid a 1000x fee. **Exposure is bounded by the creator's approval** — an exact-amount approval is safe, `MaxUint256` is not. The frontend must not approve max for the creation fee. |
 | R14 | USDC or launched tokens sent directly to the factory are **permanently stranded** | **OPEN — unrecoverable** | Every payout path is bounded by accounting, never by balance, so nothing can pay a donation out. Also means §1.10's exact conservation is a **closed-system** property: a donation breaks the equality on-chain, though nothing in the handler performs one. Do not read it as "the factory can never hold unaccounted USDC". |
 | R15 | **No local test pays gas in USDC** | **OPEN — structural** | Every Hardhat and fork test pays gas in ETH, so the one-balance configuration every real deployment runs in — settlement asset and gas asset as the same balance — is only ever exercised on Arc testnet. §1.6's delta proof is arithmetic, not executed. |
@@ -346,10 +361,16 @@ if a fifth was intended it was lost before this file was written.
 **1. Owner-key blast radius, severity order.**
 
 1. **`activateRouter` to a hostile router.** Takes the whole LP allocation plus all
-   accumulated USDC of every graduating token. Nominally gated by 24h — but see R12: any
-   previously-matured address, *including the constructor's bootstrap router*, is instantly
-   re-activatable with no proposal event. This is the top of the list and the timelock is
-   weaker than §1.5 reads.
+   accumulated USDC of every graduating token. **Now genuinely gated by 24h** — R12 is
+   closed, approval is single-use, and there is no path to a live router that does not emit
+   a fresh `RouterProposed` first. Still the top of the list, because the ceiling on the
+   loss is unchanged; what changed is that the key alone no longer buys immediacy. The
+   defence is now a 24h window someone has to actually be watching, which is a monitoring
+   commitment rather than a code property — see §1.5.
+
+   *Before the fix this entry read "nominally gated by 24h", which understated it: a
+   compromised key skipped the timelock outright by re-using a previously-approved
+   address, and the monitor this file told you to run would not have fired.*
 2. **`setLpRecipient`.** No timelock at all. Bounded to launches *after* the change by the
    per-curve snapshot (§1.8), which is exactly what that snapshot buys, but it is instant
    and it silently invalidates the "LP Auto-Burned" claim for everything launched after.
@@ -366,14 +387,18 @@ if a fifth was intended it was lost before this file was written.
 
 **2. The 24h timelock window's realistic exposure.**
 
-Narrower than it looks, and for the wrong reason. The window only ever applies to an
-address's **first** maturation. After that the approval stands for the life of the contract
-unless explicitly revoked, so the set of instantly-activatable routers only grows. The
-realistic case is mundane rather than exotic: rotating V2 → a V4 adapter later without
-revoking V2 leaves V2 permanently one transaction away, and a mock router used on a testnet
-deployment would be too. **Revoke on rotation, not just on suspicion.** Within a genuine
-24h window the exposure is the documented one — it defends only if a human is watching, and
-per R12 they must watch `RouterActivated` to see a re-activation at all.
+The full 24h, on every activation, now that R12 is closed. The window used to apply only
+to an address's **first** maturation — after that the approval stood for the life of the
+contract, so the set of instantly-activatable routers only ever grew and a compromised key
+could reach a live hostile router in one transaction. Both halves are fixed, so the
+exposure is the documented one and nothing else: **24 hours during which a `RouterProposed`
+event is public and someone has to notice it.**
+
+That is a monitoring commitment, not a code guarantee. Unwatched it is still 24 hours of
+decoration. `revokeRouter` remains immediate and is still the right lever on suspicion —
+and revoking on *rotation* is still worth doing, not because approval lingers any more, but
+because a revoked router cannot be activated even by an owner who later re-proposes it
+without waiting.
 
 **3. Donation and direct-transfer paths.**
 
@@ -638,9 +663,9 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| HEAD **when this was written** | `c6db7f9` |
-| bytecode | **24,018 / 24,576 — 558 free** |
-| tests | **241 Hardhat + 3 fork (FORK=1), 13 Foundry** |
+| HEAD **when this was written** | `f05f4a4` |
+| bytecode | **24,030 / 24,576 — 546 free** |
+| tests | **242 Hardhat + 3 fork (FORK=1), 13 Foundry** |
 | last mutation score | 52/56 = 92.9% — **pre-dates this session's changes; must be re-run before re-freeze** |
 
 ## ⚠ `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` IS STALE

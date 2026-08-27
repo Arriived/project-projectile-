@@ -216,7 +216,6 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
 
         if (initialRouter_ != address(0)) {
 
-            routerProposedAt[initialRouter_] = block.timestamp;
             emit RouterProposed(initialRouter_, block.timestamp);
             router = initialRouter_;
             emit RouterActivated(initialRouter_);
@@ -752,6 +751,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
         uint256 proposedAt = routerProposedAt[router_];
         if (!(proposedAt != 0)) revert RouterNotProposed();
         if (!(block.timestamp >= proposedAt + ROUTER_TIMELOCK)) revert RouterTimelockPending(proposedAt + ROUTER_TIMELOCK);
+        routerProposedAt[router_] = 0;
         router = router_;
         emit RouterActivated(router_);
     }

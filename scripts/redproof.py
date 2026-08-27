@@ -72,11 +72,19 @@ def mut_treasury(s):
     return s.replace(a, "        if (false) treasuryFeesAccrued += f.treasuryCut; // MUTATED")
 
 
-def mut_fix_router_reactivation(s):
-    """The candidate FIX for R12, used to prove the characterisation test is real: make
-    approval single-use by clearing it on activation."""
-    a = _anchor(s, "        router = router_;")
-    return s.replace(a, "        routerProposedAt[router_] = 0; // MUTATED\n" + a)
+def mut_regress_router_single_use(s):
+    """Undo half of the R12 fix: stop consuming the approval on activation, so a matured
+    router stays permanently re-activatable."""
+    a = _anchor(s, "        routerProposedAt[router_] = 0;\n        router = router_;")
+    return s.replace(a, "        // MUTATED: approval no longer consumed\n        router = router_;")
+
+
+def mut_regress_router_bootstrap(s):
+    """Undo the other half: let the constructor bank a permanent approval for the
+    bootstrap router again. Clearing on activation alone does NOT close this, because the
+    constructor never routes through activateRouter."""
+    a = _anchor(s, "            emit RouterProposed(initialRouter_, block.timestamp);")
+    return s.replace(a, "            routerProposedAt[initialRouter_] = block.timestamp; // MUTATED\n" + a)
 
 
 def mut_fix_creationfee_hash(s):
@@ -129,11 +137,17 @@ MUTATIONS = {
         "fn": mut_treasury,
         "doc": "drops the treasury accrual; unaccounted funds read as surplus to a >= check",
     },
-    "fix-router-reactivation": {
+    "regress-router-single-use": {
         "file": SRC,
         "suite": None,
-        "fn": mut_fix_router_reactivation,
-        "doc": "candidate fix for R12; the R12 characterisation test must go RED under it",
+        "fn": mut_regress_router_single_use,
+        "doc": "undoes half the R12 fix: approval no longer consumed on activation",
+    },
+    "regress-router-bootstrap": {
+        "file": SRC,
+        "suite": None,
+        "fn": mut_regress_router_bootstrap,
+        "doc": "undoes the other half: constructor banks a permanent bootstrap approval",
     },
     "fix-creationfee-hash": {
         "file": SRC,
