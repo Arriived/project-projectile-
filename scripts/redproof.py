@@ -25,6 +25,7 @@ import argparse
 import atexit
 import io
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -84,6 +85,26 @@ def mut_fix_creationfee_hash(s):
     return s.replace(a, "            symbolLockDuration,\n            creationFeeUsdc // MUTATED\n        ));")
 
 
+def mut_zero_mins(s):
+    """Revert section 1.1: put the literal zeros back as amountAMin/amountBMin. Against a
+    real skewed pair this makes graduation SUCCEED at the attacker's ratio instead of
+    reverting, which is the vulnerability strict mins closed."""
+    a = _anchor(s, "            tokenLiquidity,\n            usdcLiquidity,\n            c.lpRecipient,")
+    return s.replace(a, "            0, // MUTATED\n            0, // MUTATED\n            c.lpRecipient,")
+
+
+def mut_swap_graduation_args(s):
+    """Swap the token/USDC arguments to addLiquidity, leaving the amounts in place."""
+    a = _anchor(s, "            token,\n            address(usdc),\n            tokenLiquidity,")
+    return s.replace(a, "            address(usdc), // MUTATED\n            token, // MUTATED\n            tokenLiquidity,")
+
+
+def mut_lp_elsewhere(s):
+    """Send LP somewhere other than the snapshotted recipient."""
+    a = _anchor(s, "            c.lpRecipient,")
+    return s.replace(a, "            address(0xBEEF), // MUTATED")
+
+
 def mut_multicurve_claim_prank(s):
     a = _anchor(s, "        vm.prank(creator);")
     return s.replace(a, "        // MUTATED: prank removed, restoring the dead-claim bug")
@@ -119,6 +140,24 @@ MUTATIONS = {
         "suite": None,
         "fn": mut_fix_creationfee_hash,
         "doc": "candidate fix for R13; the R13 characterisation test must go RED under it",
+    },
+    "zero-mins": {
+        "file": SRC,
+        "suite": None,
+        "fn": mut_zero_mins,
+        "doc": "reverts 1.1's strict mins to zeros; fork test 3 must go RED (attack succeeds)",
+    },
+    "swap-graduation-args": {
+        "file": SRC,
+        "suite": None,
+        "fn": mut_swap_graduation_args,
+        "doc": "swaps token/USDC into addLiquidity; fork test 1 must go RED",
+    },
+    "lp-elsewhere": {
+        "file": SRC,
+        "suite": None,
+        "fn": mut_lp_elsewhere,
+        "doc": "sends LP off the snapshotted recipient; fork test 2 must go RED",
     },
     "multicurve-claim-prank": {
         "file": MULTI_HANDLER,
@@ -203,7 +242,14 @@ def main():
         if args.grep:
             cmd += ' --grep "%s"' % args.grep
         _, out = run(cmd)
-        keep = lambda l: (" passing" in l or " failing" in l or "AssertionError" in l)
+        # Mocha prints the failure title and the reason on separate lines from the
+        # counts, so a counts-only filter reports "1 failing" and hides WHICH and WHY --
+        # which is most of what a red-proof is for.
+        keep = lambda l: (
+            " passing" in l or " failing" in l or "AssertionError" in l
+            or "expected" in l or re.match(r"\s+\d+\)\s", l) is not None
+            or "reverted" in l
+        )
 
     printed = False
     for line in out.splitlines():

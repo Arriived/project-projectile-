@@ -6,9 +6,9 @@
 
 | | |
 |---|---|
-| HEAD **when this was written** | `e079cc3` |
+| HEAD **when this was written** | `c6db7f9` |
 | bytecode | **24,018 / 24,576 — 558 free** |
-| tests | **241 Hardhat, 13 Foundry** |
+| tests | **241 Hardhat + 3 fork (FORK=1), 13 Foundry** |
 | deployed address | **none current.** `0xDF714C3b...` is STALE — see §7 |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
@@ -33,19 +33,22 @@ missing.
 
 ## The exact next action
 
-**The mock-only sweep**: list every component whose sole coverage is a stub, and say for
-each what the stub does NOT reach. §4 already does this for the blocklist substitution and
-the shape of that answer is the target — `MockRouter` returns the amounts it was offered
-and never skews a ratio, so every graduation test runs through a router that cannot
-reproduce §1.1's attack. Start there.
+**The graduation helper**: an external contract, no `LFX1` bytecode, permissionless, with
+a bounded correction spend, and a failed call must leave the curve retryable rather than
+worse off. It closes R6 — the post-fix griefing race where an attacker re-skews the pair
+between a correction and `graduate()` — by bundling correct-and-graduate atomically.
+
+The fork suite is now the place to build it against: `test/Fork.v2.test.js` already stands
+up a real skewed pair and drives a curve into `GRADUATION_READY` behind it, which is exactly
+the starting state the helper has to recover from.
 
 Then, in this order:
 
-1. Mock-only sweep *(next action, above)*
-2. Actor/phase adversarial pass, including the five specific questions in §7
-3. Graduation helper — external contract, no `LFX1` bytecode
-4. Fork suite proper against real Uniswap V2
-5. Re-freeze — clean mutation run, redeploy, new address
+1. Graduation helper *(next action, above)*
+2. Re-freeze — clean mutation run, redeploy, new address
+
+**No redeploy without an explicit go-ahead, and not before a clean `guard-coverage.py` run.**
+The last mutation score (52/56) pre-dates everything in this session.
 
 **The fork is gated behind `FORK=1` and pinned to block 25,846,000.** Ordinary test runs
 are local and unforked. Do not re-pin without re-running the presence checks — see §4.
@@ -476,12 +479,29 @@ branching. Neither is Uniswap. Not reached by either:
 **§1.1's attack was executed against a transcription, not against Uniswap.** That is strong
 evidence; it is not the same claim, and the section should not be read as if it were.
 
-**The fork is available — verified, not assumed.** At the pinned block 25,846,000 a
-historical `eth_call` to the V2 factory returns the USDC/WETH pair, and `getReserves()` on
-that pair returns real reserves, so the configured endpoint serves archive **state**, not
-merely code. Nothing in `test/` references `FORK`: the fork suite is **empty, not blocked**.
+**The fork suite now exists** — `test/Fork.v2.test.js`, gated behind `FORK=1`, run with
+`FORK=1 npx hardhat test test/Fork.v2.test.js`. It proves the three things no mock can, each
+red-proved through `scripts/redproof.py`:
 
-### USDC
+| proves | red-proof | mutation |
+|---|---|---|
+| Real token ordering, **both ways**, against real V2 sorting | test 1 goes red | `swap-graduation-args` |
+| A **real LP token** minted, all of it at `0xdEaD`, none held by the factory | test 2 goes red | `lp-elsewhere` |
+| **§1.1's attack against real Uniswap**, not a transcription | test 3 goes red | `zero-mins` |
+
+`zero-mins` is the one that matters: it puts the literal zeros back as `amountAMin` /
+`amountBMin`, and the skewed-pair attack then **succeeds against the real router**. §1.1's
+claim is no longer "mock-verified against transcribed V2 logic" — it is fork-executed.
+
+Ordering is not chosen by the test: token addresses come from `CREATE(factory, nonce)`, so
+the suite launches until it holds one sorting below real USDC and one above, which is also
+the point — roughly half of real launches land each way.
+
+Measured on the fork: the token side of the pool is `LP_TOKEN_RESERVE + leftover curve
+tokens` = **193,297,304e18**, matching §1.1's own figure, and asserted against the amounts
+the `Graduated` event reports the router actually took rather than against the constant.
+
+### USDC — now the largest remaining gap
 
 `MockUSDC` is a plain 6dp ERC-20; `MockBlocklistUSDC` and `MockFeeOnTransferUSDC` cover the
 blocklist and short-transfer paths. Not reached:
@@ -618,9 +638,9 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| HEAD **when this was written** | `e079cc3` |
+| HEAD **when this was written** | `c6db7f9` |
 | bytecode | **24,018 / 24,576 — 558 free** |
-| tests | **241 Hardhat, 13 Foundry** |
+| tests | **241 Hardhat + 3 fork (FORK=1), 13 Foundry** |
 | last mutation score | 52/56 = 92.9% — **pre-dates this session's changes; must be re-run before re-freeze** |
 
 ## ⚠ `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` IS STALE
@@ -650,13 +670,17 @@ life** — it claimed as the handler while every token there is created by the t
 so all 4,274 calls of a full run reverted into the catch while reporting "0 reverts". Fixed,
 and its reachability is now asserted.
 
+**Mock-only sweep, actor/phase pass and fork suite — DONE.** The sweep found that every
+graduation test ran against a mock and that the fork was available rather than blocked. The
+actor/phase pass added R12–R16. The fork suite (`test/Fork.v2.test.js`, `FORK=1`) now proves
+token ordering both ways, a real LP burn, and §1.1's attack against real Uniswap — all three
+red-proved. `guard-coverage.py` no longer restores a dirty tree; it refuses and prints the
+diff.
+
 ## Remaining, in order
 
-1. **Mock-only sweep** — list every component whose only coverage is a stub.
-2. **Actor/phase adversarial pass** — by actor (creator, sniper, whale, MEV/sequencer, malicious router, arbitrary contract, compromised owner, malicious frontend/indexer) and by phase (creation, creator window, curve trading, near-graduation, graduation execution, post-graduation, admin ops). Plus: owner-key blast radius in severity order; the 24h timelock window's realistic exposure; donation and direct-transfer paths; whether any token can be launched that can never graduate.
-3. **Graduation helper** — external contract, no `LFX1` bytecode, permissionless, bounded correction spend, a failed call must leave the curve retryable rather than worse off.
-4. **Fork suite proper** against real V2 — clean graduation, both skews, address ordering both ways, stranded remainder, retry, and whether `assert(amountAOptimal <= amountADesired)` can ever trip.
-5. **Re-freeze** — clean mutation run with every survivor classified, redeploy, verify, record commit + bytecode hash, publish the new address.
+1. **Graduation helper** — external contract, no `LFX1` bytecode, permissionless, bounded correction spend, a failed call must leave the curve retryable rather than worse off. Closes R6.
+2. **Re-freeze** — clean mutation run with every survivor classified, redeploy, verify, record commit + bytecode hash, publish the new address.
 
 ---
 
