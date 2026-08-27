@@ -1,853 +1,416 @@
 # Ballista
 
 A memecoin launchpad native to Arc (Circle's stablecoin L1, USDC as native gas).
-Bonding-curve launches that graduate to a DEX pool, with cross-chain USDC buy-in
-planned so a user on Base/Ethereum/Solana can buy an Arc-native token without
-manually bridging first.
+Bonding-curve launches that graduate to a DEX pool.
 
-**Positioning:** what Pons V2 is to Robinhood Chain, but for Arc. Trust and
-verifiability are the moat, not feature count — twelve competitors are launching
-on Arc and several have already damaged their reputations (a phishing "bridge"
-site took real funds before mainnet even opened). Ours is the one with a
-deployed, verified, adversarially-tested contract anyone can read.
+**Positioning:** trust and verifiability are the moat, not feature count. Twelve
+competitors are launching on Arc and several have already damaged their reputations. Ours
+is the one with a deployed, verified, adversarially-tested contract anyone can read.
 
-**⚠ THE REPO IS "Ballista"; `contracts/` IS DELIBERATELY NOT.** Everything outside
-`contracts/` — docs, tests, scripts, the indexer — says Ballista. Everything inside
-`contracts/` keeps the neutral `LFX1` / `LFX1Token` naming, **filenames included**, and
-so do the `getContractFactory('LFX1')` strings that tests and scripts use to reach
-them. This is not an oversight and it is not half-finished work.
-
-The reason: Blockscout publishes the SOURCE PATH, not just the contract name. The live
-verified deployment currently serves `contracts/LFX1.sol` and `contracts/LFX1Token.sol`
-to anyone browsing the explorer. Renaming those files would publish the brand to every
-competitor scanning ArcScan, which is the entire thing the neutral naming exists to
-prevent. Renaming only the *contract* and not the file achieves nothing for the same
-reason. **Do not "finish" this rename.** The switch happens at mainnet, on instruction.
-
-**Repo location: `C:\dev\arc-launch`, pushed to a private GitHub remote.** It was moved
-off OneDrive on 24 Aug after OneDrive corrupted 29 of 54 mutation-test results into
-phantom compile failures and failed a git ref write outright in one session — it
-falsified audit data and nearly ate a commit. Do not move it back.
-
-**How to read this file: it is a starting point to verify, not ground truth.**
-It is written by the same assistant that writes the code, from sessions that have
-since ended, and it goes stale the moment a constant, address or table changes.
-Before relying on any number, address, table or claim here, check it against the
-repo — `contracts/Ballista.sol` for constants and modifiers, `git log` for
-deployments, an actual test run for test counts. Doing exactly that has already
-caught real drift in this document more than once. Where this file and the source
-disagree, **the source is right and this file is the bug** — fix the file.
+**Arc mainnet: 16 September 2026.** Confirmed, external, immovable. Launch-ready target
+~9 September; that week is buffer, not spare capacity.
 
 ---
 
-## Timeline — the constraint that governs everything
+## HOW TO READ THIS FILE
 
-- **Arc mainnet: September 16, 2026.** Confirmed, external, immovable.
-- Launch-ready target ~September 9. That week is buffer for late problems, not
-  spare capacity.
-- Build and test on Arc Testnet. Mainnet is a config change on launch day.
-- Today is August 21.
+**It is a starting point to verify, not ground truth.** It is written by the same
+assistant that writes the code. Before relying on any number, address or claim here,
+check it against the repo — `contracts/LFX1.sol` for constants, `git log` for
+deployments, an actual test run for counts. Doing exactly that has caught real drift more
+than once. **Where this file and the source disagree, the source is right and this file is
+the bug.**
 
-## Scope for mainnet
-
-**IN:** launchpad (create → curve trading → graduation), frontend.
-**OUT until after mainnet:** trading terminal, CCTP bridging, holder fee
-distribution, buy-and-burn, creator allocation lock.
-
-If a feature isn't required for "a user can launch a token and another user can
-buy it," it's post-launch. Scope creep is the main risk to the date — push back
-on it, including when the push comes from me.
+**Repo lives at `C:` + `\dev` + `\arc-launch`** (written split because a literal
+backslash-a has been mangled by tooling twice). Pushed to a private GitHub remote. It was
+moved off OneDrive after OneDrive corrupted 29 of 54 mutation results into phantom compile
+failures and failed a git ref write in a single session. **Do not move it back.**
 
 ---
 
-## Standing policies — apply from now on, not just once
+# 1. MUST NOT BE CHANGED WITHOUT RE-DERIVING WHY
 
-### 1. Never deploy under the name "Ballista" until explicitly told
+Everything here was paid for with a real finding. Each looks like it could be simplified.
+None of them can.
 
-Competitors find each other by searching contract names on the explorer. Every
-testnet deployment uses a neutral, non-descriptive name (`LFX1`-style — not
-"Launchpad", not "Factory", nothing keyword-searchable). The real name goes live
-at mainnet, on instruction only.
+## 1.1 Strict mins on `addLiquidity` — `(amountADesired, amountBDesired)`
 
-**The source FILENAME leaks too — renaming only the contract is not enough.**
-Verified on the live deployment: Blockscout's API publishes
-`file_path: contracts/Ballista.sol`, plus `contracts/BallistaToken.sol` and
-`contracts/interfaces/IDEXRouter.sol` in `additional_sources`. Hardhat is happy
-to compile contract `LFX1` inside `Ballista.sol`, so the two *can* diverge — it
-just achieves nothing, because the path is published verbatim on the explorer.
-Renaming for real means renaming the files as well.
+`_performGraduation` passes the **desired amounts themselves** as `amountAMin` and
+`amountBMin`. They used to be literal zeros.
 
-### 2. Licence: explicit permission-required notice, not bare `UNLICENSED`
+**The attack that motivated it, executed not theorised.** Tokens circulate freely during
+the curve phase, so anyone can buy a little, create the USDC/TOKEN pair, and seed it with
+dust at a ratio of their choosing. V2's `_addLiquidity` then deposits at **the pair's
+ratio, not ours**, and with zero mins every `require` in that path passes unconditionally.
+Measured against a real graduation (193,297,304 tokens / 8,019 USDC intended):
 
-`SPDX-License-Identifier: UNLICENSED` already grants no rights, so copying is
-already infringement — but say it explicitly. OpenZeppelin's 14 sources stay MIT
-and are unaffected: they carry their own `// SPDX-License-Identifier: MIT` and
-appear as separate files on the explorer.
+| attacker seeds ~$1 | we deposited | stranded, unrecoverable |
+|---|---|---|
+| 1 token + 1 USDC (token looks expensive) | 8,019 tokens — **0.004%** | **193,289,285 tokens** |
+| 1,000,000 tokens + 1 USDC (token looks cheap) | **193.30 USDC** of 8,019 | **97.6% of proceeds** |
 
-**Blockscout has no custom/proprietary option.** Its verification API accepts
-exactly 14 values: `none`, `unlicense`, `mit`, `gnu_gpl_v2`, `gnu_gpl_v3`,
-`gnu_lgpl_v2_1`, `gnu_lgpl_v3`, `bsd_2_clause`, `bsd_3_clause`, `mpl_2_0`,
-`osl_3_0`, `apache_2_0`, `gnu_agpl_v3`, `bsl_1_1`. A bespoke notice can only be
-filed as **`none`** — which is what the current deployment already shows, and
-which communicates nothing to anyone browsing. **`bsl_1_1` (BUSL-1.1) is the only
-supported value that actually means "source-available, commercial use
-restricted."** Note also that `hardhat verify` does not send a licence type at
-all, so whichever is chosen must be set through Blockscout's own UI or a direct
-API call.
+Both **graduated successfully**. No revert, no event, no signal. The remainder is
+permanently unrecoverable because graduation zeroes `tokenReserves` and `realUsdcReserves`
+first, and the factory can only move USDC and launched tokens against *accounted*
+balances.
 
-**Chosen 22 Aug: BUSL-1.1, change licence GPL-2.0-or-later, Change Date 2030-09-16,
-Licensor left as `[LICENSOR]` until the entity name is supplied.** GPL rather than
-MIT because BUSL exists to stop commercial forks during the restricted window, and
-converting to MIT at the Change Date would hand a fork the right to close the source
-again — GPL-2.0-or-later keeps derivatives open. Confirmed as Uniswap v3-core's own
-choice by reading their LICENSE, not from memory. `LICENSE` at the repo root is the
-canonical MariaDB text with only the Parameters block replaced; the Terms section was
-verified byte-identical rather than retyped.
+**There is deliberately NO tolerance constant.** When no pair exists, V2 takes the
+`reserveA == 0 && reserveB == 0` branch and returns the desired amounts — **the requires
+are never evaluated** — so strict mins are free in the normal case. `quote()`'s floor
+rounding only bites if a pair already exists at *precisely* our closing ratio, which has
+no legitimate reason to occur. A tolerance would be a parameter to get wrong; its absence
+removes one.
 
-**⚠ Verifying on an explorer arguably STARTS the four-year clock.** BUSL converts on
-the Change Date *or the fourth anniversary of the first publicly available
-distribution of that version, whichever comes first*. A verified contract on a public
-explorer is plausibly such a distribution, so a long-lived verified testnet deployment
-should not carry a Change Date anyone is relying on — the real date may be earlier
-than the one written in the file. Immaterial at current timescales; it matters if a
-version is ever left published for years.
+**It cost −1 byte.** Passing existing stack variables is smaller than pushing two zero
+constants. The tightest possible setting is also the cheapest.
 
-Realistic expectation: enforcement against an anonymous deployer on a new chain
-is not practical. This raises cost and removes ambiguity. It does not make
-copying impossible. The one lever that does work in practice is DMCA against
-hosted frontends and GitHub mirrors, which needs a clear copyright line more than
-it needs any particular licence.
+**Anyone who "fixes" this by loosening mins reopens the vulnerability.** At 1% on an
+8,000 USDC graduation, roughly $80 per graduation becomes extractable by a proportional
+version of the same attack.
 
-### 3. No security reasoning in deployed source
+Behaviour now: an adversarial pair parks the curve at `GRADUATION_READY` with reserves
+**intact and retryable**. Correcting the pair ratio lets the same curve graduate — proven.
+That correction is a race in the open, which is what the (unbuilt) helper contract closes.
 
-The contract should say almost nothing. **Removed entirely:** anything of the form
-"safe only because of X", anything describing an attack, mitigation or weakness,
-anything explaining why a value was chosen or what breaks if it changes, trust
-notes, admin-power commentary, and long explanatory prose (a strong tell that code
-was AI-assisted, which itself costs trust).
+## 1.2 The 807M : 193M curve/LP split is LOAD-BEARING for the flash-loan bound
 
-**May stay:** a short mechanism-only line on genuinely complex code — the curve
-math inversions and the clamp paths. Never rationale, never risk. If in doubt, cut.
+Not just curve economics. Measured against the real contract, snipe tax zero (attacker's
+best case):
 
-Applied 21 Aug: `Ballista.sol` went 1420 → 799 lines, 5 comment lines left in
-total. 777 comment blocks were moved verbatim into **`ARCHITECTURE.md`**, which is
-private and published nowhere. **Move reasoning, never delete it** — that file is
-now the only copy. New findings go in the report or in these docs, never into the
+```
+buy out the entire curve       8,111.97 USDC spent, 807,000,000 tokens acquired
+pool seeded at graduation      193,000,000 tokens / 8,030.85 USDC
+dump ALL tokens (V2 0.3% fee)  6,477.14 USDC returned
+NET                           -1,634.84 USDC
+```
+
+The attacker acquires **4.18x more supply than the pool is seeded with**. The bound is
+**structural, not parametric**: the pool cannot return more than the 8,030.85 it holds,
+already less than the 8,111.97 spent — so even a zero-slippage, zero-fee dump loses money.
+Holding cheaper tokens bought earlier does not rescue it; that is additional supply into
+the same bounded pool.
+
+**Narrowing the ratio erodes this margin. Re-derive before touching either constant.**
+
+## 1.3 Never re-derive the curve math
+
+Use `_quoteBuy` / `_quoteSell`. External LLMs have re-derived it incorrectly more than
+once. `test/CurveDifferential.test.js` holds a reference **transcribed from the contract's
+own formulas**, not from anything in this file — a regression and arithmetic oracle that
+explicitly cannot catch a conceptual error in the curve design, because it shares that
 source.
 
-**Stripping comments frees ZERO bytecode** — comments are not compiled. Revert
-strings are, and they leak the same kind of detail while being readable straight
-off the chain without any verification at all. See the bytecode note below.
-
----
-
-## Current deployment (Arc Testnet)
-
-Deployed as **`LFX1`** per the naming policy — the name "Ballista" appears nowhere
-on chain, in the contract name or in any published source path.
-
-| | address |
-|---|---|
-| **LFX1** (the launchpad) | `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` (block 59003480) |
-| MockRouter (placeholder) | `0xFa159dDbE46B732AfAc14Bb7097505cdccD76438` |
-| USDC | `0x3600000000000000000000000000000000000000` |
-| treasury / owner | `0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb` (EOA — multisig pending) |
-
-Both exact matches on Blockscout (`is_fully_verified: true`,
-`is_partially_verified: false`, `is_changed_bytecode: false`). Explorer:
-`https://testnet.arcscan.app/address/0x7072b0f726526B616101473aB6579A8F58fee1fb`
-
-**⚠ LFX1 IS FROZEN AS OF THIS DEPLOYMENT.** From here the V4 build touches only NEW
-contracts — the adapter and the locker — never the core. `lpRecipient` exists precisely
-so that work is additive; if it ever appears to need a change inside `LFX1`, something
-has gone wrong with the additive design and that is worth stopping to ask about rather
-than reopening the contract.
-
-| | |
-|---|---|
-| commit | `e5e937db68d5ce360cd26a14bac5b617b931aed3` (`e5e937d`) |
-| deployed bytecode keccak256 | `0x664364c94891ea9f61fa17e7abcc235fb824cb1542c5fc7b83f9272f9bae15cd` |
-| size | 24,019 / 24,576 — **557 bytes free** |
-| mutation score at freeze | **52/56 = 92.9%**, the 4 survivors equivalent |
-| live smoke test | **44/44** |
-
-**The deployed code matches the HEAD build.** It differs from the artifact at 12
-immutable reference sites, each in exactly ONE byte, because `IERC20 public immutable
-usdc` is zeroed in the artifact's `deployedBytecode` and real on chain — and Arc's USDC
-address `0x3600..00` has a single non-zero byte, so only one byte per site differs. On
-any other chain this would be ~20 bytes per site. Blockscout confirms
-`is_fully_verified: true`, `is_partially_verified: false`, `is_changed_bytecode: false`.
-
-**`license_type` is still `none` on the explorer.** `hardhat verify` does not send one;
-BUSL-1.1 must be set through Blockscout's UI or a direct API call as `bsl_1_1`, and it
-still needs the `[LICENSOR]` entity name.
-
-Published source paths are now `contracts/LFX1.sol`, `contracts/LFX1Token.sol` and
-`contracts/interfaces/IDEXRouter.sol` — confirmed via Blockscout's API, no brand
-string anywhere in the closure. `license_type` is still `none`; the licence
-decision is open.
-
-Superseded deployments: `0x63C4...Ec57` (original Ballista),
-`0x874C...1858`, `0x14faEc...0759`, `0x8a6175...44f7`, `0x19ba1F...01e3`
-(last under the old name), `0x7072b0...e1fb` (first LFX1, pre-freeze).
-
-The authoritative record is `deployments/arcTestnet.json`, written by
-`scripts/deploy.js` on every deploy. The table above is a convenience copy; if the
-two ever disagree, trust the JSON and the deploy transaction on Blockscout. Never
-let a live address exist only in a commit message or a scratch script.
-
-Branch: `ballista-migration`. **186 Hardhat tests + 5 Foundry invariants.**
-
----
-
-## Contract design — decisions and why
-
-### Curve (redesigned 21 Aug)
-
-```
-INITIAL_VIRTUAL_USDC_RESERVES  =  2_667e6
-INITIAL_VIRTUAL_TOKEN_RESERVES =  1_075_000_000e18
-CURVE_TOKEN_SUPPLY             =  807_000_000e18
-LP_TOKEN_RESERVE               =  193_000_000e18
-TOTAL_TOKEN_SUPPLY             =  1_000_000_000e18
-graduation threshold           =  8_000e6
-```
-
-Measured: depletion ceiling **$8,030.85**, graduation gap **+4.16%** (up to
-+4.83% on overshoot), launch→graduation multiple **16.05x**, graduation market
-cap ~$39,687.
-
-**Why $8,000:** competitors graduate far lower — pump.fun ~$6,100-7,400
-(~70-85 SOL), Pons 4.2 ETH (~$9,700). We were at $67,000, i.e. 7-11x everyone.
-Real pump.fun graduation rate is 0.198%, so a high bar is a serious problem.
-$8,000 sits between the two and gives a better post-graduation pool than $6,700
-(a $1,000 trade moves it 12.5% vs 14.9%).
-
-**The flat-handoff derivation** (verified — it reproduces the old constants
-exactly):
-
-```
-x            = T / (vUSDC0 + T)
-CURVE        = vTOKEN0 * x           tokens sold at threshold
-pool price   = T / LP_TOKEN_RESERVE
-curve price  = T / (x * vTOKEN0 * (1-x))
-gap          = x * vTOKEN0 * (1-x) / LP - 1
-multiple     = 1 / (1-x)^2           depends ONLY on x
-```
-
-`LP_TOKEN_RESERVE` is the direct gap dial. **Do not increase the gap** — a
-positive gap is free money for arbitrageurs; large gaps get arbed down within
-minutes and give the first DEX buyer a bad fill. +4% is deliberate.
-
-**807M/193M chosen over 806M/194M** so the ceiling ($8,030.85) sits *above* the
-threshold. At 806M the ceiling was $7,991 — below the threshold, making it
-unreachable, `graduationProgressBps` unable to hit 100%, and "$8,000 to
-graduate" subtly false.
-
-### Dual graduation trigger — load-bearing, not a safety net
+## 1.4 Dual graduation trigger and the one-way state machine
 
 ```
 realUsdcReserves >= threshold   OR   tokenReserves == 0
+ACTIVE -> GRADUATION_READY -> GRADUATED     (one-way)
 ```
 
-Without it, any rounding that puts the ceiling below the threshold strands
-**every** token permanently. Even unrounded, 806M landed 19 cents short.
+Without the depletion arm, any rounding that puts the ceiling below the threshold strands
+**every** token permanently. `graduate()` is permissionless and retryable, so our own
+backend being down never blocks a token reaching the DEX.
 
-Consequence: a clamped buy always graduates (the clamp takes every remaining
-token, tripping the depletion arm in the same transaction), so "depleted but
-still ACTIVE" is unreachable. The threshold→ceiling window is only ~$31 wide.
+**Both `buy` and `sell` are closed at `GRADUATION_READY`** — first check in each,
+`c.state == ACTIVE`. We are stricter than Pons, who close only the sell side. Reserves
+freeze the instant the trigger fires, so nobody can sell into the reserves the pool is
+about to be seeded from. The cost: holders genuinely cannot exit a curve stranded at
+`GRADUATION_READY`. That is the deliberate trade.
 
-### Graduation state machine
+## 1.5 Router timelock is not disableable
 
-`ACTIVE → GRADUATION_READY → GRADUATED`, one-way. Decoupled from the triggering
-trade: a router failure cannot unwind a buy that already succeeded. `graduate()`
-is permissionless and retryable, so Ballista's own frontend/backend being down
-never blocks a token reaching the DEX.
+`proposeRouter` -> 24h -> `activateRouter`. `revokeRouter` is **immediate** and clears
+`router` itself. Granting trust is slow and visible; removing it is instant. A router
+passed at construction is live from block zero — that bypass happens once, is visible in
+the constructor args, and is what makes mainnet launch day possible at all.
 
-### Router controls (F1 fix)
+**`revokeRouter()` is the lever for a malicious router, NOT `pause()`.** `graduate()` is
+`nonReentrant` only, deliberately: a pausable `graduate()` would be a censorship lever
+over tokens reaching the DEX while we custody their USDC, and it merely postpones handing
+the pot to a router that is still approved. `graduate()` requires `router != address(0)`,
+so revocation is a hard stop.
 
-`proposeRouter` → 24h → `activateRouter`. `revokeRouter` is **immediate** and
-clears `router` itself. Granting trust is slow and visible; removing it is
-instant.
+**Monitoring `RouterProposed` is a launch requirement.** Unwatched, the 24h timelock is 24
+hours of decoration.
 
-**Constructor bootstrap:** a router passed at deployment is live from block
-zero, bypassing the timelock once. Without this, mainnet launch day would be
-dead — Arc mainnet doesn't exist until the 16th, `createToken` is gated on a
-live router, and a 24h wait would mean tokens couldn't launch until the 17th.
-This doesn't weaken F1: the attack is an owner *swapping* the router later, and
-a constructor-set router is visible in the deployment's constructor args with no
-window to attack.
+## 1.6 Variant B's balance-delta check is exact despite Arc's truncating `balanceOf`
 
-Verified: `router` is assigned in exactly three places (constructor,
-`activateRouter`, `revokeRouter`), `setRouter` no longer exists, and a test
-enumerates the whole compiled ABI to assert no other setter.
+`_settleBuy` measures the actual balance delta around the USDC pull and reverts on any
+shortfall. Arc's ERC-20 view **truncates** an 18-decimal native balance to 6 decimals, so
+this looks unsafe. **It is exact, and here is the proof, not just the conclusion:**
 
-**Why it matters:** graduation approves the full LP allocation plus all
-accumulated USDC to the router. A malicious router takes ~the whole pot. This is
-the highest-value lever in the contract.
+```
+floor((N + A·10^12)/10^12) = floor(N/10^12) + A     for any dust N
+```
 
-**`pause()` does NOT stop graduation — and that is deliberate.** `createToken`,
-`buy` and `sell` are `whenNotPaused`; `graduate()` is `nonReentrant` only. Pausing
-stops trading and transitively halts the auto-graduation inside `buy()`, but
-anyone can still push an already-`GRADUATION_READY` token through a live router
-while the contract is paused.
+because the amount added is always a whole number of 6-decimal units. The delta is exact
+whatever sub-6dp dust the contract carries.
 
-**The lever for a malicious router is `revokeRouter()`, not `pause()`.** It clears
-`router` in the same transaction, and `graduate()` requires `router != address(0)`
-— so revocation is a hard stop, not a mitigation. Know this before you need it;
-it is not something you want to derive at speed.
+Both reads sit inside `ReentrancyGuard`'s `nonReentrant`, held by `buy()` and
+`creatorLaunchBuy()` — the only two callers of `_settleBuy`. A delta across a shared
+pooled balance is meaningless if anything else can move USDC between the reads.
 
-Decided, not left by omission. `graduate()` stays un-pausable because:
+**What it does and does not do:** it does **not** keep the launchpad working under a
+fee-on-transfer token — trading halts either way. It converts a silent, unbounded,
+socialised loss into a loud revert. Measured without it against a 1bp mock: 30 buys of
+20 USDC left the contract owing 600.5 and holding 600.43995.
 
-1. `revokeRouter()` is strictly stronger for the only case that matters. Pause
-   merely postpones handing the pot to a router that is still approved the instant
-   anyone unpauses.
-2. A pausable `graduate()` would be a lever that *looks* sufficient and isn't.
-   Under pressure someone pauses, sees everything stop, and believes it is
-   contained. Two levers where one is subtly wrong is worse than one correct lever.
-3. Decisive: a pausable `graduate()` is a censorship lever. Today the owner cannot
-   stop tokens reaching the DEX while custodying their USDC — that is what
-   "permissionless and retryable" buys, and it is readable on the verified
-   contract. Trading that away for operational convenience is the wrong trade for
-   a project whose whole position is verifiability.
+**Known residual, priced and declined:** `createToken` still credits `treasuryFeesAccrued`
+from the requested creation fee without measuring. +339 bytes to close, protecting a 1bp
+rounding error in a scenario where buys already revert.
 
-The counter-argument — that stopping graduation strands tokens at
-`GRADUATION_READY` — is real, but applies to **both** levers equally, so it does
-not discriminate between them. The only asymmetry is undo speed (unpause is one
-transaction; replacing a revoked router is 24h), and a fast-undo graduation stop
-is precisely the power you would not want an owner to have.
+## 1.7 All fees accrue and are claimed — creator AND treasury
 
-**Monitoring `RouterProposed` is a launch requirement, not a nice-to-have.** The
-24h timelock only defends anything if a human is watching the event during it.
-Unwatched, it is 24 hours of decoration.
+Nothing is pushed to a payee inside a trade. A payee that reverts must never break
+trading. The treasury came under this rule after it was found that every buy, sell **and
+`createToken`** pushed to it inline, so a blocklisted treasury bricked the launchpad.
 
-### LP recipient — added 24 Aug, SNAPSHOTTED not global
+**`claimTreasuryFees()` is deliberately permissionless.** It can only move protocol funds
+to `treasury`, so there is nothing to gain and nothing to grief. Sweeping does **not**
+become a 2-of-3 Safe transaction under any future multisig.
 
-`lpRecipient` decides where graduation sends the LP position. Defaults to
-`BURN_ADDRESS`, rejects `address(0)`, owner-settable with an event carrying old and new.
-It exists so the V4 locker work is purely additive — `LFX1` should not be reopened for it.
+**The solvency identity is `balance >= reserves + creatorFees + treasuryFees`.** Any check
+omitting treasury fees reads the accrual as surplus and stays green while a real shortfall
+exists — this has already happened once in a test.
 
-**It is snapshotted per curve and pinned by the economics hash, not read live at
-graduation. That was a deliberate deviation from a plain global setter, and it is the
-whole point.** Graduation approves the entire LP allocation, so whoever `lpRecipient`
-names at that instant receives it. Read live, an owner could let tokens launch
-advertising burned LP and then redirect every pending graduation to an address they
-control — the same magnitude of lever as swapping the router, which this contract
-already protects with a 24h timelock precisely because "a malicious router takes ~the
-whole pot." Snapshotting removes the lever for anything already launched instead of
-merely delaying it, and it matches how every other economic term here behaves: a token
-trades under the terms it launched with, permanently.
+## 1.8 `lpRecipient` is snapshotted per curve, never read live
 
-Cost measured both ways: global mutable **+278 bytes**, snapshotted **+426**. The extra
-148 buys the trust property. A snapshot needs its own storage slot — the packed struct
-slot had 13 of 32 bytes used and an address needs 20.
+Defaults to `BURN_ADDRESS`, rejects `address(0)` and `address(this)`, owner-settable with
+an indexed event, pinned by the economics hash. Read live at graduation, an owner could
+let tokens launch advertising burned LP and then redirect every pending graduation — the
+same magnitude of lever as swapping the router. Snapshotting removes it for anything
+already launched rather than delaying it. Cost: +426 vs +278 for the global version; the
+extra 148 buys the trust property.
 
-**Consequence: tokens launched BEFORE the flip keep burning.** The locker only ever
-receives LP from tokens launched after `setLpRecipient` points at it. That is correct
-and safe, and it is also an operational fact worth knowing on the day.
+**Consequence:** tokens launched before a flip keep burning. A locker only ever receives
+from tokens launched after it.
 
-**⚠ HARD PRECONDITION — the pre-flip gate.** `setLpRecipient` is **never** called with
-a non-burn address until the recipient is (1) deployed, (2) verified on the explorer,
-and (3) proven on a fork to receive a v4 position and to operate it. The snapshot is
-immutable by design: there is no owner override and no rescue path, so a wrong recipient
-cannot be corrected for anything already launched. That is the trust property, and the
-mitigation is this gate rather than a contract escape hatch. **The default is
-`BURN_ADDRESS`, which is safe under both V2 and V4, so nothing about this blocks the
-freeze — it is a pre-flip item, not a pre-freeze one.**
+**"LP Auto-Burned" becomes "LP Permanently Locked" the moment this points anywhere else,
+and the two claims are not interchangeable.** A burn address needs zero trust. Do not
+market the burn claim after a flip.
 
-**CORRECTION, checked against the real API 24 Aug.** An earlier version of this note said
-a recipient that does not implement `onERC721Received` would make graduation revert.
-**That is wrong.** Uniswap v4-periphery `PositionManager.sol` mints with `_mint(owner,
-tokenId)` at **L369** (internal handler at L353, dispatched from `MINT_POSITION` at
-L213/L224) — **not `_safeMint`** — and its ERC721 base is **solmate**, whose `_mint`
-performs no receiver check. There is no callback on the mint path, so graduation will
-NOT revert regardless of what the recipient implements.
+**HARD PRECONDITION — the pre-flip gate.** `setLpRecipient` is never called with a
+non-burn address until the recipient is deployed, verified, and proven on a fork. The
+snapshot is immutable: no owner override, no rescue path, so a wrong recipient cannot be
+corrected for anything already launched. The `BURN_ADDRESS` default is safe under both V2
+and V4, so this blocks no freeze.
 
-The real risk is different and still serious: the position would be delivered into a
-contract that cannot *operate* it. The locker requirement is therefore "must be able to
-call `PositionManager` to collect fees and manage the position", **not** "must implement
-`onERC721Received`". Write the locker against that.
+## 1.9 `contracts/` keeps the neutral `LFX1` naming — do not "finish" the rename
 
-**⚠ "LP Auto-Burned" becomes "LP Permanently Locked" the moment this points at a
-locker, and the two claims are not interchangeable.** A burn address needs zero trust —
-anyone can read `0x...dEaD` and stop thinking. A locker needs someone to verify its lock
-logic, and that verification is a claim about code somebody wrote rather than about an
-address nobody controls. **Nobody should market the burn claim after the flip.** For a
-project whose entire position is verifiability, overstating this is the specific way to
-lose it.
-
-### Fees
-
-- 1% buy and sell, per-token snapshotted at creation.
-- Creator share: **90% of the buy-side fee, 50% of the sell-side.** Blends to
-  **70%** at a 50:50 mix, ~78% buy-heavy. A lifetime mix below 50:50 buy is
-  structurally impossible (everything sold was bought first), so 70% is a hard
-  floor.
-- **Never market this as "90/10."** The blend is 70%, both splits are readable
-  on a verified contract in thirty seconds, and the honest claims — "70%,
-  matching the market leader" and "90% on every buy" — are already
-  market-leading. Push back if this comes up again.
-- **ALL fees accrue and are claimed — creator AND treasury.** Nothing is pushed to a
-  payee inside a trade. A payee that reverts must never be able to break trading.
-  - The treasury was brought under this rule on 24 Aug. Before that, every buy, every
-    sell **and every `createToken`** pushed to the treasury inline, so a blocklisted
-    treasury address bricked trading *and* launching. Circle can blocklist an address;
-    that made a third party able to halt the launchpad. Cost: **+260 bytes**.
-  - **`claimTreasuryFees()` is deliberately PERMISSIONLESS.** It can only ever move
-    protocol funds to `treasury`, so there is nothing to gain by calling it and nothing
-    to grief. This matters for the multisig migration: sweeping treasury fees does
-    **not** become a 2-of-3 Safe transaction — anyone, including a keeper or a hot
-    wallet, can trigger the sweep, and the USDC still lands at `treasury`. Only
-    `setTreasury` needs the Safe.
-  - **The solvency identity changed.** The contract now legitimately holds unclaimed
-    treasury fees, so every check of the form "balance covers reserves + creator fees"
-    is now WRONG — it reads the accrued balance as surplus and would stay green while a
-    real shortfall of up to that amount existed. Both Foundry invariants and two Hardhat
-    checks were extended to add `treasuryFeesAccrued()`. Proven red by paying the
-    treasury inline *and* accruing it.
-- Creation fee: **0.5 USDC.** Not 0.1 — at 0.1 one wallet could push 8,640
-  launches/day for ~$1,063. Noxa earned $12M in fees and still had to stop
-  accepting launches because the feed became unusable; revenue from spam doesn't
-  offset that.
-- Revenue reality: curve-phase revenue is **capped per token** ($346-600
-  depending on mix). Pump.fun made $1B+ with a sub-1% graduation rate — the
-  engine is launch volume and curve trading, not graduations. Graduations are
-  marketing and, later, the V4 fee-capture path.
-
-### Snipe tax
-
-Table `[9800, 9500, 9000, 8000, 6000, 4000, 2000, 0]`, indexed by elapsed
-seconds. Retuned 21 Aug because the old `[9800, 2500, 300, 100, 0]` no longer
-deterred against the thinner curve.
-
-Measured share of curve supply taken by a $1,000 sniper:
-
-| t | tax | new table | old table |
-|---|---|---|---|
-| 0 | 9800 | 0.49% | 0.49% |
-| 1 | 9500 | 1.96% | **28.93%** |
-| 2 | 9000 | 4.34% | **35.25%** |
-| 3 | 8000 | 8.85% | 35.79% |
-
-Testnet racing found real snipers landing at **t=1-2**, exactly where the old
-table failed. Split 70% treasury / 30% into the curve, adjustable, snapshotted
-per token. Never to the creator — a creator sniping their own launch would
-recover part of their own tax.
-
-Tables are **immutable per version**; each token snapshots the version it
-launched under. There is no mutate path.
-
-**Describe it as "up to 98%," not "98%"** — the top tier is only reachable by
-co-located bots.
-
-**⚠ Zero headroom:** table t=0 (9800) + base fee (100) = 9900 =
-`MAX_TOTAL_FEE_BPS` exactly. Raising the base fee at all requires publishing a
-table with a lower t=0 first. Fails loudly at `createToken`.
-
-### Other mechanics
-
-- **Partial-fill clamp** on buy and sell — fills what's available rather than
-  reverting, and never pulls the excess in the first place (no refund step to
-  fail). Stops the graduating buy being griefable by a small front-run.
-- **Block-0 restriction:** trading opens the block after creation.
-- **Creator launch window is TIME-based, not block-based.** `block.timestamp <=
-  creationTimestamp + creatorLaunchWindow` (default 3s, settable, snapshotted,
-  in the economics hash). A block-number check was unreachable from an EOA.
-  - **A zero window is same-SECOND, not same-BLOCK.** Arc's 500ms blocks mean two
-    consecutive blocks routinely share a whole-second timestamp, so window 0 still
-    spans more than one block. Anyone reading "0" as "one block" is wrong.
-  - **The honest claim is "first CHEAP access," not "first access."** A sniper can
-    pay more gas and land ahead of the creator inside the window. Measured, $1,000
-    sniper front-running at each second of the window:
-
-    | t | tax | sniper take | creator still gets |
-    |---|---|---|---|
-    | 0 | 9800 | 0.498% | full 2.500% |
-    | 1 | 9500 | 1.968% | full 2.500% |
-    | 2 | 9000 | 4.348% | full 2.500% |
-    | 3 | 8000 | 8.859% | full 2.500% |
-
-    Two things follow. The window does **not** make sniping worse — those figures
-    match the pre-existing t=0-3 numbers to the third decimal, because the snipe
-    tax is untouched. And being front-run does **not** cost the creator their
-    allocation: the cap is a share of curve supply and the curve is nowhere near
-    exhausted, so the creator still takes the full 2.5% in every case. Ordering
-    costs the sniper ~4% relative (0.498% -> 0.479% if the creator goes first).
-  - Window length is close to abuse-free because the cap, not the clock, bounds
-    the take — and buying later costs the creator MORE USDC for the same tokens.
-    Past t=7 the snipe tax is zero, so a window beyond that confers nothing.
-- **Creator launch buy:** creator-only, untaxed, capped at **2.5% of curve
-  supply** (`maxCreatorLaunchBps`, settable, snapshotted). Cap is **cumulative
-  per token** — a per-call cap is loopable inside one block for ~37% of supply.
-  Proven defeated at exactly 2.500%.
-  - The cap limits the **privileged** allocation only. It does **not** cap total
-    creator holdings — nothing stops a second address. **Never describe it as
-    "creators are capped at 2.5%."** Disclosure is the protection: the frontend
-    must show "creator bought X% at launch."
-- **Symbol lock:** 5-minute time-limited hold, not permanent.
-  `caseSensitiveSymbols` starts `true` (lenient — "Cat" and "cat" both launch).
-  Tightening it later increases symbol-squatting exposure.
-- **Launch cooldown:** 10 seconds. Not a real spam control — bypassable via a
-  factory contract. The creation fee is the real control.
-- **Economics pinning:** `createToken` takes `expectedEconomicsHash`; reverts if
-  fees, threshold, or symbol policy changed since the creator saw the terms.
-  Pool boost is deliberately **not** hashed — the creator supplies it in the
-  same transaction, so hashing protects against nothing; immutability is
-  structural (no setter exists).
-- **Mutable metadata URI** — creator-only, emits old and new values so socials
-  swapped after launch are auditable.
-- **Pool boost** (opt-in at launch): creator's fee share accumulates separately
-  and is added to the pool's USDC side at graduation. Must **never** count
-  toward the threshold. Measured: gap 4.159% → 5.649%. Effect is ~1-4% deeper
-  pool — a **trust signal, not an economic mechanism**. Don't let UI imply
-  otherwise, and don't call it "holder fee sharing" (nobody receives anything).
-- **Licence: UNLICENSED** on our 9 contracts; OpenZeppelin's 14 sources remain
-  MIT. **Keep verifying on Blockscout** — public readability is the whole
-  positioning.
+Everything outside `contracts/` says Ballista. Everything inside keeps `LFX1` /
+`LFX1Token`, **filenames included**, and so do the `getContractFactory('LFX1')` strings.
+Blockscout publishes the **source path**, not just the contract name — renaming the files
+would publish the brand to every competitor scanning ArcScan, and renaming only the
+contract achieves nothing for the same reason. The switch happens at mainnet, on
+instruction.
 
 ---
 
-## Open items
+# 2. ARC-SPECIFIC FACTS
 
-1. ~~**Creator block-0 buy is unreachable from a normal wallet.**~~ **RESOLVED and
-   PROVEN ON TESTNET 22 Aug.** Live smoke test, 43/43 checks:
+**The docs path is `/arc/references/evm-differences`. `/arc/evm-differences` 404s.**
+Verify Arc/Circle claims against `docs.arc.io` and `developers.circle.com`, never memory.
 
-   | flow | blocks apart | seconds apart | result |
-   |---|---|---|---|
-   | sequential (wait for receipt, then buy) | +3 | **+1s** | buy succeeded |
-   | back-to-back (predicted address) | +1 | **+1s** | buy succeeded |
-
-   The sequential flow is the one that was impossible before, and the numbers show
-   exactly why: three blocks apart but only ONE second apart. A block-number check
-   had no chance; a 3-second window has 3x margin at observed timing. The check is now
-   The check is `block.timestamp <= creationTimestamp + creatorLaunchWindow`,
-   replacing `block.number == creationBlock`. `creatorLaunchWindow` is a settable
-   uint32, snapshotted per token, default **3 seconds**, pinned by the economics
-   hash.
-2. **Multisig migration.** Owner is still a single EOA. Safe is confirmed live
-   on Arc Testnet. 2-of-3, keys **independently generated** — not one seed
-   copied three ways. Contract uses plain `Ownable`, so `transferOwnership()` is
-   immediate and irreversible; verify the address twice. Use
-   `verify-ownership.mjs` before and after.
-3. **`SUPABASE_URL` doesn't resolve** — project deleted, renamed, or stale.
-   Migration `indexer/migrations/001_add_token_state.sql` still unapplied.
-4. **Indexing must survive the laptop being closed.** Goldsky supports Arc, has
-   a free tier, and explicitly supports **factory contracts** — which matches
-   this architecture exactly. Mirror sinks into Postgres (keeps Supabase);
-   Subgraphs replaces the indexer with a GraphQL endpoint. Note Goldsky Edge RPC
-   is a *different* product — that's RPC reads, not indexing.
-5. **Frontend.** Nothing usable. Biggest remaining risk.
-6. **V4 graduation + fee-capture locker.** See below.
-7. **Move the repo out of OneDrive** — it fights build tooling and can corrupt
-   `.git` mid-operation.
-
----
-
-## Uniswap on Arc — confirmed from their own SDK
-
-`sdks/sdk-core/src/addresses.ts`, `ChainId.ARC` (Arc **mainnet**; no Arc testnet
-entry exists, which is why V4 can't be integration-tested on our own testnet):
-
-| | address |
+| fact | status |
 |---|---|
-| v4 PoolManager | `0x8366a39cc670b4001a1121b8f6a443a643e40951` |
-| v4 PositionManager | `0x6049c9a0e26405c0985f9e3685c87d0ae917f82b` |
-| v4 StateView | `0xf3334192d15450cdd385c8b70e03f9a6bd9e673b` |
-| v4 Quoter | `0x8dc178efb8111bb0973dd9d722ebeff267c98f94` |
-| v3 core factory | `0xf0db7b58379503491d857db50ac9ece64c653918` |
-| v3 SwapRouter02 | `0x53bf6b0684ec7ef91e1387da3d1a1769bc5a6f77` |
-| **v2 router** | **`0x1f7d7550b1b028f7571e69a784071f0205fd2efa`** |
-| v2 factory | `0x89e5db8b5aa49aa85ac63f691524311aeb649eba` |
+| `PREVRANDAO` always returns `0` | Confirmed. We use no randomness anywhere. |
+| EIP-6780 self-destruct plus native-value constraints | Confirmed. **A non-zero-value call to a self-destructed account REVERTS on Arc; it succeeds on Ethereum.** Self-destruct to self, to the zero address, with a blocklisted party, or to an already-self-destructed beneficiary all revert. |
+| USDC blocklist enforced at runtime on **both** parties | Confirmed. `isBlacklisted(address)`, `blacklister()` and `paused()` all verified present on the live token at `0x3600...0000`. Reverts consume gas. |
+| EIP-7708 native transfer logs | Confirmed. Every native USDC movement emits a `Transfer`. **Discriminator: the system emitter is 18 decimals from a system address; the ERC-20 contract's own `Transfer` is 6 decimals.** Our indexer filters on the factory address only, so it is unaffected. |
+| Truncating `balanceOf` | Confirmed. "The ERC-20 view truncates, so it is not exact." `balanceOf(a) == 0` does not imply a zero native balance. See 1.6. |
+| USDC is both gas and settlement asset | Confirmed. 18dp native view, 6dp ERC-20 view, **one balance**. Any balance-delta probe on Arc must subtract gas — a naive self-transfer probe reported an 897-wei "fee" that was purely gas. |
+| Block timestamps non-decreasing, not strictly increasing | Confirmed. Hence `allowBlocksWithSameTimestamp: true`. Sub-second blocks share a timestamp; use block number for ordering. |
+| Base fee paid to the beneficiary, not burned | Confirmed. |
+| Blob txs rejected; `BLOBHASH` 0; `BLOBBASEFEE` 1; EIP-4788 empty | Confirmed. We touch none of them. |
+| **Mainnet chainId 5042** | **UNSOURCED — MUST VERIFY.** From an unreliable secondary source. Circle documents **only testnet 5042002**. Do not put 5042 in the frontend, deploy config or anywhere else until confirmed. |
 
-**The v2 router matches `IDEXRouter.addLiquidity` exactly** — V2 graduation
-needs zero new code. That's the fallback if V4 isn't ready.
-
-**V4 plan:** an adapter implementing `IDEXRouter` internally doing V4
-operations, plus a locker holding positions permanently while allowing fee
-collection. Don't modify `Ballista`'s graduation logic. Fee capture
-post-graduation is what makes an aggressive creator split sustainable.
-
-**Critical constraint for the locker** (learned from Adam's IMD launchpad,
-`@surfcoderepeat`): **never transfer value to an externally-controlled address
-inside a PoolManager unlock.** A contract recipient can return success while
-leaving an unsettled delta, reverting the whole unlock — bricking fee collection
-permanently. A gas stipend does not prevent it. Collect to the locker's own
-balance; claim in a separate transaction.
-
-**Testing:** fork-test against Base Sepolia's V4 deployment
-(`0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408`). Mocks test our understanding of
-V4, not V4. **Currency ordering must be tested both ways** — roughly half of all
-token addresses will sort below USDC and half above; getting it backwards
-inverts the pool price.
+**Arc states plainly that local EVM simulators "run a standard EVM, not Arc's."** Blocklist
+enforcement, EIP-7708 and truncating `balanceOf` surface only on Arc RPC.
 
 ---
 
-## Residual risk register
+# 3. RESIDUAL RISK REGISTER
 
 Kept deliberately non-empty. A register that closes everything is the same failure as a
-test that cannot go red.
+test that cannot go red. Each entry: **structure** (closed by construction), **parameter**
+(closed only by a value), or **open**.
 
-### PERMANENT, UNMITIGABLE — Circle can pause USDC
-
-`paused()` exists on Arc USDC at `0x3600...0000` (verified live, alongside
-`isBlacklisted(address)` and `blacklister()`). **If Circle pauses USDC, every buy, sell,
-fee claim and graduation reverts.** Nothing in our design changes that and nothing can:
-USDC is both the quote asset and the gas token, so there is no fallback path. This is not
-a bug to fix, it is a dependency to disclose — it belongs in public risk copy, not only
-in this file.
-
-The same contract enforces a **blocklist on both sender and recipient** at runtime, and
-reverts consume gas. The treasury case is closed by accrue-and-claim; the remaining paths
-are enumerated in the blocklist section below.
-
-### LOAD-BEARING PARAMETER — the 807M : 193M curve/LP split
-
-This ratio is **not only curve economics. It is what makes the flash-loan buy-out-and-dump
-structurally unprofitable**, and it must not be changed without re-deriving that bound.
-
-Measured against the real contract with the snipe tax at zero (the attacker's best case):
-
-```
-buy out the entire curve      8,111.97 USDC spent, 807,000,000 tokens acquired
-pool seeded at graduation     193,000,000 tokens / 8,030.85 USDC
-dump ALL tokens (V2 0.3% fee) 6,477.14 USDC returned
-NET                          -1,634.84 USDC
-```
-
-The attacker acquires **4.18x more supply than the pool is seeded with**, so dumping the
-full curve into it moves price catastrophically against them. The bound is structural,
-not parametric: **the pool cannot return more than the 8,030.85 it holds, which is
-already less than the 8,111.97 spent** — so even a zero-slippage, zero-fee dump loses
-money. Holding cheaper tokens bought earlier does not rescue it; those are additional
-supply into the same bounded pool.
-
-**Narrow the curve:LP ratio and this margin erodes.** Re-derive before touching either
-constant.
-
-## Hard-won constraints — these have caused real bugs
-
-- **Bytecode: 22,628 / 24,576 — 1,948 bytes free.** Was 5 bytes. Recovered by
-  converting all 54 `require(cond, "string")` in `Ballista.sol` to 27 custom
-  errors (`if (!cond) revert X();` — `require(cond, Err())` needs solc 0.8.26 and
-  we are on 0.8.24). **Measured saving 2,164 bytes**, of which the strings
-  themselves are only part: the rest is the per-site `Error(string)` ABI-encoding
-  machinery that disappears with them. Diagnostic parameters were then added back
-  at 13 sites (`SlippageExceeded(received, minRequested)`, `CurveNotActive(state)`,
-  `LaunchWindowClosed(closedAt)`, …) for **221 bytes** — cheap, and they make a
-  failure legible without a lookup table.
-  - **Comments are not compiled; stripping them frees zero.** Revert strings are,
-    and they are readable straight off the chain with no verification at all.
-  - **`BallistaToken` counts against Ballista's limit.** `new BallistaToken(...)`
-    embeds its **4,077-byte creation bytecode** into Ballista — ~18% of the
-    contract, and the single largest block in it. It is not "a separate small
-    contract"; if headroom ever gets tight again this is where the leverage is,
-    though most of those 4KB are OpenZeppelin ERC20 rather than anything ours.
-  - Still unconverted, deliberately: `BallistaToken` (1 string, ~100 bytes) and
-    the mocks (not deployed). Churn is risk and the margin no longer needs them.
-- **Arc RPC requires `batchMaxCount: 1`** in every **raw ethers.js** provider
-  config (the indexer, the frontend). Hardhat's own provider doesn't route
-  through ethers' batching, so it doesn't apply there.
-- **Arc's `eth_estimateGas` returns no margin.** A buy sent at the bare estimate
-  (198,794) ran out of gas; the same call with a 400,000 limit succeeded using
-  192,616. hardhat-ethers sends at exactly the estimate. **Always send with
-  headroom — this will hit the frontend too.**
-- **Arc targets 500ms blocks** (Malachite BFT, sub-second deterministic finality,
-  per Arc's own consensus write-up). Two consecutive blocks can therefore share a
-  whole-second `block.timestamp`, which is why `hardhat.config.js` sets
-  `allowBlocksWithSameTimestamp: true`. `hardhat.config.js` carries the same
-  reasoning in a comment — keep the two in sync and do not "clean up" either,
-  since the tests need several blocks inside one second to exercise t=0 at all.
-  It is also why the block-0 trading restriction only delays a sniper by half a second,
-  which is the entire reason the snipe tax exists.
-- **Never re-derive the bonding curve math.** Use `_quoteBuy` / `_quoteSell`.
-  External LLMs have re-derived it incorrectly more than once.
-- **USDC is 6 decimals** in contract amounts. Arc also exposes USDC as native
-  gas with 18 decimals internally — the same pot, two views. Not interchangeable.
-- **Fees are read per-token from `curves()`**, never assumed global.
-- **Never put raw private keys in browser storage.** Rejected permanently.
-- **The two CCTP bullets below are deferred, not current work.** Bridging is out
-  of launch scope (see Scope). They are kept because they were expensive to
-  establish and will be right when you return to them after mainnet — not because
-  anything on the critical path depends on them.
-- **Verify Arc/Circle/CCTP claims against official docs** (`developers.circle.com`,
-  `docs.arc.io`), never from memory. Arc mainnet is still not in Circle's
-  published CCTP address list; Arc testnet is domain 26 and *is* a supported
-  Forwarding Service destination.
-- **The custom bridge relayer should be scrapped** — Circle's Forwarding Service
-  does the job (no wallets to fund, no retries to manage, fees taken from the
-  minted USDC so users need no destination gas). Bridge Kit or
-  `depositForBurnWithHook`, not our own relayer.
-
-## Frontend requirements that fall out of the above
-
-- **Price impact must be a headline number.** The curve is ~11x thinner than
-  before: a $500 buy at launch takes ~21% of supply with ~19% slippage. Someone
-  receiving 19% less than quoted will assume they were scammed.
-- **A quote taken during the snipe window is stale within ONE second.** Measured: a
-  quote at t=0 against an execution 2.5s later returned 35,092,491 tokens where the
-  quote said 4,015,689 — an 8.7x difference, because the tax decayed two tiers in
-  between. The direction is always favourable to the buyer (tax only decays, so
-  execution beats a stale quote and `minTokensOut` never trips), so this is a
-  presentation problem rather than a loss. But a UI showing a frozen quote during the
-  first seven seconds is showing a number that is simply wrong. Re-quote continuously
-  and show the current tax tier and the seconds remaining, or do not show a quote at
-  all until the window closes.
-- **`minTokensOut` must never default to zero.** On an exhausted curve a zero
-  default silently does nothing; on a thin curve it means arbitrary sandwiching.
-- **Show "creator bought X% at launch"** on every token page.
-- Surface metadata-update events ("socials updated N hours ago").
-- Nudge hard on social links at launch: pump.fun launches advertising Telegram
-  graduate at 1.485% vs 0.166% (8.94x); all three channels 1.919% vs 0.110%
-  (17.4x). Creator self-buy gives a 4.51 hazard ratio.
+| # | risk | class | notes |
+|---|---|---|---|
+| R1 | **Circle pauses USDC** → every buy, sell, claim and graduation reverts | **OPEN — permanent, unmitigable** | `paused()` verified live. USDC is both quote asset and gas, so there is no fallback path. Not a bug to fix — a dependency to disclose. Belongs in public risk copy, not only here. |
+| R2 | Blocklisted **user-side** party (buyer, seller, creator) | **OPEN — untestable on testnet** | See §4. Covered locally by `MockBlocklistUSDC` only. |
+| R3 | Creator-allocation denial: anyone graduating the curve inside the creator window takes the creator's entire 2.5% | **parameter** | Only the snipe tax makes it uneconomic. Soften the table and it gets cheap. |
+| R4 | `MAX_TOTAL_FEE_BPS = 9900`, **zero headroom** — table t=0 (9800) + base fee (100) = exactly 9900 | **parameter** | The clamp's fee inversion divides by `(BPS_DENOMINATOR − buyFeeBps)`; a 100% total fee is a division-by-zero **panic**, not a revert. Raising the base fee at all requires publishing a lower t=0 table first. |
+| R5 | `_performGraduation` writes `c.state` after the external call | **structure — by guard placement, not ordering** | Reachable only from `buy`/`creatorLaunchBuy` (via `_settleBuy`) and `graduate()`, all `nonReentrant`. The only state-changing external function that is neither guarded nor owner-only is `updateMetadataURI` (creator-gated, writes a string). **Add one unguarded state-changing function and this becomes live.** |
+| R6 | Post-fix griefing race: an attacker re-skews the pair between correction and `graduate()` | **OPEN** | Costs them dust each time. Closed by the helper contract (unbuilt) bundling correct+graduate atomically. Severity depends on whether Arc has a public mempool — **unanswered**. |
+| R7 | Curve stranded at `GRADUATION_READY` — both sides closed, holders frozen | **structure, accepted** | Recoverable via `graduate()` once a live router and sane pair exist. The 24h router timelock bounds worst-case exposure. |
+| R8 | Owner is a **single EOA** | **OPEN — deliberate** | Deprioritised by the operator. Do not re-raise. |
+| R9 | Fee-on-transfer creation fee over-credits `treasuryFeesAccrued` | **OPEN — priced and declined** | +339 bytes to close, in a scenario where buys already revert. |
+| R10 | `SELFDESTRUCT` beneficiary push can put sub-6dp native dust in the factory | **OPEN — trivial** | Permanently stranded (no native-send path out). Does **not** corrupt the delta check — see 1.6. |
+| R11 | `license_type: none` on the explorer | **OPEN — blocked** | Needs `[LICENSOR]`. |
 
 ---
 
-## Freeze gate — the mutation score, not the test count
+# 4. TEST SURFACES ARE NOT INTERCHANGEABLE
 
-**52/56 guards killed = 92.9%**, on a clean run at `C:\dev\arc-launch`. Zero
-inconclusive, zero compile failures — contrast the OneDrive run that produced 29 phantom
-compile failures and a false UNDETECTED. The test count is not the gate and never was:
-228 passing tests coexisted with a real gap.
+**Do not read a mutation score as chain-level assurance.**
 
-**One survivor was a REAL GAP and is now closed.** `quoteBuy`'s `UnknownToken` guard had
-no test — three of the four view guards were asserted and this one was missed. Without
-it, `quoteBuy` on a non-existent token returns `tokensOut = 0` with `actualUsdcIn` set to
-the full amount and **does not revert**: "pay 1 USDC, receive nothing", which a frontend
-renders as a real quote. Exactly the misleading zero the guard exists to prevent.
+| surface | covers | does NOT cover |
+|---|---|---|
+| **Hardhat local** | all contract logic; the mutation gate | anything Arc-specific — it is a standard EVM |
+| **Pinned Ethereum fork** (block 25,846,000) | real Uniswap V2 router behaviour | **nothing about Arc** |
+| **Arc testnet smoke** | blocklist enforcement, EIP-7708, truncating `balanceOf`, real block timing | only what we can actually trigger — see below |
 
-**The remaining four are equivalent mutants**, classified rather than waved through:
+**Why block 25,846,000 specifically:** the canonical **V2 factory**
+`0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f`, **router02**
+`0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D` and **USDC**
+`0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` were all verified present **at that height**.
+Re-pinning to a newer block silently loses the validation the pin was chosen for — re-run
+the presence checks if you change it. Pinned rather than `latest` so runs are reproducible
+and Hardhat can cache state. Enabled by `FORK=1`; ordinary runs stay local.
 
-| survivor | basis |
+## What the blocklist substitution actually reaches — narrower than it looks
+
+We cannot ask Circle to blocklist an address. Real runtime reverts on the real token (zero
+address, precompile addresses, self-destructed accounts) are a genuine stand-in — **but
+they are destination properties, and a blocklist rejects a party, on either side.**
+
+| USDC movement | counterparties | substitution reaches it? |
+|---|---|---|
+| `createToken` fee-in | creator (sender) → factory | **No** — sender-side |
+| `_settleBuy` buy-in | buyer (sender) → factory | **No** — sender-side |
+| `sell` payout | factory → seller (`msg.sender`) | **No** — a caller cannot be a precompile |
+| `claimCreatorFees` | factory → creator (`msg.sender`) | **No** — same |
+| `claimTreasuryFees` | factory → `treasury` | **Yes** — owner-settable; `setTreasury` rejects only `address(0)` |
+| graduation | factory → router / `lpRecipient` | **Yes** — owner-settable |
+
+**Answering directly:**
+- **A blocklisted buyer whose inbound `transferFrom` fails — NOT REACHED.** Sender-side.
+- **The factory itself blocklisted — NOT REACHED.** We cannot blocklist it, and it would break every path in both directions.
+- **A blocklisted party where we are the recipient — NOT REACHED.** Sender-side again.
+
+**Testnet blocklist coverage extends only to owner-chosen destinations.** Everything
+user-side is R2: untestable, not covered. Do not let "simulated on testnet" read as
+"closed".
+
+**There is no clamped-buy refund path.** The clamp never pulls the excess: `_quoteBuy`
+computes `actualUsdcIn` for exactly the tokens available and `safeTransferFrom` pulls only
+that. Closed by structure, not by a fix.
+
+---
+
+# 5. STANDING PROCESS RULES
+
+## The mutation score is the freeze gate, not the test count
+
+**228 passing tests coexisted with a real gap** — `quoteBuy`'s `UnknownToken` guard had no
+test, and without it `quoteBuy` on a non-existent token returns `tokensOut = 0` with
+`actualUsdcIn` set to the full amount and **does not revert**. Last clean run: **52/56 =
+92.9%**, four survivors classified — two **proven** equivalent by `ceilDiv` monotonicity,
+two **evidenced** over 2,000,000 fuzz cases with zero firings.
+
+Keep "proven equivalent" and "unfalsified over N cases" as **separate** claims.
+
+## Prove every test can go red
+
+**Six test-shape errors in one session.** Classes seen, all of which passed while testing
+nothing:
+
+1. **Vacuous assertion** — an invariant ran 250,000 calls and still passed with the code it checked commented out, because no curve ever reached the state it asserted on.
+2. **Baseline from the wrong reading** — comparing an event against a *pre-buy* `tokenReserves` figure larger than the amount actually offered, so a `lessThan` held either way.
+3. **Passing for the wrong reason** — a same-block dump that reverted on *allowance*, not the guard under test.
+4. **`launch()` returns an address, not a transaction** — chai-matchers cannot read it. Made twice.
+5. **Wrong quantity** — asserting against gross payout where the contract compares net.
+6. **Stored vs read** — asserting a field was written but never that it was read.
+
+Assume the next one is yours until shown otherwise.
+
+## Mutations go through the harness only
+
+`scripts/guard-coverage.py` restores from git after **every** site, on SIGINT/SIGTERM and
+via `atexit`, and refuses to start against a dirty file. **No ad-hoc mutation loops** — one
+timed out mid-run and left a mutated contract on disk. The bad outcome is not a lost hour;
+it is a mutation surviving into a commit unnoticed.
+
+**A pre-commit hook refuses commits containing mutation markers** (`// MUTATED`,
+`if (false) revert`). Lives in `.githooks/pre-commit`, activated by
+`git config core.hooksPath .githooks` — **a fresh clone must run that command** or the hook
+is inert. Verified to actually block.
+
+## Other standing rules
+
+- Report findings before fixing. Some are acceptable risks; that is the operator's call.
+- Flag anything safe only by a **parameter value** rather than by structure.
+- Prefer restructuring over compiler flags (stack-too-deep → extract a function, never `viaIR`).
+- **Never claim it is bulletproof.** State what was tested, what was found, and what would still worry you with real money on it.
+- Arc's `eth_estimateGas` returns **no margin** — always send with headroom. This will hit the frontend.
+- Arc RPC requires `batchMaxCount: 1` in every raw ethers.js provider config.
+- USDC is 6 decimals in contract amounts.
+- Fees are read per-token from `curves()`, never assumed global.
+- Never put raw private keys in browser storage.
+
+---
+
+# 6. FORWARD DECISIONS ALREADY SETTLED — DO NOT REOPEN
+
+- **Mainnet launches on the V2 router, LP burned to `BURN_ADDRESS`.** V4 is post-launch, via the router timelock. **A next session must not start building V4.**
+- **The zero-fee-pool rationale is LP fee dilutability** — anyone can add liquidity to a permissionless v4 pool and take a pro-rata share of LP fees. It is **not** "Uniswap charges a fee on top of ours". That reasoning was wrong and must not reappear.
+- **Under a zero-fee pool the position accrues nothing, so the hook is the fee accountant and the locker is a tombstone.** *(Corrected: an earlier version of this file said the locker "must be able to call `PositionManager` to collect fees and manage the position." That is wrong under a zero-fee pool and has been removed.)*
+- **Burn vs locker for the v4 position is OPEN**, pending the operator's recommendation. `PositionManager` uses **`_mint`, not `_safeMint`** (L369, solmate base), so a position can go to a non-receiver address without reverting — graduation will **not** revert regardless of what the recipient implements.
+- **No unvalidated calldata may ever be forwarded to `PositionManager` or `PoolManager`.** A reported launchpad exploit forwarded user-supplied calldata into `multicall()`; the attacker injected `setApprovalForAll` and swept every custodied position. All calldata must be constructed internally from validated parameters.
+- Uniswap on Arc mainnet, from their own SDK: v2 router `0x1f7d7550b1b028f7571e69a784071f0205fd2efa`, v2 factory `0x89e5db8b5aa49aa85ac63f691524311aeb649eba`, v4 PoolManager `0x8366a39cc670b4001a1121b8f6a443a643e40951`, v4 PositionManager `0x6049c9a0e26405c0985f9e3685c87d0ae917f82b`. **The v2 router matches `IDEXRouter.addLiquidity` exactly.**
+
+---
+
+# 7. CURRENT STATE
+
+| | |
 |---|---|
-| `_quoteBuy` / `CurveMathError` | **Proven.** `ceilDiv` is non-increasing in its denominator and `newVirtualUsdc >= virtualUsdcReserves`, so `newVirtualToken <= ceilDiv(k, vUsdc) = vToken` always. |
-| `_quoteSell` / `CurveMathError` | **Proven**, symmetric. |
-| `_quoteBuy` / `ClampCostExceededOffer` | **Evidence, not proof.** 2,000,000 fuzzed cases, ~1,000,000 exercising the clamp path, zero firings. |
-| `_quoteSell` / `ClampInputExceededOffer` | **Evidence, not proof.** Same fuzz, same result. |
+| HEAD | `08be890` |
+| bytecode | **24,018 / 24,576 — 558 free** |
+| tests | **233 Hardhat, 7 Foundry** |
+| last mutation score | 52/56 = 92.9% — **pre-dates this session's changes; must be re-run before re-freeze** |
 
-The two clamp guards are defensive against a rounding case nobody has produced. Keep
-them: they cost little and they are the kind of guard whose absence is only discovered
-by the thing it would have caught.
+## ⚠ `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` IS STALE
 
-## Foundry — depth, and a vacuous invariant caught by inversion
+That deployment predates the strict-mins fix. **It must not be sent to Zerion or anyone
+else.** A new deployment and address come out of the re-freeze.
 
-**1000 runs x 250 depth = 250,000 calls per invariant**, up from 256 x 50 = 12,800.
-Handler gained `claimTreasury()`, since treasury fees now accrue and the claim path is
-part of the state machine — it is exercised ~62k times per run.
+The authoritative record is `deployments/arcTestnet.json`, written by `scripts/deploy.js`
+on every deploy, including the commit hash it was built from and a `commitDirty` flag
+(which uses `git status --porcelain -uno`, ignoring untracked files — plain `--porcelain`
+flagged every deploy irreproducible because of an unrelated archive in the repo root).
 
-**A new invariant was written, proved vacuous, and replaced.**
-`invariant_graduatedCurvesAreFullyDrained` asserted that a GRADUATED curve holds no
-reserves. It passed 250,000 calls — and it still passed with
-`c.realUsdcReserves = 0` commented out of `_performGraduation`, because **the handler
-caps buys at ~250 USDC to keep curves alive, so no curve ever reaches the 8,000
-threshold and the assertion never ran.** Raising the cap would graduate every curve on
-the fuzzer's first call and hollow out the solvency invariants instead — the trade the
-handler comment already warns about. It is now a deterministic test that forces the
-state, `test_graduatedCurveIsFullyDrained`.
+## Done this session
 
-**That test needed three arms before every assertion was load-bearing**, and each was
-found the same way — by mutating and watching it stay green:
-- a **depleting** buy leaves `tokenReserves` already zero, so `c.tokenReserves = 0` is
-  redundant on that path; the **threshold** arm is needed to make it bite
-- every fuzz token is created with pool boost OFF, so `c.poolBoost = 0` is redundant
-  unless a **boost-enabled** token is launched and graduated
+Strict mins merged and the adversarial-pair attack closed; mainnet fork wired, pinned and
+verified; residual risk register created; pre-commit mutation guard added and proven to
+block; blocklist substitution scoped honestly; Arc EVM differences verified against the
+real docs.
 
-All three drain assignments now fail the test when removed. **The lesson generalises: an
-assertion is only load-bearing on the paths that actually reach it, and "the invariant
-passed" says nothing until the mutation says otherwise.**
+## Remaining, in order
 
-## Static analysis — Slither 0.11.6, 24 Aug
+1. **Cross-curve contamination invariant** — Foundry, asserting the sum of all curves' `realUsdcReserves` + `treasuryFeesAccrued` + creator accruals never exceeds the contract's USDC balance. Prove it can go red.
+2. **Mock-only sweep** — list every component whose only coverage is a stub.
+3. **Actor/phase adversarial pass** — by actor (creator, sniper, whale, MEV/sequencer, malicious router, arbitrary contract, compromised owner, malicious frontend/indexer) and by phase (creation, creator window, curve trading, near-graduation, graduation execution, post-graduation, admin ops). Plus: owner-key blast radius in severity order; the 24h timelock window's realistic exposure; donation and direct-transfer paths; whether any token can be launched that can never graduate.
+4. **Graduation helper** — external contract, no `LFX1` bytecode, permissionless, bounded correction spend, a failed call must leave the curve retryable rather than worse off.
+5. **Fork suite proper** against real V2 — clean graduation, both skews, address ordering both ways, stranded remainder, retry, and whether `assert(amountAOptimal <= amountADesired)` can ever trip.
+6. **Re-freeze** — clean mutation run with every survivor classified, redeploy, verify, record commit + bytecode hash, publish the new address.
 
-17 findings. What was acted on, and what was dismissed and why — the dismissals matter
-more than the acceptances, because a tool's output is a starting point.
+---
 
-**Medium — `reentrancy-no-eth`, `c.state` written after `addLiquidity`. REAL as
-structure, safe by guard placement rather than by ordering.** `_performGraduation` sets
-`c.state = GRADUATED` *after* the router call, which does violate CEI. It is reachable
-from exactly two places, both `nonReentrant`: `_settleBuy` (from `buy`/`creatorLaunchBuy`)
-and `graduate()`. The cross-function targets Slither names — `currentPrice`,
-`currentSnipeTaxBps` — are `view`. Verified by enumeration: **the only state-changing
-external function that is neither `nonReentrant` nor `onlyOwner` is `updateMetadataURI`**,
-which is creator-gated and only writes a string. A hostile router driving all eight
-external functions from inside graduation is blocked on every one, and that test goes red
-if any single guard is removed.
-⚠ This is safe because of WHERE THE GUARDS ARE, not because the ordering is correct. Add
-one unguarded state-changing external function and it becomes live.
+# 8. NON-CONTRACT STATE
 
-**Medium — `incorrect-equality`, `liquidity == 0`. Dismissed.** The detector targets
-equality on balances and timestamps, where an exact match is fragile. Here zero is a
-distinguished value — "the router returned no LP tokens at all" — not an approximate one.
+- **Frontend: not started. This is the critical path.** Price impact must be a headline number — a $500 buy at launch takes ~21% of supply with ~19% slippage. `minTokensOut` must never default to zero. Show "creator bought X% at launch" on every token page — the 2.5% cap limits only the *privileged* path and does not cap total creator holdings, so disclosure is the actual protection. A quote taken during the snipe window is stale within **one second** and can understate the received amount by ~9x (favourable to the buyer, so `minTokensOut` never trips — but a frozen quote is simply wrong).
+- **Indexer:** migrations 001 and 002 **both unapplied**; `SUPABASE_URL` does not resolve. Goldsky vs Envio undecided pending their answers on Arc mainnet support; Supabase is the default if neither lands. The ABI is **generated** from build artifacts (`npm run build`) — the hand-maintained one silently truncated the `Curve` struct from 22 fields to 16 and hid `creatorLaunchPurchased`, the disclosure that protects buyers. **Never hand-edit it.**
+- **Licence:** BUSL-1.1, change licence GPL-2.0-or-later, Change Date 2030-09-16, `[LICENSOR]` **still unfilled** and blocking Blockscout's `license_type` (value `bsl_1_1`; `hardhat verify` does not send one, so it needs the UI or a direct API call). ⚠ Verifying on a public explorer arguably **starts** the four-year BUSL clock.
+- **Owner is a single EOA** by the operator's deliberate decision. Do not re-raise.
+- **`ARCHITECTURE.md`** holds 140 comment blocks / 748 lines moved out of the deployed source. Published nowhere; it is the only copy of that reasoning.
 
-**Medium — `unused-return`, `amountA`/`amountB` from `addLiquidity` ignored. Valid, not a
-bug, worth doing later.** Only `liquidity` is read. Consuming the amounts would let
-graduation detect a partially-consuming router and zero the residual approval on the
-success path. Today that residual is bounded by orphaned funds nobody is owed and is
-already regression-tested, so this is a tightening, not a fix.
-
-**Low — `events-maths` ×5. VALID and unaddressed.** `setLaunchCooldown`,
-`setSymbolLockDuration`, `setCreationFee`, `setDefaultGraduationThreshold` and
-`setDefaultFees` all change owner-controlled economics **with no event**. This project
-already treats "monitoring `RouterProposed` is a launch requirement" as doctrine; by the
-same logic these are unmonitorable admin actions. The economics hash protects anyone
-mid-launch from a surprise, but nothing makes the change *observable*. Decide before
-mainnet.
-
-**Low — `timestamp` ×6. Inherent, bounded, dismissed.** The snipe tax, creator window,
-router timelock, symbol lock and launch cooldown are all deliberately time-based. A
-validator nudging `block.timestamp` a second or two could drop a sniper into a cheaper
-tax tier; the tier decays in seconds anyway, so the gain is small and bounded.
-
-**Low — `missing-zero-check` on `LFX1Token`'s `creator_`. Dismissed.** `LFX1` always
-passes `msg.sender`, and the token is only ever deployed by the factory.
-
-**Low — `reentrancy-events` on `updateMetadataURI`. Dismissed.** Event after an external
-call to our own non-hooking token.
-
-## Working style
-
-- One feature at a time: build it, then genuinely try to break it, then move on.
-  Adversarial tests, not happy-path confirmation. Report what was tried **and
-  failed** — coverage matters as much as results.
-- **Hardhat stamps blocks from the WALL CLOCK, so timing tests are machine-speed
-  dependent.** A test that pins a timestamp, asserts a view, then sends a transaction
-  gets a transaction block stamped from real time — on a slow run the trade executes
-  in a different snipe-tax tier than the one just asserted, and a correct contract
-  fails. Fixed in `SnipeTax.test.js` by having `atElapsed` pin the CALLER'S next
-  transaction as well as mining a filler block for the views. Reproduced deliberately
-  with a 2.5s sleep before fixing, and re-verified under the same sleep and under six
-  concurrent CPU burners. **If you add a timing-sensitive test, pin every block it
-  depends on, not just the first.**
-- **Prove a test can fail before trusting it.** The single most valuable habit
-  this project has developed, and not a footnote. Two separate suites here passed
-  while testing nothing: the original 19 loaded frozen bytecode from a gitignored
-  `artifacts-manual/`, so they tested a July build regardless of what `contracts/`
-  said; and the Foundry invariants had every call swallowed by `try/catch`, so
-  `reverts: 0` proved nothing. **`fail_on_revert = false` is still set in
-  `foundry.toml` — the hazard is live, not historical.** When a test passes first
-  try on something subtle, break it on purpose and confirm it goes red. A green
-  suite is evidence only once you have watched it go red.
-- **Report findings before fixing them.** Some are acceptable risks; that's my
-  call.
-- Prefer restructuring over compiler flags (stack-too-deep → extract a function,
-  don't reach for `viaIR`).
-- **Trust the contract over my models.** My numbers come from JS derivations;
-  where they disagree with measured behaviour, the contract is right — and
-  saying so has caught real errors more than once.
-- Flag anything that's only safe because of a parameter value rather than the
-  code's structure. Parameters change.
-- **Never claim it's bulletproof.** State what was tested, what was found, and
-  what would still worry you with real money on it.
-- I work across multiple LLMs and bring code back for auditing. Assume invented
-  ABI params, wrong decimals, fabricated functions.
-- Be direct. If an idea is bad, say so and say why.
-
-**Standing caveat:** Claude Code has written both the contract changes and the
-tests that check them, which is structurally the wrong shape for finding its own
-blind spots. A paid audit is deferred until revenue — Code4rena/Sherlock
-contests, Cantina, or an Immunefi bounty are cheaper shapes than a $15k
-engagement and worth considering before mainnet.
+---
 
 ## Stack
 
-Solidity 0.8.24 · Hardhat · Foundry (invariant fuzzing) · Slither · SolidityScan
-Node.js · Supabase (Postgres + RLS) · plain HTML/CSS/JS frontend, no build step
-Arc Testnet (chainId 5042002) · Blockscout · Safe multisig · Circle CCTP V2
+Solidity 0.8.24 · Hardhat · Foundry · Slither · Node.js · Supabase (Postgres + RLS) ·
+plain HTML/CSS/JS frontend, no build step · Arc Testnet (chainId 5042002) · Blockscout ·
+Circle CCTP V2 (deferred, out of launch scope)
