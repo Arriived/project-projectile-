@@ -1,23 +1,36 @@
 #!/bin/sh
-# Refuse to commit a mutated contract.
+# Refuse to commit while a mutation run is in progress or was killed.
 #
 # A red-proof mutates contracts/ on disk. If the run is killed before its restore, the
 # mutation stays in the working tree -- this has happened. The bad outcome is not a lost
 # hour, it is a mutation surviving into a commit unnoticed.
 #
-# Markers below are exactly what the harness and ad-hoc proofs write.
-if git diff --cached --name-only | grep -q '^contracts/'; then
-  HITS=$(git diff --cached -U0 -- contracts/ \
-    | grep '^+' | grep -vE '^\+\+\+' \
-    | grep -nE '// *MUTATED|if \(false\) revert|PLACEHOLDER_NOMATCH')
-  if [ -n "$HITS" ]; then
-    echo "COMMIT REFUSED: mutation marker found in staged contracts/ changes:"
-    echo "$HITS"
-    echo
-    echo "This is a red-proof mutation, not real work. Restore with:"
-    echo "    git checkout -- contracts/"
-    echo "Override only if you are certain:  git commit --no-verify"
-    exit 1
-  fi
+# This checks STATE, not content. Grepping the staged diff for mutation markers was tried
+# and REMOVED: it only catches mutations that announce themselves, so a hand-edited one
+# passes silently and a green hook gets read as a clean tree -- worse than no hook. It
+# also could not see the class that motivated the guard, a cross-curve steal that adds
+# lines and removes no guard.
+#
+# Every mutation path (scripts/guard-coverage.py, scripts/redproof.py) takes the lease
+# before touching contracts/ and releases it in the same path that restores from git. A
+# killed run leaves the lease behind, so this fails closed.
+#
+# Refuses ALL commits, not just ones touching contracts/. Nothing should be committed
+# mid-mutation, and a narrower rule is bypassed by staging something else.
+LEASE=".mutation-lease"
+if [ -e "$LEASE" ]; then
+  echo "COMMIT REFUSED: $LEASE exists."
+  echo "A mutation run is live, or one was killed and may have left a mutation on disk."
+  echo
+  sed 's/^/    /' "$LEASE" 2>/dev/null
+  echo
+  echo "Verify contracts/ matches HEAD before doing anything else:"
+  echo "    git diff --stat contracts/"
+  echo "    git checkout -- contracts/     # if it differs"
+  echo "Then release the lease:"
+  echo "    rm $LEASE"
+  echo
+  echo "Override only if you are certain:  git commit --no-verify"
+  exit 1
 fi
 exit 0

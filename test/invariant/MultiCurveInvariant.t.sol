@@ -176,4 +176,16 @@ contract MultiCurveInvariantTest is Test {
         handler.sell(0, 50);
         assertGt(handler.sellsExecuted(), 0, "handler sell path is broken");
     }
+
+    /// @notice The claim path, for the same reason and with more history: it was dead for
+    ///         its entire life. It claimed as the handler while every token here is
+    ///         created by the test contract, so it reverted into the catch on all 4,274
+    ///         calls of a full run while reporting "0 reverts" -- the catch, not success.
+    ///         Nothing noticed, because afterInvariant only gates on buys.
+    function test_claimPathIsReachable() public {
+        handler.buy(0, 100e6);
+        assertGt(factory.creatorFeesAccrued(address(this)), 0, "no creator fees accrued");
+        handler.claim(0);
+        assertGt(handler.claimsExecuted(), 0, "handler claim path is broken");
+    }
 }

@@ -6,10 +6,16 @@
 
 | | |
 |---|---|
-| HEAD | `2d92cfe` |
+| HEAD **when this was written** | `646e2ed` |
 | bytecode | **24,018 / 24,576 — 558 free** |
-| tests | **233 Hardhat, 7 Foundry** |
+| tests | **233 Hardhat, 13 Foundry** |
 | deployed address | **none current.** `0xDF714C3b...` is STALE — see §7 |
+
+**That HEAD is stale the moment anything is committed on top of it.** It records where
+this file was last updated, not where you are. `git rev-parse --short HEAD` is ground
+truth; if the two differ, commits have landed since and anything below may have moved with
+them. This file once carried **three different HEADs at once** — this table said `2d92cfe`,
+§7 said `08be890`, and the repo was on `646e2ed`.
 
 ## First run in a fresh clone — do this before anything else
 
@@ -27,20 +33,19 @@ missing.
 
 ## The exact next action
 
-**Write the cross-curve contamination invariant** (Foundry): assert that the sum of every
-curve's `realUsdcReserves` + `treasuryFeesAccrued` + all creator accruals never exceeds
-the contract's actual USDC balance. The factory holds **one pooled USDC balance across all
-curves**, so this is the property that says one curve cannot reach another's reserves.
-**Prove it can go red** before trusting it — see §5 for why that is not optional here.
+**The mock-only sweep**: list every component whose sole coverage is a stub, and say for
+each what the stub does NOT reach. §4 already does this for the blocklist substitution and
+the shape of that answer is the target — `MockRouter` returns the amounts it was offered
+and never skews a ratio, so every graduation test runs through a router that cannot
+reproduce §1.1's attack. Start there.
 
 Then, in this order:
 
-1. Cross-curve contamination invariant *(next action, above)*
-2. Mock-only sweep — every component whose sole coverage is a stub
-3. Actor/phase adversarial pass, including the five specific questions in §7
-4. Graduation helper — external contract, no `LFX1` bytecode
-5. Fork suite proper against real Uniswap V2
-6. Re-freeze — clean mutation run, redeploy, new address
+1. Mock-only sweep *(next action, above)*
+2. Actor/phase adversarial pass, including the five specific questions in §7
+3. Graduation helper — external contract, no `LFX1` bytecode
+4. Fork suite proper against real Uniswap V2
+5. Re-freeze — clean mutation run, redeploy, new address
 
 **The fork is gated behind `FORK=1` and pinned to block 25,846,000.** Ordinary test runs
 are local and unforked. Do not re-pin without re-running the presence checks — see §4.
@@ -251,6 +256,33 @@ would publish the brand to every competitor scanning ArcScan, and renaming only 
 contract achieves nothing for the same reason. The switch happens at mainnet, on
 instruction.
 
+## 1.10 Cross-curve conservation is EXACT, not `>=`
+
+`invariant_pooledUsdcExactlyBacksAllAccounting` asserts the factory's USDC **equals** every
+curve's `realUsdcReserves` + `poolBoost`, plus every creator accrual, plus
+`treasuryFeesAccrued`. Measured, with the treasury accrual in `_settleBuy` dropped:
+
+| check | result |
+|---|---|
+| all five pre-existing invariants | **green** |
+| exact conservation | **red** -- `13947770 != 13935322` |
+
+**Unaccounted funds read as SURPLUS to a `>=` check.** Every aggregate solvency check in
+the repo stays green while the factory holds money it cannot attribute to anyone. That is
+1.7's warning in the direction it does not spell out: *omitting* a fee term from a check is
+caught trivially, because the check then fails against correct code. *Under-accounting
+inside the contract* is invisible unless the check is exact.
+
+**Relaxing it back to `>=` reopens precisely that.** The `>=` form is kept deliberately in
+`MultiCurveInvariant`; the two are not redundant, they fail on different bugs.
+
+Its sibling `invariant_aTradeOnOneCurveDoesNotMoveAnother` covers what no aggregate can. A
+zero-sum steal between curves leaves the sum identical: proven with the steal live, all
+five pre-existing invariants AND the exact conservation check stayed green, and only the
+isolation check fired.
+
+---
+
 ---
 
 # 2. ARC-SPECIFIC FACTS
@@ -301,6 +333,13 @@ test that cannot go red. Each entry: **structure** (closed by construction), **p
 # 4. TEST SURFACES ARE NOT INTERCHANGEABLE
 
 **Do not read a mutation score as chain-level assurance.**
+
+**Forge and Hardhat must compile the same bytecode, and that takes TWO pins.**
+`foundry.toml` pins `optimizer` / `optimizer_runs` **and** `solc_version = "0.8.24"`.
+Without the version pin forge resolves the `^0.8.24` pragma to whatever is newest (0.8.35
+at the time of writing) while `hardhat.config.js` pins 0.8.24 — so the invariants fuzz
+bytecode no deployment will ever have, and nothing says so. Same class of drift as the
+optimizer settings above, one field over, and it survived longer.
 
 | surface | covers | does NOT cover |
 |---|---|---|
@@ -372,17 +411,55 @@ nothing:
 
 Assume the next one is yours until shown otherwise.
 
-## Mutations go through the harness only
+**Budget the cycle honestly — a red-proof is minutes, not seconds.** At the shipped
+`[invariant]` settings (`runs = 1000, depth = 250`) the Foundry suite is **~4.4 minutes**
+wall-clock, so one mutate -> compile -> run -> restore round trip is ~5 minutes and the
+three proofs behind the cross-curve invariants cost ~15. While iterating, drop to
+`FOUNDRY_INVARIANT_RUNS=50 FOUNDRY_INVARIANT_DEPTH=50` — that is ~25 seconds per proof. A
+mutation that dies in 50 runs is proved dead; one that SURVIVES 50 has proved nothing and
+must be re-run at full settings. Pinning solc 0.8.24 made the suite ~25% slower than the
+0.8.35 figure an older note may quote.
 
-`scripts/guard-coverage.py` restores from git after **every** site, on SIGINT/SIGTERM and
-via `atexit`, and refuses to start against a dirty file. **No ad-hoc mutation loops** — one
-timed out mid-run and left a mutated contract on disk. The bad outcome is not a lost hour;
-it is a mutation surviving into a commit unnoticed.
+## Mutations go through a mutation tool, never by hand
 
-**A pre-commit hook refuses commits containing mutation markers** (`// MUTATED`,
-`if (false) revert`). Lives in `.githooks/pre-commit`, activated by
-`git config core.hooksPath .githooks` — **a fresh clone must run that command** or the hook
-is inert. Verified to actually block.
+Two tools, because one cannot do both jobs:
+
+- **`scripts/guard-coverage.py`** — the freeze gate. Disables every `if (!(...)) revert`
+  guard site in turn and runs the **Hardhat** suite.
+- **`scripts/redproof.py`** — one named mutation, one suite, restore. **The harness cannot
+  red-proof a Foundry invariant:** it parses mocha's "N passing/failing", and an accounting
+  bug is not a guard site, so `guard-coverage.py`'s mutation vocabulary cannot express one.
+  Until this existed the only route was hand-editing a contract. `--list` shows the
+  registered mutations; **add one there rather than editing a contract by hand.** Defaults
+  to reduced fuzz settings — a mutation that dies in 50 runs is proved dead, one that
+  survives 50 has proved nothing and needs `--full`.
+
+Both restore from git after every site, on SIGINT/SIGTERM and via `atexit`. **No ad-hoc
+mutation loops** — one timed out mid-run and left a mutated contract on disk.
+
+**`redproof.py` REFUSES to run against a dirty target rather than restoring it.** The
+restore it relies on can only recover what is COMMITTED, so auto-restoring destroys
+uncommitted work — it ate an unstaged test fix the first time it ran. Commit, then mutate.
+`guard-coverage.py` still auto-restores a dirty `contracts/LFX1.sol` at start: same hazard,
+not yet changed.
+
+### The pre-commit hook is a LEASE, not a marker grep
+
+`.githooks/pre-commit` refuses **any** commit while `.mutation-lease` exists. Both tools
+take the lease before touching a file and release it in the same path that restores, so a
+killed run leaves the lease behind and fails closed.
+
+**The marker grep it replaced was removed on purpose, not lost.** It matched `// MUTATED`
+and `if (false) revert` in the staged diff — markers the tools themselves write — so it
+only ever caught mutations that ANNOUNCE themselves. A hand-edited one carries no marker
+and passes, and a green hook then gets read as a clean tree, which is worse than no hook.
+It also could not see the class that motivated the guard at all: a cross-curve steal ADDS
+lines and removes no guard, so no content rule matches it. The lease checks state, and
+state cannot be evaded by writing different text.
+
+Activated by `git config core.hooksPath .githooks` — **a fresh clone must run that
+command** or the hook is inert. Verified to actually block: with a lease present
+`git commit` refuses and HEAD does not move.
 
 ## Other standing rules
 
@@ -413,9 +490,9 @@ is inert. Verified to actually block.
 
 | | |
 |---|---|
-| HEAD | `08be890` |
+| HEAD **when this was written** | `646e2ed` |
 | bytecode | **24,018 / 24,576 — 558 free** |
-| tests | **233 Hardhat, 7 Foundry** |
+| tests | **233 Hardhat, 13 Foundry** |
 | last mutation score | 52/56 = 92.9% — **pre-dates this session's changes; must be re-run before re-freeze** |
 
 ## ⚠ `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` IS STALE
@@ -435,14 +512,23 @@ verified; residual risk register created; pre-commit mutation guard added and pr
 block; blocklist substitution scoped honestly; Arc EVM differences verified against the
 real docs.
 
+**Cross-curve contamination invariant — DONE.** Both forms: exact aggregate conservation
+(§1.10) and per-curve isolation, all three properties red-proved.
+`solc_version = "0.8.24"` pinned in `foundry.toml` — forge had been resolving to 0.8.35 and
+fuzzing bytecode no deployment would ever have. The pre-commit hook was converted from a
+marker grep to a mutation lease (§5) and `scripts/redproof.py` added, because the harness
+cannot red-proof a Foundry invariant. **`MultiCurveHandler.claim()` was dead for its entire
+life** — it claimed as the handler while every token there is created by the test contract,
+so all 4,274 calls of a full run reverted into the catch while reporting "0 reverts". Fixed,
+and its reachability is now asserted.
+
 ## Remaining, in order
 
-1. **Cross-curve contamination invariant** — Foundry, asserting the sum of all curves' `realUsdcReserves` + `treasuryFeesAccrued` + creator accruals never exceeds the contract's USDC balance. Prove it can go red.
-2. **Mock-only sweep** — list every component whose only coverage is a stub.
-3. **Actor/phase adversarial pass** — by actor (creator, sniper, whale, MEV/sequencer, malicious router, arbitrary contract, compromised owner, malicious frontend/indexer) and by phase (creation, creator window, curve trading, near-graduation, graduation execution, post-graduation, admin ops). Plus: owner-key blast radius in severity order; the 24h timelock window's realistic exposure; donation and direct-transfer paths; whether any token can be launched that can never graduate.
-4. **Graduation helper** — external contract, no `LFX1` bytecode, permissionless, bounded correction spend, a failed call must leave the curve retryable rather than worse off.
-5. **Fork suite proper** against real V2 — clean graduation, both skews, address ordering both ways, stranded remainder, retry, and whether `assert(amountAOptimal <= amountADesired)` can ever trip.
-6. **Re-freeze** — clean mutation run with every survivor classified, redeploy, verify, record commit + bytecode hash, publish the new address.
+1. **Mock-only sweep** — list every component whose only coverage is a stub.
+2. **Actor/phase adversarial pass** — by actor (creator, sniper, whale, MEV/sequencer, malicious router, arbitrary contract, compromised owner, malicious frontend/indexer) and by phase (creation, creator window, curve trading, near-graduation, graduation execution, post-graduation, admin ops). Plus: owner-key blast radius in severity order; the 24h timelock window's realistic exposure; donation and direct-transfer paths; whether any token can be launched that can never graduate.
+3. **Graduation helper** — external contract, no `LFX1` bytecode, permissionless, bounded correction spend, a failed call must leave the curve retryable rather than worse off.
+4. **Fork suite proper** against real V2 — clean graduation, both skews, address ordering both ways, stranded remainder, retry, and whether `assert(amountAOptimal <= amountADesired)` can ever trip.
+5. **Re-freeze** — clean mutation run with every survivor classified, redeploy, verify, record commit + bytecode hash, publish the new address.
 
 ---
 

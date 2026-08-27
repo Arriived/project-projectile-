@@ -31,6 +31,9 @@ import signal
 import subprocess
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mutation_lease  # noqa: E402
+
 SRC = "contracts/LFX1.sol"
 OUT = os.environ.get("GUARD_OUT", "guard-coverage.jsonl")
 
@@ -45,6 +48,14 @@ def restore():
     """Always safe to call. The file is expected to equal HEAD at rest."""
     subprocess.run(["git", "checkout", "--", SRC], shell=True,
                    capture_output=True, encoding="utf-8", errors="replace")
+
+
+def cleanup():
+    """Restore AND release the lease. Every exit path goes through this: a lease left
+    behind is a commit refused, which is the fail-closed direction but still needs
+    clearing by hand."""
+    restore()
+    mutation_lease.release()
 
 
 def is_clean():
@@ -69,9 +80,14 @@ def main():
         if not is_clean():
             sys.exit("refusing to run: %s still differs from HEAD" % SRC)
 
-    atexit.register(restore)
+    try:
+        mutation_lease.acquire("guard-coverage.py", "full guard sweep over " + SRC)
+    except mutation_lease.LeaseHeld as e:
+        sys.exit(str(e))
+
+    atexit.register(cleanup)
     for sig in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(sig, lambda *_: (restore(), sys.exit(130)))
+        signal.signal(sig, lambda *_: (cleanup(), sys.exit(130)))
 
     orig = io.open(SRC, encoding="utf-8").read()
     lines = orig.split("\n")
@@ -122,9 +138,10 @@ def main():
                   % (n, len(sites), s["line"], s["fn"], s["err"], s["result"]), flush=True)
     finally:
         fh.close()
-        restore()
+        cleanup()
         run("npx hardhat compile")
-        print("RESTORED, clean=%s" % is_clean(), flush=True)
+        print("RESTORED, clean=%s, lease released=%s"
+              % (is_clean(), not os.path.exists(mutation_lease.LEASE)), flush=True)
 
 
 main()

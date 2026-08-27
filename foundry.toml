@@ -10,6 +10,11 @@ test = "test/invariant"
 # a stack-too-deep the production build does not have.
 optimizer = true
 optimizer_runs = 200
+# Pin the compiler too, not just the optimizer. Without this forge resolves the ^0.8.24
+# pragma to the newest available (0.8.35 as of writing) while hardhat.config.js pins
+# 0.8.24 -- so the invariants were fuzzing bytecode no deployment will ever have. Same
+# class of drift as the optimizer settings above, one field over.
+solc_version = "0.8.24"
 
 remappings = [
     "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",

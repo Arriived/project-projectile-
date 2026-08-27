@@ -12,3 +12,8 @@ out/
 # Static-analysis output (regenerate with scripts, do not commit)
 slither.json
 slither.err
+
+__pycache__/
+
+# The mutation lease. Never commit it -- its presence is what blocks a commit.
+.mutation-lease

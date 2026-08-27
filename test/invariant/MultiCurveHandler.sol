@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
+import {Vm} from "forge-std/Vm.sol";
 import "../../contracts/LFX1.sol";
 import "../../contracts/mocks/MockUSDC.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -11,6 +12,8 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 ///         ONE pooled USDC balance, so an accounting error on one token would be paid
 ///         for out of another token's money.
 contract MultiCurveHandler {
+    Vm internal constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
     LFX1 public immutable factory;
     MockUSDC public immutable usdc;
     address[] public tokens;
@@ -84,7 +87,18 @@ contract MultiCurveHandler {
     /// @notice Claiming mid-run is the interesting case: it moves USDC out of the
     ///         contract, so if reserves and creator fees were ever double-counted
     ///         against the same balance, this is what would expose it.
-    function claim() external {
+    ///
+    ///         Pranked as the curve's ACTUAL creator, and skipped when there is nothing
+    ///         to claim. It used to call as the handler, which is never a creator here --
+    ///         so every one of these calls reverted NothingToClaim straight into the
+    ///         catch, claimsExecuted never left zero, and the path documented above as
+    ///         the double-counting exposure had never once run. The counter is asserted
+    ///         reachable in MultiCurveInvariant for the same reason.
+    function claim(uint256 seed) external {
+        address creator = factory.curves(_pick(seed)).creator;
+        if (factory.creatorFeesAccrued(creator) == 0) return;
+
+        vm.prank(creator);
         try factory.claimCreatorFees() { claimsExecuted++; } catch {}
     }
 
