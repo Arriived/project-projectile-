@@ -49,3 +49,42 @@ approval bound is sized for.
 **If the contract later pins `creationFeeUsdc` in the economics hash, this rule can be
 relaxed — and not before.** Check `currentEconomicsHash()` in `contracts/LFX1.sol` before
 concluding that it has been.
+
+---
+
+## 2. There is NO name uniqueness, and symbol "uniqueness" is a 5-minute cooldown
+
+**Rule.** Never present a token's name or symbol as identifying. Show the contract address
+alongside them everywhere a user could act on the distinction, and warn on collision with
+an existing token rather than relying on the contract to prevent one.
+
+**Reason — this is what `LFX1.sol` actually does.** Grepped, not assumed:
+
+| | what exists |
+|---|---|
+| **name** | **Nothing at all.** Not stored, not hashed, not compared. It is passed to the `LFX1Token` constructor and emitted in `TokenCreated`, and that is the end of it. The `Curve` struct has no name field. **Unlimited duplicate names, always, with no delay.** |
+| **symbol** | A **time-limited reservation**, not uniqueness. `symbolUnlocksAt[symbolHash]` is checked at [LFX1.sol:320](contracts/LFX1.sol:320) and set at [:329](contracts/LFX1.sol:329) to `block.timestamp + symbolLockDuration`. |
+
+`symbolLockDuration` is **5 minutes** ([LFX1.sol:70](contracts/LFX1.sol:70)), owner-settable.
+So a symbol is blocked for five minutes after a launch that used it, and is then free for
+anyone. Two tokens with the same symbol five minutes apart is normal, expected behaviour.
+
+**And within those five minutes it is bypassable by case.** `caseSensitiveSymbols` defaults
+to `true` ([LFX1.sol:74](contracts/LFX1.sol:74)), so the hash is over the raw bytes: `CAT`
+and `cat` are different symbols and both launch immediately. Flipping it to `false` routes
+through `_toUpperAscii` and closes that, at the cost of more squatting surface — CLAUDE.md
+records why it starts lenient.
+
+`isSymbolAvailable(string)` ([LFX1.sol:735](contracts/LFX1.sol:735)) answers the question
+the contract actually asks, and is the only thing worth calling for a live check. It returns
+"not currently locked", **not** "nobody has ever used this".
+
+**Do not build a "this ticker is taken" UX on top of it.** It cannot support one. The
+honest UI is: show the address, surface collisions with already-launched tokens from the
+indexer, and treat the 5-minute lock as anti-frontrunning for a single launch flow, which
+is all it is.
+
+Separately, `launchCooldown` is **10 seconds per creator address**
+([LFX1.sol:67](contracts/LFX1.sol:67), keyed on `lastLaunchTimestamp[msg.sender]`) and is
+bypassable with a second address or a factory contract. It is not a spam control; the
+creation fee is.

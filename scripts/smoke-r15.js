@@ -37,6 +37,10 @@ async function main() {
   console.log(`factory   ${BALLISTA}`);
   console.log(`deployer  ${deployer.address}`);
 
+  // The creation fee is pulled from the caller, so the deployer needs an allowance
+  // before the first createToken -- not just before the buy in step 5.
+  await (await usdc.approve(BALLISTA, ethers.MaxUint256)).wait();
+
   // ── 1. The truncation lemma, executed ────────────────────────────────
   // 1.6 proves floor((N + A*1e12)/1e12) == floor(N/1e12) + A for any sub-6dp dust N.
   // That is the whole basis of the balance-delta check. Run it on the real token, on a
@@ -87,44 +91,72 @@ async function main() {
     "it succeeded, which should be impossible when gas is the settlement asset");
 
   // ── 4. Spend down until the user can no longer sell ──────────────────
+  // Two earlier shapes of this test were wrong, both because gas and settlement come out
+  // of one balance and the arithmetic fights you:
+  //   * leaving 0.3 USDC -- ample, a transaction here costs ~0.004 USDC, so the sell
+  //     went through and proved nothing;
+  //   * spending down to a quarter of a transaction -- the BUY could then not afford its
+  //     own gas and reverted, moving the trap to the wrong operation.
+  // So do not try to land it with one buy. Buy comfortably, approve while it is still
+  // affordable, then sweep the wallet down to below one transaction and attempt the sell.
+  // That isolates the property: holds tokens, cannot afford to move them.
   console.log(`\n-- 4. spend down until selling is unaffordable --`);
   const token = await createToken(ballista, deployer, hash, "R15B");
   await new Promise((r) => setTimeout(r, 2000));
 
+  const gasPrice = (await p.getFeeData()).gasPrice;
+  const txCost6dp = (600000n * gasPrice) / SCALE;
   const before = await usdc.balanceOf(w.address);
-  const spend = before - 300_000n; // leave ~0.3 USDC, far too little for gas here
-  const buyRc = await (await ballistaW.buy(token, spend, 0, { gasLimit: 600000 })).wait();
-  const afterBuy = await usdc.balanceOf(w.address);
+  const spend = before / 2n;
+  await (await ballistaW.buy(token, spend, 0, { gasLimit: 600000 })).wait();
+
   const tokenC = await ethers.getContractAt("LFX1Token", token);
   const held = await tokenC.balanceOf(w.address);
-  console.log(`     spent ${spend}, left ${afterBuy}, holding ${held} tokens`);
-  check("the buy landed and the wallet holds tokens", held > 0n);
+  check("the buy landed and the wallet holds tokens", held > 0n, `${held} tokens`);
 
-  await (await tokenC.connect(deployer).approve(BALLISTA, 0)).wait().catch(() => {});
+  // Approve now, while the wallet can still pay for it, so the sell is the only thing
+  // left needing gas.
+  await (await tokenC.connect(w).approve(BALLISTA, held, { gasLimit: 200000 })).wait();
+
+  // Sweep down. Native value on Arc IS USDC, so a plain send moves the settlement asset.
+  const keep = txCost6dp / 8n;
+  const nativeNow = await p.getBalance(w.address);
+  const sendGas = 21000n * gasPrice;
+  const sweep = nativeNow - keep * SCALE - sendGas;
+  if (sweep > 0n) {
+    await (await w.sendTransaction({ to: deployer.address, value: sweep, gasLimit: 21000 })).wait();
+  }
+  const stranded = await usdc.balanceOf(w.address);
+  console.log(`     one tx costs ~${txCost6dp} (6dp); wallet left with ${stranded}`);
+  check("the wallet is now below the cost of a single transaction",
+    stranded < txCost6dp, `${stranded} < ${txCost6dp}`);
+  check("and it still holds the tokens it bought", (await tokenC.balanceOf(w.address)) > 0n);
+
   let sellFailed = false;
   try {
-    await (await tokenC.connect(w).approve(BALLISTA, held, { gasLimit: 200000 })).wait();
     await (await ballistaW.sell(token, held, 0, { gasLimit: 600000 })).wait();
   } catch (e) {
     sellFailed = true;
-    check("holder cannot afford the gas to SELL what they just bought",
-      true, String(e.shortMessage || e.message).slice(0, 70));
+    check("holder cannot afford the gas to SELL what they hold",
+      true, String(e.shortMessage || e.message).slice(0, 60));
   }
   if (!sellFailed) {
-    check("holder cannot afford the gas to SELL what they just bought", false,
-      `sell succeeded with ${afterBuy} left -- the trap did not trigger at this size`);
+    check("holder cannot afford the gas to SELL what they hold", false,
+      `sell succeeded with ${stranded} left`);
   }
 
   // ── 5. The delta check, executed rather than proven ──────────────────
   // _settleBuy measures the factory's balance around the pull and reverts on any
   // shortfall. Assert the measured delta is EXACT against the real truncating token.
   console.log(`\n-- 5. the balance-delta check, against real Arc USDC --`);
-  const fBefore = await usdc.balanceOf(BALLISTA);
-  const fNativeBefore = await p.getBalance(BALLISTA);
   const amt = 2n * ONE;
-  await (await usdc.approve(BALLISTA, ethers.MaxUint256)).wait();
   const t2 = await createToken(ballista, deployer, hash, "R15C");
   await new Promise((r) => setTimeout(r, 2000));
+  // Snapshot AFTER createToken. The creation fee is pulled into the factory and accrued
+  // to treasuryFeesAccrued, so a snapshot taken before it lands measures fee + trade and
+  // the delta check fails by exactly creationFeeUsdc -- which is what it did first run.
+  const fBefore = await usdc.balanceOf(BALLISTA);
+  const fNativeBefore = await p.getBalance(BALLISTA);
   const rc = await (await ballista.buy(t2, amt, 0, { gasLimit: 600000 })).wait();
   const fAfter = await usdc.balanceOf(BALLISTA);
   const fNativeAfter = await p.getBalance(BALLISTA);
@@ -156,6 +188,19 @@ async function main() {
 }
 
 async function createToken(ballista, signer, hash, sym) {
+  // launchCooldown is per-sender (10s by default). Three launches from one address in a
+  // single run will trip it, so wait it out rather than racing it.
+  const cd = await ballista.launchCooldown();
+  const last = await ballista.lastLaunchTimestamp(await signer.getAddress());
+  if (last > 0n) {
+    const now = BigInt((await ethers.provider.getBlock("latest")).timestamp);
+    const readyAt = last + cd;
+    if (now < readyAt) {
+      const waitMs = Number(readyAt - now + 2n) * 1000;
+      console.log(`     (waiting ${waitMs / 1000}s for the launch cooldown)`);
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
   const rc = await (await ballista.connect(signer).createToken(
     "R15", sym + Date.now().toString().slice(-4), "", hash, false, { gasLimit: 6000000 }
   )).wait();

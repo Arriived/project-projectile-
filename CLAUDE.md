@@ -6,10 +6,10 @@
 
 | | |
 |---|---|
-| HEAD **when this was written** | `6e7d16f` (the deployed commit) |
+| HEAD **when this was written** | `ba99565` (the deployed commit) |
 | bytecode | **24,030 / 24,576 — 546 free** |
-| tests | **242 Hardhat + 10 fork (FORK=1), 13 Foundry** |
-| deployed address | **`0x2f7270Fd84871385FBe65531d50D946A8d84aaF9`** — re-frozen, verified, see §7 |
+| tests | **242 Hardhat + 10 fork (FORK=1), 13 Foundry, 13 live Arc-testnet R15 checks** |
+| deployed address | **`0x6d79D90F60B30d527e2DDcBb7fe4f64309bAA15A`** — re-frozen, verified, see §7 |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
 this file was last updated, not where you are. `git rev-parse --short HEAD` is ground
@@ -35,7 +35,7 @@ missing.
 
 **The frontend.** The re-freeze is done and the contract work that was queued behind it is
 finished. `LFX1` is deployed, verified and recorded at
-**`0x2f7270Fd84871385FBe65531d50D946A8d84aaF9`**; nothing on the contract roadmap is
+**`0x6d79D90F60B30d527e2DDcBb7fe4f64309bAA15A`**; nothing on the contract roadmap is
 outstanding. The critical path is now entirely non-contract: the frontend has not been
 started (§8), and `FRONTEND_BUILD_V2.md` holds the rules it must satisfy.
 
@@ -313,6 +313,28 @@ Verify Arc/Circle claims against `docs.arc.io` and `developers.circle.com`, neve
 | Blob txs rejected; `BLOBHASH` 0; `BLOBBASEFEE` 1; EIP-4788 empty | Confirmed. We touch none of them. |
 | **Mainnet chainId 5042** | **UNSOURCED — MUST VERIFY.** From an unreliable secondary source. Circle documents **only testnet 5042002**. Do not put 5042 in the frontend, deploy config or anywhere else until confirmed. |
 
+## What the token at `0x3600...0000` actually is
+
+Probed, not assumed (`scripts/probe-arc-usdc.js`). **1,798 bytes of code** — a real
+contract, not a bare precompile — presenting the full FiatToken admin surface: `paused()`,
+`blacklister()`, `masterMinter()`, `owner()`, `pauser()`, `rescuer()`, `isBlacklisted()`,
+`version() = 2`, `currency() = USD`, `DOMAIN_SEPARATOR()`. It is not a mock.
+
+**It is NOT the Ethereum-mainnet USDC contract, and the difference is the whole of R15.**
+Mainnet USDC has no native-balance duality; this token's ERC-20 view is a 6dp truncation of
+an 18dp native balance, and both are the same money. Confirmed live: native
+`108304838726808615422`, ERC-20 `108304838`, `native / 1e12` equal to the ERC-20 view
+exactly, with 726,808,615,422 wei of sub-6dp dust being carried.
+
+**What cannot be checked:** whether Arc *testnet* USDC is identical to Arc *mainnet* USDC.
+Mainnet does not exist yet. The right claim is "the same KIND of token — native-backed and
+truncating", not "the same token". Anything depending on exact parity has to be re-checked
+at mainnet.
+
+Circle holds the admin keys, so R1 and R2 stay out of reach here: `blacklister` is
+`0x9338f53291715F1126291E28BBd3B9989e966572` and `pauser` is
+`0xbc639a0A060E5831a7c437b491B8d3C1f58F554e`, neither of them ours.
+
 **Arc states plainly that local EVM simulators "run a standard EVM, not Arc's."** Blocklist
 enforcement, EIP-7708 and truncating `balanceOf` surface only on Arc RPC.
 
@@ -340,7 +362,7 @@ test that cannot go red. Each entry: **structure** (closed by construction), **p
 | R12 | Router approval was **permanent, not single-use** — a compromised owner key could skip the 24h timelock by re-activating any previously-approved address, emitting only `RouterActivated` | **CLOSED — structure** | Fixed in two halves, both required and both red-proved (`regress-router-single-use`, `regress-router-bootstrap`). `activateRouter` now consumes `routerProposedAt`; the constructor no longer banks one for the bootstrap router. Clearing on activation alone was **not** enough — the constructor seeds the mapping without routing through `activateRouter`, so the bootstrap router stayed permanently approved under that partial fix. **+12 bytes** (24,018 → 24,030). Every route to a live router now passes a fresh `RouterProposed` and a full wait. |
 | R13 | **`creationFeeUsdc` is absent from `currentEconomicsHash()`** — the one fee the creator pays directly is the one pinning does not cover | **OPEN** | Owner can raise it between the creator seeing terms and their transaction landing; the pinned hash is unchanged so the guard cannot fire. Proven: creator pinned the old terms and paid a 1000x fee. **Exposure is bounded by the creator's approval** — an exact-amount approval is safe, `MaxUint256` is not. The frontend must not approve max for the creation fee. |
 | R14 | USDC or launched tokens sent directly to the factory are **permanently stranded** | **OPEN — unrecoverable** | Every payout path is bounded by accounting, never by balance, so nothing can pay a donation out. Also means §1.10's exact conservation is a **closed-system** property: a donation breaks the equality on-chain, though nothing in the handler performs one. Do not read it as "the factory can never hold unaccounted USDC". |
-| R15 | **USDC is the largest mock-only surface, and the biggest remaining gap in the whole project.** No local test pays gas in USDC | **OPEN — structural, DEFERRED ON SCHEDULE GROUNDS, not closed** | Every Hardhat and fork test pays gas in ETH, so the one-balance configuration every real deployment runs in — settlement asset and gas asset as the SAME balance — has never been executed anywhere. §1.6's delta-check proof is arithmetic, not run. Neither a local EVM nor a mainnet fork can reach it: Arc's own docs say simulators "run a standard EVM, not Arc's". **Closing it needs Arc testnet coverage** — a smoke suite driving create / buy / sell / graduate against the live deployment and asserting the delta check, the truncating 6dp `balanceOf`, and EIP-7708 logs. That is the next thing to do if the schedule allows, and it is deferred because the frontend is the launch-critical path, not because the risk was judged acceptable. |
+| R15 | The one-balance configuration: gas and settlement are the SAME balance | **LARGELY CLOSED — executed on Arc testnet, 13/13** | `scripts/smoke-r15.js`, run against the live deployment. What it proved, on chain rather than arithmetically: a wallet that can afford a trade cannot afford the trade PLUS its gas; a holder left with 0.0016 USDC holds 471 trillion tokens and **cannot afford to sell them**; §1.6's truncation lemma holds on the real token with genuine sub-6dp dust present (726,808,615,422 wei); and `_settleBuy`'s balance-delta check measures **exactly** `actualUsdcIn` against real Arc USDC, in both the 6dp and 18dp views. **Residual:** the delta check ran against a factory carrying NO dust — the factory has no `receive()`, so only a SELFDESTRUCT push (R10) can give it any, and the dusty-factory case is still arithmetic-only. Circle-side controls stay unreachable (R1 pause, R2 user-side blocklist), and Arc mainnet USDC does not exist yet, so testnet-equals-mainnet is unverifiable rather than verified. |
 | R16 | `setTreasury` emits no event | **OPEN — trivial** | Every other setter emits one. An owner redirecting the treasury is invisible to indexers and to monitoring. |
 
 ---
@@ -681,18 +703,18 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| HEAD **when this was written** | `6e7d16f` (the deployed commit) |
+| HEAD **when this was written** | `ba99565` (the deployed commit) |
 | bytecode | **24,030 / 24,576 — 546 free** |
-| tests | **242 Hardhat + 10 fork (FORK=1), 13 Foundry** |
+| tests | **242 Hardhat + 10 fork (FORK=1), 13 Foundry, 13 live Arc-testnet R15 checks** |
 | last mutation score | 52/56 = 92.9% — **re-run on this state**, same four survivors, all classified (§5) |
 
 ## Current deployment — re-frozen
 
 | | |
 |---|---|
-| **LFX1 (the factory)** | **`0x2f7270Fd84871385FBe65531d50D946A8d84aaF9`** — block 59265156 |
-| MockRouter (PLACEHOLDER) | `0x136888902405a063f60b13976c669B7BA0075a68` |
-| GraduationHelper | `0x02DAb5D3828197Ce40a613230c2E1083b8C80bF4` — **inert on testnet, see below** |
+| **LFX1 (the factory)** | **`0x6d79D90F60B30d527e2DDcBb7fe4f64309bAA15A`** — block 59268937 |
+| MockRouter (PLACEHOLDER) | `0x1946B65411450c75c5CB5e039e549Bd37C0f9caA` |
+| GraduationHelper | `0xD17fcFd654219b55124816f8b96e010f9f3c1A3c` — **inert on testnet, see below** |
 | USDC | `0x3600000000000000000000000000000000000000` |
 | treasury / owner | `0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb` (EOA, deliberate — R8) |
 
@@ -707,7 +729,11 @@ because the other 19 are zeros that match the placeholder. `record-freeze.js` cl
 this rather than reporting a bare mismatch; a difference anywhere the artifact is NOT a
 zero placeholder would be a real discrepancy and must not be waved past.
 
-**`0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` is SUPERSEDED** and must not be published.
+**SUPERSEDED, must not be published:** `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` and
+`0x2f7270Fd84871385FBe65531d50D946A8d84aaF9`. The second was live for about an hour before
+the licence change altered the sources and therefore the bytecode. **Any source edit,
+including a comment, moves the address** — the compiler embeds an IPFS metadata hash of the
+sources. Decide licence and header text BEFORE deploying, not after.
 Earlier superseded deployments are listed in git history.
 
 ### GraduationHelper is INERT on Arc testnet — do not publish it as working
