@@ -1,12 +1,12 @@
 {
   "network": "arcTestnet",
-  "commit": "e5e937db68d5ce360cd26a14bac5b617b931aed3",
-  "commitShort": "e5e937d",
+  "commit": "6e7d16f4cf35b8b112f0c61e7d803303b8fb8763",
+  "commitShort": "6e7d16f",
   "commitDirty": false,
   "chainId": 5042002,
-  "ballista": "0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802",
-  "deployBlock": 59003480,
-  "router": "0xFa159dDbE46B732AfAc14Bb7097505cdccD76438",
+  "ballista": "0x2f7270Fd84871385FBe65531d50D946A8d84aaF9",
+  "deployBlock": 59265156,
+  "router": "0x136888902405a063f60b13976c669B7BA0075a68",
   "routerSource": "MockRouter deployed by this script (PLACEHOLDER -- not a real DEX)",
   "routerLive": true,
   "usdc": "0x3600000000000000000000000000000000000000",
@@ -16,12 +16,79 @@
   "constructorArgs": [
     "0x3600000000000000000000000000000000000000",
     "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
-    "0xFa159dDbE46B732AfAc14Bb7097505cdccD76438"
+    "0x136888902405a063f60b13976c669B7BA0075a68"
   ],
-  "verifyCommand": "npx hardhat verify --contract contracts/LFX1.sol:LFX1 --network arcTestnet 0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802 0x3600000000000000000000000000000000000000 0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb 0xFa159dDbE46B732AfAc14Bb7097505cdccD76438",
-  "explorer": "https://testnet.arcscan.app/address/0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802",
-  "recordedAt": "2026-08-26T21:31:59.169Z",
-  "commitDirtyNote": "recorded true by a bug in scripts/deploy.js -- plain `git status --porcelain` counts UNTRACKED files, and an unrelated archive sits in the repo root. The tracked tree was clean at e5e937d when this was deployed. The script now uses -uno.",
-  "deployedBytecodeKeccak": "0x664364c94891ea9f61fa17e7abcc235fb824cb1542c5fc7b83f9272f9bae15cd",
-  "bytecodeNote": "Deployed code matches the HEAD build except at 12 immutable reference sites, each differing in exactly ONE byte because Arc's USDC address 0x3600..00 has a single non-zero byte. `IERC20 public immutable usdc` is zeroed in the artifact's deployedBytecode and real on chain. Blockscout: is_fully_verified true, is_partially_verified false, is_changed_bytecode false."
+  "verifyCommand": "npx hardhat verify --contract contracts/LFX1.sol:LFX1 --network arcTestnet 0x2f7270Fd84871385FBe65531d50D946A8d84aaF9 0x3600000000000000000000000000000000000000 0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb 0x136888902405a063f60b13976c669B7BA0075a68",
+  "explorer": "https://testnet.arcscan.app/address/0x2f7270Fd84871385FBe65531d50D946A8d84aaF9",
+  "recordedAt": "2026-08-28T11:00:37.036Z",
+  "bytecode": {
+    "ballista": {
+      "address": "0x2f7270Fd84871385FBe65531d50D946A8d84aaF9",
+      "sizeBytes": 24030,
+      "onChainKeccak256": "0x9edfc2dac863a7107c64aa99a0259bca76efadc21cb52dc2d2ebc1e747463437",
+      "exactMatchToLocalArtifact": false,
+      "differingByteCount": 12,
+      "differsOnlyAtImmutablePlaceholders": true,
+      "explorer": {
+        "is_fully_verified": true,
+        "is_partially_verified": false,
+        "is_changed_bytecode": false,
+        "license_type": "none",
+        "file_path": "contracts/LFX1.sol",
+        "additional_sources": [
+          "@openzeppelin/contracts/utils/Context.sol",
+          "@openzeppelin/contracts/access/Ownable.sol",
+          "@openzeppelin/contracts/interfaces/IERC1363.sol",
+          "@openzeppelin/contracts/interfaces/IERC165.sol",
+          "@openzeppelin/contracts/interfaces/IERC20.sol",
+          "@openzeppelin/contracts/interfaces/draft-IERC6093.sol",
+          "@openzeppelin/contracts/token/ERC20/ERC20.sol",
+          "@openzeppelin/contracts/token/ERC20/IERC20.sol",
+          "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol",
+          "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol",
+          "@openzeppelin/contracts/utils/Pausable.sol",
+          "@openzeppelin/contracts/utils/ReentrancyGuard.sol",
+          "@openzeppelin/contracts/utils/StorageSlot.sol",
+          "@openzeppelin/contracts/utils/introspection/IERC165.sol",
+          "contracts/LFX1Token.sol",
+          "contracts/interfaces/IDEXRouter.sol"
+        ]
+      }
+    },
+    "graduationHelper": {
+      "address": "0x02DAb5D3828197Ce40a613230c2E1083b8C80bF4",
+      "sizeBytes": 4584,
+      "onChainKeccak256": "0x0dd40d3f03228ee16b46a99f7c32b1585d8909e29c4610b874767fbd91dc0de1",
+      "exactMatchToLocalArtifact": false,
+      "differingByteCount": 145,
+      "differsOnlyAtImmutablePlaceholders": true,
+      "explorer": {
+        "is_fully_verified": true,
+        "is_partially_verified": false,
+        "is_changed_bytecode": false,
+        "license_type": "none",
+        "file_path": "contracts/GraduationHelper.sol",
+        "additional_sources": [
+          "@openzeppelin/contracts/interfaces/IERC1363.sol",
+          "@openzeppelin/contracts/interfaces/IERC165.sol",
+          "@openzeppelin/contracts/interfaces/IERC20.sol",
+          "@openzeppelin/contracts/token/ERC20/IERC20.sol",
+          "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol",
+          "@openzeppelin/contracts/utils/ReentrancyGuard.sol",
+          "@openzeppelin/contracts/utils/StorageSlot.sol",
+          "@openzeppelin/contracts/utils/introspection/IERC165.sol"
+        ]
+      }
+    }
+  },
+  "frozenAt": "2026-08-28T11:05:16.720Z",
+  "graduationHelper": "0x02DAb5D3828197Ce40a613230c2E1083b8C80bF4",
+  "graduationHelperBlock": 59265610,
+  "graduationHelperArgs": [
+    "0x2f7270Fd84871385FBe65531d50D946A8d84aaF9",
+    "0x89e5db8b5aa49aa85ac63f691524311aeb649eba",
+    "0x3600000000000000000000000000000000000000"
+  ],
+  "graduationHelperNote": "INERT ON TESTNET: needs a real Uniswap V2 factory; the Arc mainnet factory has no code on testnet and the testnet router is MockRouter, which creates no pairs. Deployed for verified source and constructor-arg parity with mainnet. Holds no privilege in LFX1: not owner, not router, calls only the public graduate().",
+  "graduationHelperVerifyCommand": "npx hardhat verify --contract contracts/GraduationHelper.sol:GraduationHelper --network arcTestnet 0x02DAb5D3828197Ce40a613230c2E1083b8C80bF4 0x2f7270Fd84871385FBe65531d50D946A8d84aaF9 0x89e5db8b5aa49aa85ac63f691524311aeb649eba 0x3600000000000000000000000000000000000000"
 }

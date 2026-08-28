@@ -6,10 +6,10 @@
 
 | | |
 |---|---|
-| HEAD **when this was written** | `886f717` |
+| HEAD **when this was written** | `6e7d16f` (the deployed commit) |
 | bytecode | **24,030 / 24,576 — 546 free** |
 | tests | **242 Hardhat + 10 fork (FORK=1), 13 Foundry** |
-| deployed address | **none current.** `0xDF714C3b...` is STALE — see §7 |
+| deployed address | **`0x2f7270Fd84871385FBe65531d50D946A8d84aaF9`** — re-frozen, verified, see §7 |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
 this file was last updated, not where you are. `git rev-parse --short HEAD` is ground
@@ -33,22 +33,14 @@ missing.
 
 ## The exact next action
 
-**The re-freeze**, and it is the last item. Everything ahead of it is done: the cross-curve
-invariant, the mock-only sweep, the actor/phase pass, the fork suite, the R12 fix and the
-graduation helper. The guard sweep has been re-run on this state (52/56, §5).
+**The frontend.** The re-freeze is done and the contract work that was queued behind it is
+finished. `LFX1` is deployed, verified and recorded at
+**`0x2f7270Fd84871385FBe65531d50D946A8d84aaF9`**; nothing on the contract roadmap is
+outstanding. The critical path is now entirely non-contract: the frontend has not been
+started (§8), and `FRONTEND_BUILD_V2.md` holds the rules it must satisfy.
 
-**It requires an explicit go-ahead from the operator and must not be started without one.**
-It ends in a public address, which is the one action in this repo that cannot be taken back.
-The sequence: confirm the sweep is still clean against whatever has landed since, redeploy,
-verify on Blockscout, record the commit and bytecode hash in `deployments/arcTestnet.json`,
-and only then publish the address. `0xDF714C3b...` stays STALE until that happens — see §7.
-
-Standing decisions that survive the re-freeze: `lpRecipient` stays `BURN_ADDRESS`
-(§1.8's pre-flip gate is unmet and blocks nothing), and `GraduationHelper` is deployed
-separately or not at all — `LFX1` does not reference it, so it is not part of the freeze.
-
-**No redeploy without an explicit go-ahead, and not before a clean `guard-coverage.py` run.**
-The last mutation score (52/56) pre-dates everything in this session.
+The one contract-side gap worth naming is **R15**, and it is deferred rather than closed —
+see the register.
 
 **The fork is gated behind `FORK=1` and pinned to block 25,846,000.** Ordinary test runs
 are local and unforked. Do not re-pin without re-running the presence checks — see §4.
@@ -348,7 +340,7 @@ test that cannot go red. Each entry: **structure** (closed by construction), **p
 | R12 | Router approval was **permanent, not single-use** — a compromised owner key could skip the 24h timelock by re-activating any previously-approved address, emitting only `RouterActivated` | **CLOSED — structure** | Fixed in two halves, both required and both red-proved (`regress-router-single-use`, `regress-router-bootstrap`). `activateRouter` now consumes `routerProposedAt`; the constructor no longer banks one for the bootstrap router. Clearing on activation alone was **not** enough — the constructor seeds the mapping without routing through `activateRouter`, so the bootstrap router stayed permanently approved under that partial fix. **+12 bytes** (24,018 → 24,030). Every route to a live router now passes a fresh `RouterProposed` and a full wait. |
 | R13 | **`creationFeeUsdc` is absent from `currentEconomicsHash()`** — the one fee the creator pays directly is the one pinning does not cover | **OPEN** | Owner can raise it between the creator seeing terms and their transaction landing; the pinned hash is unchanged so the guard cannot fire. Proven: creator pinned the old terms and paid a 1000x fee. **Exposure is bounded by the creator's approval** — an exact-amount approval is safe, `MaxUint256` is not. The frontend must not approve max for the creation fee. |
 | R14 | USDC or launched tokens sent directly to the factory are **permanently stranded** | **OPEN — unrecoverable** | Every payout path is bounded by accounting, never by balance, so nothing can pay a donation out. Also means §1.10's exact conservation is a **closed-system** property: a donation breaks the equality on-chain, though nothing in the handler performs one. Do not read it as "the factory can never hold unaccounted USDC". |
-| R15 | **No local test pays gas in USDC** | **OPEN — structural** | Every Hardhat and fork test pays gas in ETH, so the one-balance configuration every real deployment runs in — settlement asset and gas asset as the same balance — is only ever exercised on Arc testnet. §1.6's delta proof is arithmetic, not executed. |
+| R15 | **USDC is the largest mock-only surface, and the biggest remaining gap in the whole project.** No local test pays gas in USDC | **OPEN — structural, DEFERRED ON SCHEDULE GROUNDS, not closed** | Every Hardhat and fork test pays gas in ETH, so the one-balance configuration every real deployment runs in — settlement asset and gas asset as the SAME balance — has never been executed anywhere. §1.6's delta-check proof is arithmetic, not run. Neither a local EVM nor a mainnet fork can reach it: Arc's own docs say simulators "run a standard EVM, not Arc's". **Closing it needs Arc testnet coverage** — a smoke suite driving create / buy / sell / graduate against the live deployment and asserting the delta check, the truncating 6dp `balanceOf`, and EIP-7708 logs. That is the next thing to do if the schedule allows, and it is deferred because the frontend is the launch-critical path, not because the risk was judged acceptable. |
 | R16 | `setTreasury` emits no event | **OPEN — trivial** | Every other setter emits one. An owner redirecting the treasury is invisible to indexers and to monitoring. |
 
 ---
@@ -689,15 +681,63 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| HEAD **when this was written** | `886f717` |
+| HEAD **when this was written** | `6e7d16f` (the deployed commit) |
 | bytecode | **24,030 / 24,576 — 546 free** |
 | tests | **242 Hardhat + 10 fork (FORK=1), 13 Foundry** |
 | last mutation score | 52/56 = 92.9% — **re-run on this state**, same four survivors, all classified (§5) |
 
-## ⚠ `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` IS STALE
+## Current deployment — re-frozen
 
-That deployment predates the strict-mins fix. **It must not be sent to Zerion or anyone
-else.** A new deployment and address come out of the re-freeze.
+| | |
+|---|---|
+| **LFX1 (the factory)** | **`0x2f7270Fd84871385FBe65531d50D946A8d84aaF9`** — block 59265156 |
+| MockRouter (PLACEHOLDER) | `0x136888902405a063f60b13976c669B7BA0075a68` |
+| GraduationHelper | `0x02DAb5D3828197Ce40a613230c2E1083b8C80bF4` — **inert on testnet, see below** |
+| USDC | `0x3600000000000000000000000000000000000000` |
+| treasury / owner | `0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb` (EOA, deliberate — R8) |
+
+Both fully verified on Blockscout (`is_fully_verified: true`,
+`is_partially_verified: false`, `is_changed_bytecode: false`). Bytecode hash and a
+local-vs-chain comparison are recorded in `deployments/arcTestnet.json`.
+
+**On-chain code vs the local artifact: 12 differing bytes on `LFX1`, all benign.** Every one
+is a `0x00` in the artifact against `0x36` on chain — the `usdc` immutable
+(`0x3600...0000`) substituted at its 12 reference sites, where only the leading byte shows
+because the other 19 are zeros that match the placeholder. `record-freeze.js` classifies
+this rather than reporting a bare mismatch; a difference anywhere the artifact is NOT a
+zero placeholder would be a real discrepancy and must not be waved past.
+
+**`0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` is SUPERSEDED** and must not be published.
+Earlier superseded deployments are listed in git history.
+
+### GraduationHelper is INERT on Arc testnet — do not publish it as working
+
+It needs a real Uniswap V2 factory to find the pair it corrects. The Arc **mainnet** V2
+factory has **no code on testnet** (confirmed by `scripts/refreeze-preflight.js`), and the
+testnet router is `MockRouter`, which creates no pairs at all. The problem it solves —
+§1.1's adversarial pair, R6 — **cannot occur on this chain**. It is deployed with the
+mainnet factory address so the constructor args match production and the source is
+verifiable now. Treat the address as a reserved, verified artifact, not a working contract.
+
+**It holds no privilege in `LFX1`, and this was checked on chain, not asserted:** it is not
+`owner`, not `router`, and calls only the public permissionless `graduate()`. A bug in it
+cannot strand or damage a curve; the fallback is the same two-transaction sequence anyone
+can perform by hand.
+
+### Licence
+
+`license_type` is still `none` on both. `hardhat verify` never sends one. `bsl_1_1` is a
+supported value on this instance — **enum 14, queried from
+`/api/v2/smart-contracts/verification/config`, not remembered.** Set it with
+`node scripts/set-license.js --send` (dry-run by default), or through the explorer UI.
+
+**The entity name is NOT needed for that call, and cannot be added to the published source
+without redeploying.** Blockscout's `license_type` is a tag on the verified contract.
+The `[LICENSOR]` placeholder lives in the source headers, and the compiler embeds an IPFS
+metadata hash of the sources in the bytecode (`bytecodeHash` is at its default) — confirmed
+from the build-info, the deployed code ends `...64736f6c6343000818 0033`. So editing even a
+comment changes the deployed bytecode. The tag can be set today; the name in the published
+source is a redeploy.
 
 The authoritative record is `deployments/arcTestnet.json`, written by `scripts/deploy.js`
 on every deploy, including the commit hash it was built from and a `commitDirty` flag
