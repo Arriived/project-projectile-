@@ -336,7 +336,7 @@ test that cannot go red. Each entry: **structure** (closed by construction), **p
 | R8 | Owner is a **single EOA** | **OPEN — deliberate** | Deprioritised by the operator. Do not re-raise. |
 | R9 | Fee-on-transfer creation fee over-credits `treasuryFeesAccrued` | **OPEN — priced and declined** | +339 bytes to close, in a scenario where buys already revert. |
 | R10 | `SELFDESTRUCT` beneficiary push can put sub-6dp native dust in the factory | **OPEN — trivial** | Permanently stranded (no native-send path out). Does **not** corrupt the delta check — see 1.6. |
-| R11 | `license_type: none` on the explorer | **OPEN — blocked** | Needs `[LICENSOR]`. |
+| R11 | `license_type: none` on the explorer | **CLOSED — `none` is the correct value** | Settled: the project is UNLICENSED, and `none` is the only entry on Blockscout's fixed list consistent with that. Nothing to change and nothing pending. **Do not "fix" this to `unlicense`** — see §8. |
 | R12 | Router approval was **permanent, not single-use** — a compromised owner key could skip the 24h timelock by re-activating any previously-approved address, emitting only `RouterActivated` | **CLOSED — structure** | Fixed in two halves, both required and both red-proved (`regress-router-single-use`, `regress-router-bootstrap`). `activateRouter` now consumes `routerProposedAt`; the constructor no longer banks one for the bootstrap router. Clearing on activation alone was **not** enough — the constructor seeds the mapping without routing through `activateRouter`, so the bootstrap router stayed permanently approved under that partial fix. **+12 bytes** (24,018 → 24,030). Every route to a live router now passes a fresh `RouterProposed` and a full wait. |
 | R13 | **`creationFeeUsdc` is absent from `currentEconomicsHash()`** — the one fee the creator pays directly is the one pinning does not cover | **OPEN** | Owner can raise it between the creator seeing terms and their transaction landing; the pinned hash is unchanged so the guard cannot fire. Proven: creator pinned the old terms and paid a 1000x fee. **Exposure is bounded by the creator's approval** — an exact-amount approval is safe, `MaxUint256` is not. The frontend must not approve max for the creation fee. |
 | R14 | USDC or launched tokens sent directly to the factory are **permanently stranded** | **OPEN — unrecoverable** | Every payout path is bounded by accounting, never by balance, so nothing can pay a donation out. Also means §1.10's exact conservation is a **closed-system** property: a donation breaks the equality on-chain, though nothing in the handler performs one. Do not read it as "the factory can never hold unaccounted USDC". |
@@ -724,61 +724,25 @@ verifiable now. Treat the address as a reserved, verified artifact, not a workin
 cannot strand or damage a curve; the fallback is the same two-transaction sequence anyone
 can perform by hand.
 
-### Licence
+### Licence — settled: UNLICENSED, `license_type: none`
 
-`license_type` is still `none` on both. `hardhat verify` never sends one. `bsl_1_1` is a
-supported value on this instance — **enum 14, queried from
-`/api/v2/smart-contracts/verification/config`, not remembered.** Set it with
-`node scripts/set-license.js --send` (dry-run by default), or through the explorer UI.
+`SPDX-License-Identifier: UNLICENSED` on all 11 of our contracts. The BUSL-1.1 block, the
+Change Date and the change-licence text are **removed**, and `LICENSE` at the repo root is
+an all-rights-reserved notice. `[LICENSOR]` no longer appears anywhere.
 
-**The entity name is NOT needed for that call, and cannot be added to the published source
-without redeploying.** Blockscout's `license_type` is a tag on the verified contract.
-The `[LICENSOR]` placeholder lives in the source headers, and the compiler embeds an IPFS
-metadata hash of the sources in the bytecode (`bytecodeHash` is at its default) — confirmed
-from the build-info, the deployed code ends `...64736f6c6343000818 0033`. So editing even a
-comment changes the deployed bytecode. The tag can be set today; the name in the published
-source is a redeploy.
+**`license_type: none` is already correct and needs no call.** Blockscout's list has no
+"UNLICENSED" entry. The nearest-sounding one is a trap:
 
-The authoritative record is `deployments/arcTestnet.json`, written by `scripts/deploy.js`
-on every deploy, including the commit hash it was built from and a `commitDirty` flag
-(which uses `git status --porcelain -uno`, ignoring untracked files — plain `--porcelain`
-flagged every deploy irreproducible because of an unrelated archive in the repo root).
+| value | what it actually means |
+|---|---|
+| `none` | no licence stated — **correct for UNLICENSED**, and already set |
+| `unlicense` | **The Unlicense: a PUBLIC DOMAIN DEDICATION.** The exact opposite. Setting this would publicly waive every right the project is trying to keep |
 
-## Done this session
+`scripts/set-license.js` exists from the BUSL decision and now defaults to `none`. There is
+no reason to run it — the deployments already carry `none`. It is kept only so the next
+person who wonders can see the mapping written down rather than re-deriving it.
 
-Strict mins merged and the adversarial-pair attack closed; mainnet fork wired, pinned and
-verified; residual risk register created; pre-commit mutation guard added and proven to
-block; blocklist substitution scoped honestly; Arc EVM differences verified against the
-real docs.
-
-**Cross-curve contamination invariant — DONE.** Both forms: exact aggregate conservation
-(§1.10) and per-curve isolation, all three properties red-proved.
-`solc_version = "0.8.24"` pinned in `foundry.toml` — forge had been resolving to 0.8.35 and
-fuzzing bytecode no deployment would ever have. The pre-commit hook was converted from a
-marker grep to a mutation lease (§5) and `scripts/redproof.py` added, because the harness
-cannot red-proof a Foundry invariant. **`MultiCurveHandler.claim()` was dead for its entire
-life** — it claimed as the handler while every token there is created by the test contract,
-so all 4,274 calls of a full run reverted into the catch while reporting "0 reverts". Fixed,
-and its reachability is now asserted.
-
-**R12 fixed, graduation helper built, guard sweep re-run.** Router approval is single-use in
-both halves (+12 bytes, 546 free). `GraduationHelper` bundles correct-and-graduate
-atomically, closing R6 — it holds no privilege in `LFX1` and custodies nothing between
-transactions, so a bug in it cannot strand or damage a curve, and the fallback is the same
-two-transaction sequence by hand. Seven adversarial fork tests, including a same-block
-re-skew with the attacker ordered first. Guard sweep re-run on this state: **52/56,
-unchanged, all four survivors classified.**
-
-**Mock-only sweep, actor/phase pass and fork suite — DONE.** The sweep found that every
-graduation test ran against a mock and that the fork was available rather than blocked. The
-actor/phase pass added R12–R16. The fork suite (`test/Fork.v2.test.js`, `FORK=1`) now proves
-token ordering both ways, a real LP burn, and §1.1's attack against real Uniswap — all three
-red-proved. `guard-coverage.py` no longer restores a dirty tree; it refuses and prints the
-diff.
-
-## Remaining, in order
-
-1. **Re-freeze** — redeploy, verify, record commit + bytecode hash, publish the new address. The mutation run is done (52/56, every survivor classified, §5); re-run it if anything lands on `contracts/` first. **Requires an explicit go-ahead — it ends in a public address.**
+OpenZeppelin's sources stay MIT and appear as separate files with their own SPDX headers.
 
 ---
 
@@ -786,7 +750,8 @@ diff.
 
 - **Frontend: not started. This is the critical path.** Price impact must be a headline number — a $500 buy at launch takes ~21% of supply with ~19% slippage. `minTokensOut` must never default to zero. Show "creator bought X% at launch" on every token page — the 2.5% cap limits only the *privileged* path and does not cap total creator holdings, so disclosure is the actual protection. A quote taken during the snipe window is stale within **one second** and can understate the received amount by ~9x (favourable to the buyer, so `minTokensOut` never trips — but a frozen quote is simply wrong).
 - **Indexer:** migrations 001 and 002 **both unapplied**; `SUPABASE_URL` does not resolve. Goldsky vs Envio undecided pending their answers on Arc mainnet support; Supabase is the default if neither lands. The ABI is **generated** from build artifacts (`npm run build`) — the hand-maintained one silently truncated the `Curve` struct from 22 fields to 16 and hid `creatorLaunchPurchased`, the disclosure that protects buyers. **Never hand-edit it.**
-- **Licence:** BUSL-1.1, change licence GPL-2.0-or-later, Change Date 2030-09-16, `[LICENSOR]` **still unfilled** and blocking Blockscout's `license_type` (value `bsl_1_1`; `hardhat verify` does not send one, so it needs the UI or a direct API call). ⚠ Verifying on a public explorer arguably **starts** the four-year BUSL clock.
+- **Licence: UNLICENSED. Settled, not an open item.** All rights reserved, no rights granted, no entity name required and none used. BUSL-1.1 was considered and **dropped** rather than filling `[LICENSOR]`: it needed a named licensor the project did not want to publish, and verifying on a public explorer arguably starts its four-year clock — both problems disappear with UNLICENSED. Blockscout shows `license_type: none`, which is correct and already set; **`unlicense` on that list is The Unlicense, a public-domain dedication, and must never be selected.** OpenZeppelin's sources remain MIT.
+  The trade-off accepted: with no `[LICENSOR]`, there is no named copyright holder in the headers. CLAUDE.md previously argued a clear copyright line matters more than the licence choice for DMCA against hosted frontends and GitHub mirrors. That lever is weaker now. `LICENSE` states all-rights-reserved explicitly to compensate, but a takedown would rest on the repo and deployment history rather than on a name in the source.
 - **CCTP V2 bridging is REQUIRED non-contract scope — it is NOT descoped.** It is the
   day-one frontend onramp and sits at the **top of the entire funnel**: a user on
   Base / Ethereum / Solana must be able to buy an Arc-native token without manually

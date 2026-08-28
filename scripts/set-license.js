@@ -1,29 +1,33 @@
-// Set Blockscout's license_type to BUSL-1.1 on a verified contract.
+// Set Blockscout's license_type on a verified contract.
 //
-// `hardhat verify` never sends a licence type, which is why every deployment so far shows
-// license_type: none. Blockscout's own verification config confirms `bsl_1_1` is a
-// supported value (enum 14) -- queried from the live instance, not remembered.
+// ⚠ YOU ALMOST CERTAINLY DO NOT NEED TO RUN THIS. The project is UNLICENSED, and the
+// correct Blockscout value for that is `none`, which is what `hardhat verify` already
+// leaves behind. This script is kept so the mapping is written down rather than
+// re-derived, and so the trap below is recorded where someone would meet it.
 //
-// This re-submits verification via the standard-input endpoint WITH the licence field.
-// Dry-run by default: it prints exactly what it would send and stops. Pass --send to
-// actually post.
+// THE TRAP. Blockscout's list is fixed and has no "UNLICENSED" entry:
+//
+//     none        no licence stated  <-- CORRECT for UNLICENSED, and already set
+//     unlicense   The Unlicense: a PUBLIC DOMAIN DEDICATION. The exact opposite.
+//
+// Selecting `unlicense` because the word looks right would publicly waive every right the
+// project is trying to keep. It is a one-click, hard-to-notice giveaway of the entire
+// codebase. Do not.
+//
+// The full list was queried from the live instance rather than remembered:
+// GET /api/v2/smart-contracts/verification/config -> license_types.
+//
+// Dry-run by default; pass --send to actually post. LICENSE_TYPE overrides the value.
 //
 //   node scripts/set-license.js                 # show the request, send nothing
 //   node scripts/set-license.js --send          # ballista
 //   node scripts/set-license.js --send --helper # GraduationHelper
-//
-// NOTE ON THE ENTITY NAME: this call does NOT need it. Blockscout's license_type is a tag
-// on the verified contract and is independent of the `[LICENSOR]` placeholder in the
-// source headers. Filling that placeholder is a SOURCE change, and the compiler embeds an
-// IPFS metadata hash of the sources in the bytecode, so editing even a comment changes the
-// deployed bytecode and would require a fresh deployment. The tag can be set now; the name
-// in the published source cannot be, without redeploying.
 const fs = require("fs");
 const path = require("path");
 const { AbiCoder } = require("ethers");
 
 const BASE = "https://testnet.arcscan.app";
-const LICENSE = "bsl_1_1";
+const LICENSE = process.env.LICENSE_TYPE || "none";  // UNLICENSED maps to none; NEVER "unlicense" (public domain)
 const COMPILER = "v0.8.24+commit.e11b9ed9";
 
 function buildInputFor(sourcePath) {

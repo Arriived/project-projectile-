@@ -1,0 +1,167 @@
+// R15: the ONE-BALANCE configuration, executed on Arc testnet against the real USDC.
+//
+// Arc pays gas in USDC. Settlement asset and gas asset are the SAME balance, and the
+// ERC-20 view is a 6dp truncation of an 18dp native balance. No local EVM and no mainnet
+// fork can reach this -- Arc's own docs say simulators "run a standard EVM, not Arc's" --
+// so every claim in section 1.6 was arithmetic until this suite ran.
+//
+//   BALLISTA_ADDRESS=0x... npx hardhat run scripts/smoke-r15.js --network arcTestnet
+//
+// Funds a throwaway wallet from the deployer, so it needs the deployer to hold a few USDC.
+// Whatever is left in the throwaway is swept back at the end.
+const hre = require("hardhat");
+const { ethers } = hre;
+
+const BALLISTA = process.env.BALLISTA_ADDRESS;
+const USDC_ADDR = "0x3600000000000000000000000000000000000000";
+const ONE = 1_000_000n;      // 1 USDC, 6dp
+const SCALE = 10n ** 12n;    // 18dp native -> 6dp ERC-20
+
+const results = [];
+function check(label, pass, detail = "") {
+  results.push({ label, pass });
+  console.log(`  ${pass ? "PASS" : "FAIL"}  ${label}${detail ? `  -- ${detail}` : ""}`);
+}
+
+async function main() {
+  if (!BALLISTA) throw new Error("set BALLISTA_ADDRESS");
+  const p = ethers.provider;
+  const [deployer] = await ethers.getSigners();
+  const ballista = await ethers.getContractAt("LFX1", BALLISTA);
+  const usdc = new ethers.Contract(USDC_ADDR, [
+    "function balanceOf(address) view returns (uint256)",
+    "function transfer(address,uint256) returns (bool)",
+    "function approve(address,uint256) returns (bool)",
+  ], deployer);
+
+  console.log(`factory   ${BALLISTA}`);
+  console.log(`deployer  ${deployer.address}`);
+
+  // ── 1. The truncation lemma, executed ────────────────────────────────
+  // 1.6 proves floor((N + A*1e12)/1e12) == floor(N/1e12) + A for any sub-6dp dust N.
+  // That is the whole basis of the balance-delta check. Run it on the real token, on a
+  // wallet that genuinely carries dust.
+  console.log(`\n-- 1. section 1.6's truncation lemma, on the real token --`);
+  const nBefore = await p.getBalance(deployer.address);
+  const eBefore = await usdc.balanceOf(deployer.address);
+  const dust = nBefore % SCALE;
+  check("ERC-20 view is exactly the truncated native balance",
+    eBefore === nBefore / SCALE, `native ${nBefore}, erc20 ${eBefore}`);
+  check("the wallet actually carries sub-6dp dust (otherwise this proves nothing)",
+    dust > 0n, `dust ${dust} wei`);
+
+  // ── 2. A throwaway wallet, funded exactly ────────────────────────────
+  const w = ethers.Wallet.createRandom().connect(p);
+  console.log(`\n-- 2. throwaway wallet ${w.address} --`);
+  const FUND = 6n * ONE;
+  await (await usdc.transfer(w.address, FUND)).wait();
+  const wNative = await p.getBalance(w.address);
+  const wErc = await usdc.balanceOf(w.address);
+  check("a 6dp transfer moves the 18dp native balance by exactly amount*1e12",
+    wNative === FUND * SCALE, `native ${wNative}`);
+  check("recipient's ERC-20 view equals the truncated native balance",
+    wErc === wNative / SCALE, `erc20 ${wErc}`);
+
+  const usdcW = usdc.connect(w);
+  const ballistaW = ballista.connect(w);
+
+  // ── 3. Enough for the trade, not for trade + gas ─────────────────────
+  // The failure that cannot exist on a chain where gas is a different asset.
+  console.log(`\n-- 3. enough for the trade, not for trade + gas --`);
+  const hash = await ballista.currentEconomicsHash();
+  await (await usdcW.approve(BALLISTA, ethers.MaxUint256)).wait();
+
+  const balNow = await usdc.balanceOf(w.address);
+  let spentAll = false;
+  try {
+    // Spend the ENTIRE balance on a buy. On Arc this cannot succeed: the gas for the
+    // buy itself comes out of the same balance.
+    const token0 = await createToken(ballista, deployer, hash, "R15A");
+    await (await ballistaW.buy(token0, balNow, 0, { gasLimit: 600000 })).wait();
+    spentAll = true;
+  } catch (e) {
+    check("buying the ENTIRE balance fails -- gas comes out of the same pot",
+      true, String(e.shortMessage || e.message).slice(0, 70));
+  }
+  if (spentAll) check("buying the ENTIRE balance fails -- gas comes out of the same pot", false,
+    "it succeeded, which should be impossible when gas is the settlement asset");
+
+  // ── 4. Spend down until the user can no longer sell ──────────────────
+  console.log(`\n-- 4. spend down until selling is unaffordable --`);
+  const token = await createToken(ballista, deployer, hash, "R15B");
+  await new Promise((r) => setTimeout(r, 2000));
+
+  const before = await usdc.balanceOf(w.address);
+  const spend = before - 300_000n; // leave ~0.3 USDC, far too little for gas here
+  const buyRc = await (await ballistaW.buy(token, spend, 0, { gasLimit: 600000 })).wait();
+  const afterBuy = await usdc.balanceOf(w.address);
+  const tokenC = await ethers.getContractAt("LFX1Token", token);
+  const held = await tokenC.balanceOf(w.address);
+  console.log(`     spent ${spend}, left ${afterBuy}, holding ${held} tokens`);
+  check("the buy landed and the wallet holds tokens", held > 0n);
+
+  await (await tokenC.connect(deployer).approve(BALLISTA, 0)).wait().catch(() => {});
+  let sellFailed = false;
+  try {
+    await (await tokenC.connect(w).approve(BALLISTA, held, { gasLimit: 200000 })).wait();
+    await (await ballistaW.sell(token, held, 0, { gasLimit: 600000 })).wait();
+  } catch (e) {
+    sellFailed = true;
+    check("holder cannot afford the gas to SELL what they just bought",
+      true, String(e.shortMessage || e.message).slice(0, 70));
+  }
+  if (!sellFailed) {
+    check("holder cannot afford the gas to SELL what they just bought", false,
+      `sell succeeded with ${afterBuy} left -- the trap did not trigger at this size`);
+  }
+
+  // ── 5. The delta check, executed rather than proven ──────────────────
+  // _settleBuy measures the factory's balance around the pull and reverts on any
+  // shortfall. Assert the measured delta is EXACT against the real truncating token.
+  console.log(`\n-- 5. the balance-delta check, against real Arc USDC --`);
+  const fBefore = await usdc.balanceOf(BALLISTA);
+  const fNativeBefore = await p.getBalance(BALLISTA);
+  const amt = 2n * ONE;
+  await (await usdc.approve(BALLISTA, ethers.MaxUint256)).wait();
+  const t2 = await createToken(ballista, deployer, hash, "R15C");
+  await new Promise((r) => setTimeout(r, 2000));
+  const rc = await (await ballista.buy(t2, amt, 0, { gasLimit: 600000 })).wait();
+  const fAfter = await usdc.balanceOf(BALLISTA);
+  const fNativeAfter = await p.getBalance(BALLISTA);
+
+  const trade = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+    .filter(Boolean).find((l) => l.name === "Trade");
+  const actualUsdcIn = trade.args[3];
+  check("UsdcTransferMismatch did not fire on the real token", true, "the buy succeeded");
+  check("factory 6dp balance delta == actualUsdcIn exactly",
+    fAfter - fBefore === actualUsdcIn, `delta ${fAfter - fBefore}, actualUsdcIn ${actualUsdcIn}`);
+  check("factory 18dp native delta == actualUsdcIn * 1e12 exactly",
+    fNativeAfter - fNativeBefore === actualUsdcIn * SCALE,
+    `native delta ${fNativeAfter - fNativeBefore}`);
+  check("factory carries no sub-6dp dust, so truncation is lossless here",
+    fNativeAfter % SCALE === 0n, `dust ${fNativeAfter % SCALE}`);
+
+  // ── sweep back ───────────────────────────────────────────────────────
+  try {
+    const left = await p.getBalance(w.address);
+    const fee = 300000n * (await p.getFeeData()).gasPrice;
+    if (left > fee) {
+      await (await w.sendTransaction({ to: deployer.address, value: left - fee, gasLimit: 21000 })).wait();
+    }
+  } catch { /* dust left in a throwaway is not worth failing the run over */ }
+
+  const failed = results.filter((r) => !r.pass);
+  console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+  if (failed.length) { console.log("FAILED:"); failed.forEach((f) => console.log("  " + f.label)); process.exit(1); }
+}
+
+async function createToken(ballista, signer, hash, sym) {
+  const rc = await (await ballista.connect(signer).createToken(
+    "R15", sym + Date.now().toString().slice(-4), "", hash, false, { gasLimit: 6000000 }
+  )).wait();
+  const ev = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+    .filter(Boolean).find((l) => l.name === "TokenCreated");
+  return ev.args.token;
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });
