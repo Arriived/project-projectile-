@@ -6,9 +6,9 @@
 
 | | |
 |---|---|
-| HEAD **when this was written** | `f05f4a4` |
+| HEAD **when this was written** | `886f717` |
 | bytecode | **24,030 / 24,576 — 546 free** |
-| tests | **242 Hardhat + 3 fork (FORK=1), 13 Foundry** |
+| tests | **242 Hardhat + 10 fork (FORK=1), 13 Foundry** |
 | deployed address | **none current.** `0xDF714C3b...` is STALE — see §7 |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
@@ -33,19 +33,19 @@ missing.
 
 ## The exact next action
 
-**The graduation helper**: an external contract, no `LFX1` bytecode, permissionless, with
-a bounded correction spend, and a failed call must leave the curve retryable rather than
-worse off. It closes R6 — the post-fix griefing race where an attacker re-skews the pair
-between a correction and `graduate()` — by bundling correct-and-graduate atomically.
+**The re-freeze**, and it is the last item. Everything ahead of it is done: the cross-curve
+invariant, the mock-only sweep, the actor/phase pass, the fork suite, the R12 fix and the
+graduation helper. The guard sweep has been re-run on this state (52/56, §5).
 
-The fork suite is now the place to build it against: `test/Fork.v2.test.js` already stands
-up a real skewed pair and drives a curve into `GRADUATION_READY` behind it, which is exactly
-the starting state the helper has to recover from.
+**It requires an explicit go-ahead from the operator and must not be started without one.**
+It ends in a public address, which is the one action in this repo that cannot be taken back.
+The sequence: confirm the sweep is still clean against whatever has landed since, redeploy,
+verify on Blockscout, record the commit and bytecode hash in `deployments/arcTestnet.json`,
+and only then publish the address. `0xDF714C3b...` stays STALE until that happens — see §7.
 
-Then, in this order:
-
-1. Graduation helper *(next action, above)*
-2. Re-freeze — clean mutation run, redeploy, new address
+Standing decisions that survive the re-freeze: `lpRecipient` stays `BURN_ADDRESS`
+(§1.8's pre-flip gate is unmet and blocks nothing), and `GraduationHelper` is deployed
+separately or not at all — `LFX1` does not reference it, so it is not part of the freeze.
 
 **No redeploy without an explicit go-ahead, and not before a clean `guard-coverage.py` run.**
 The last mutation score (52/56) pre-dates everything in this session.
@@ -564,11 +564,37 @@ that. Closed by structure, not by a fix.
 
 **228 passing tests coexisted with a real gap** — `quoteBuy`'s `UnknownToken` guard had no
 test, and without it `quoteBuy` on a non-existent token returns `tokensOut = 0` with
-`actualUsdcIn` set to the full amount and **does not revert**. Last clean run: **52/56 =
-92.9%**, four survivors classified — two **proven** equivalent by `ceilDiv` monotonicity,
-two **evidenced** over 2,000,000 fuzz cases with zero firings.
+`actualUsdcIn` set to the full amount and **does not revert**.
 
-Keep "proven equivalent" and "unfalsified over N cases" as **separate** claims.
+**Last clean run: 52/56 = 92.9%, re-run on the post-session state** (56 sites, full 242-test
+suite per site, ~2h). **Identical to the previous score, with the same four survivors.** That
+was not the expectation — R12 and R13 landed after the last sweep, so movement looked likely
+— and the absence of movement is the finding: R12's fix adds a storage write rather than a
+guard, R13 was documented rather than fixed, and the new tests exercise behaviours whose
+guards were already covered. The sweep's value here is confirming no regression, not
+discovering anything.
+
+The four survivors, re-verified rather than carried forward on the old classification:
+
+| site | error | class |
+|---|---|---|
+| `_quoteBuy` L392 | `CurveMathError` | **proven** unreachable |
+| `_quoteSell` L534 | `CurveMathError` | **proven** unreachable |
+| `_quoteBuy` L416 | `ClampCostExceededOffer` | **evidenced**, 2,000,000 fuzz cases, zero firings |
+| `_quoteSell` L555 | `ClampInputExceededOffer` | **evidenced**, same |
+
+The two `CurveMathError` proofs, checked independently this session rather than accepted:
+`newVirtualUsdc >= virtualUsdcReserves` gives `k/newVirtualUsdc <= virtualTokenReserves` as
+reals, and since `virtualTokenReserves` is an integer, `ceilDiv` cannot exceed it — with
+equality only when the input is zero. `_quoteSell` is the same argument with the operands
+swapped. Both are defensive assertions against a condition the arithmetic forbids.
+
+**Keep "proven equivalent" and "unfalsified over N cases" as separate claims.** The two
+classes above are not interchangeable and the table should not be flattened into one number.
+
+*Consequence worth weighing separately: the two proven-unreachable guards are dead
+bytecode. Removing them would recover space against the 546 free, at the cost of a backstop
+and a fresh mutation run plus redeploy. Not recommended without a reason to need the bytes.*
 
 ## Prove every test can go red
 
@@ -663,10 +689,10 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| HEAD **when this was written** | `f05f4a4` |
+| HEAD **when this was written** | `886f717` |
 | bytecode | **24,030 / 24,576 — 546 free** |
-| tests | **242 Hardhat + 3 fork (FORK=1), 13 Foundry** |
-| last mutation score | 52/56 = 92.9% — **pre-dates this session's changes; must be re-run before re-freeze** |
+| tests | **242 Hardhat + 10 fork (FORK=1), 13 Foundry** |
+| last mutation score | 52/56 = 92.9% — **re-run on this state**, same four survivors, all classified (§5) |
 
 ## ⚠ `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` IS STALE
 
@@ -695,6 +721,14 @@ life** — it claimed as the handler while every token there is created by the t
 so all 4,274 calls of a full run reverted into the catch while reporting "0 reverts". Fixed,
 and its reachability is now asserted.
 
+**R12 fixed, graduation helper built, guard sweep re-run.** Router approval is single-use in
+both halves (+12 bytes, 546 free). `GraduationHelper` bundles correct-and-graduate
+atomically, closing R6 — it holds no privilege in `LFX1` and custodies nothing between
+transactions, so a bug in it cannot strand or damage a curve, and the fallback is the same
+two-transaction sequence by hand. Seven adversarial fork tests, including a same-block
+re-skew with the attacker ordered first. Guard sweep re-run on this state: **52/56,
+unchanged, all four survivors classified.**
+
 **Mock-only sweep, actor/phase pass and fork suite — DONE.** The sweep found that every
 graduation test ran against a mock and that the fork was available rather than blocked. The
 actor/phase pass added R12–R16. The fork suite (`test/Fork.v2.test.js`, `FORK=1`) now proves
@@ -704,8 +738,7 @@ diff.
 
 ## Remaining, in order
 
-1. **Graduation helper** — external contract, no `LFX1` bytecode, permissionless, bounded correction spend, a failed call must leave the curve retryable rather than worse off. Closes R6.
-2. **Re-freeze** — clean mutation run with every survivor classified, redeploy, verify, record commit + bytecode hash, publish the new address.
+1. **Re-freeze** — redeploy, verify, record commit + bytecode hash, publish the new address. The mutation run is done (52/56, every survivor classified, §5); re-run it if anything lands on `contracts/` first. **Requires an explicit go-ahead — it ends in a public address.**
 
 ---
 
