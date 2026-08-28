@@ -61,6 +61,15 @@ is the one with a deployed, verified, adversarially-tested contract anyone can r
 
 ## HOW TO READ THIS FILE
 
+**`CONTRACT_INVENTORY.md` is the exhaustive WHAT; this file is the WHY.** That split
+exists because it failed once: a five-minute symbol lock lived in `LFX1.sol` and appeared
+nowhere here, because a 437-line rewrite of a hand-maintained document dropped three whole
+sections and nothing could have noticed. The inventory is **generated from the ABI and the
+source** by `npm run inventory` (wired into `npm run build`) and ends with a coverage list
+of every exposed identifier this file never mentions. **After any contract change, read
+that list.** Do not hand-maintain a feature list here; describe reasoning here and let the
+inventory enumerate.
+
 **It is a starting point to verify, not ground truth.** It is written by the same
 assistant that writes the code. Before relying on any number, address or claim here,
 check it against the repo — `contracts/LFX1.sol` for constants, `git log` for
@@ -363,6 +372,7 @@ test that cannot go red. Each entry: **structure** (closed by construction), **p
 | R13 | **`creationFeeUsdc` is absent from `currentEconomicsHash()`** — the one fee the creator pays directly is the one pinning does not cover | **OPEN** | Owner can raise it between the creator seeing terms and their transaction landing; the pinned hash is unchanged so the guard cannot fire. Proven: creator pinned the old terms and paid a 1000x fee. **Exposure is bounded by the creator's approval** — an exact-amount approval is safe, `MaxUint256` is not. The frontend must not approve max for the creation fee. |
 | R14 | USDC or launched tokens sent directly to the factory are **permanently stranded** | **OPEN — unrecoverable** | Every payout path is bounded by accounting, never by balance, so nothing can pay a donation out. Also means §1.10's exact conservation is a **closed-system** property: a donation breaks the equality on-chain, though nothing in the handler performs one. Do not read it as "the factory can never hold unaccounted USDC". |
 | R15 | The one-balance configuration: gas and settlement are the SAME balance | **LARGELY CLOSED — executed on Arc testnet, 13/13** | `scripts/smoke-r15.js`, run against the live deployment. What it proved, on chain rather than arithmetically: a wallet that can afford a trade cannot afford the trade PLUS its gas; a holder left with 0.0016 USDC holds 471 trillion tokens and **cannot afford to sell them**; §1.6's truncation lemma holds on the real token with genuine sub-6dp dust present (726,808,615,422 wei); and `_settleBuy`'s balance-delta check measures **exactly** `actualUsdcIn` against real Arc USDC, in both the 6dp and 18dp views. **Residual:** the delta check ran against a factory carrying NO dust — the factory has no `receive()`, so only a SELFDESTRUCT push (R10) can give it any, and the dusty-factory case is still arithmetic-only. Circle-side controls stay unreachable (R1 pause, R2 user-side blocklist), and Arc mainnet USDC does not exist yet, so testnet-equals-mainnet is unverifiable rather than verified. |
+| R17 | **`renounceOwnership()` is inherited from `Ownable` and is live.** Calling it permanently freezes every setter — including `revokeRouter()`, which §1.5 names as the ONLY hard stop against a malicious router | **OPEN — undocumented until now** | Not mentioned anywhere in this file before the inventory audit found it. There is no code path that calls it, and no test asserts it is unreachable, so it rests entirely on the owner never sending that transaction. Overriding it to revert costs bytes and has not been priced. At minimum: **never call it**, and treat it as the highest-severity single-transaction mistake available to the owner key — worse than a hostile router, because it is irreversible. |
 | R16 | `setTreasury` emits no event | **OPEN — trivial** | Every other setter emits one. An owner redirecting the treasury is invisible to indexers and to monitoring. |
 
 ---
@@ -769,6 +779,142 @@ no reason to run it — the deployments already carry `none`. It is kept only so
 person who wonders can see the mapping written down rather than re-deriving it.
 
 OpenZeppelin's sources stay MIT and appear as separate files with their own SPDX headers.
+
+---
+
+# 7A. MECHANICS — restored after the rewrite dropped them
+
+⚠ **These three sections were deleted by the CLAUDE.md rewrite and lived only in the
+contract for weeks.** `### Fees`, `### Snipe tax` and `### Other mechanics` were present
+before `2d92cfe` and absent after. The rewrite kept the hard-won *hazards* (§1.1–1.10, the
+register) and dropped the *mechanics*. Restored below, corrected to current values.
+
+## Fees
+
+- **1% buy and 1% sell**, per-token snapshotted at creation. `defaultBuyFeeBps` /
+  `defaultSellFeeBps` = 100.
+- **Creator share: 90% of the buy-side fee, 50% of the sell-side**
+  (`defaultCreatorBuyFeeBps` 90, `defaultCreatorSellFeeBps` 50). Blends to **70%** at a
+  50:50 mix, ~78% buy-heavy. A lifetime mix below 50:50 buy is structurally impossible
+  (everything sold was bought first), so **70% is a hard floor**.
+- **Never market this as "90/10."** The blend is 70%, both splits are readable on a
+  verified contract in thirty seconds, and the honest claims — "70%, matching the market
+  leader" and "90% on every buy" — are already market-leading. Push back if it comes up.
+- **Creation fee 0.5 USDC** (`creationFeeUsdc` = 5e5). Not 0.1: at 0.1 one wallet could
+  push 8,640 launches/day for ~$1,063. Revenue from spam does not offset an unusable feed.
+  **Not covered by the economics hash — see R13.**
+- Curve-phase revenue is **capped per token** ($346–600 depending on mix). The engine is
+  launch volume and curve trading, not graduations.
+- Accrual and claiming are §1.7; the solvency identity is §1.10.
+
+## Snipe tax
+
+Table **`[9800, 9500, 9000, 8000, 6000, 4000, 2000, 0]`**, indexed by elapsed **seconds**
+since creation. Retuned because the old `[9800, 2500, 300, 100, 0]` stopped deterring
+against the thinner curve. Measured share of curve supply taken by a $1,000 sniper:
+
+| t | tax | this table | old table |
+|---|---|---|---|
+| 0 | 9800 | 0.49% | 0.49% |
+| 1 | 9500 | 1.96% | **28.93%** |
+| 2 | 9000 | 4.34% | **35.25%** |
+| 3 | 8000 | 8.85% | 35.79% |
+
+Testnet racing found real snipers landing at **t=1–2**, exactly where the old table failed.
+
+- Split **70% treasury / 30% back into the curve** (`defaultSnipeTaxTreasuryBps` = 7000),
+  adjustable, snapshotted per token. **Never to the creator** — a creator sniping their own
+  launch would recover part of their own tax.
+- Tables are **immutable per version**. Each token snapshots
+  `activeSnipeTaxTableVersion` at creation; there is no mutate path, only
+  `publishSnipeTaxTable` creating a new version for future launches.
+- **Describe it as "up to 98%," not "98%"** — the top tier is only reachable by co-located
+  bots.
+- Zero headroom: see R4.
+
+## Other mechanics
+
+- **Partial-fill clamp** on buy and sell — fills what is available rather than reverting,
+  and never pulls the excess in the first place, so there is no refund step to fail. Stops
+  a graduating buy being griefable by a small front-run.
+- **Block-0 restriction:** trading opens the block AFTER creation
+  (`block.number > creationBlock`, error `TradingNotOpenYet`). On 500ms blocks this delays
+  a sniper by about half a second, which is why the snipe tax exists at all.
+- **Creator launch buy:** creator-only, untaxed, capped at **2.5% of curve supply**
+  (`maxCreatorLaunchBps` = 250), cumulative per token — a per-call cap is loopable inside
+  one block. The cap limits the *privileged* path only and does **not** cap total creator
+  holdings; nothing stops a second address. **Never describe it as "creators are capped at
+  2.5%."** Disclosure is the protection — the frontend must show "creator bought X% at
+  launch."
+- **Creator launch window is TIME-based**, `creatorLaunchWindow` = 3 seconds, snapshotted
+  and hashed. A block-number check was unreachable from an EOA. A zero window is
+  same-SECOND, not same-BLOCK. The honest claim is "first CHEAP access", not "first
+  access": a sniper can outbid on gas inside the window.
+- **Economics pinning:** `createToken` takes `expectedEconomicsHash` and reverts
+  `EconomicsChanged` if terms moved. Twelve values are hashed; **`creationFeeUsdc` and
+  `launchCooldown` are NOT** (R13).
+- **Mutable metadata URI** — creator-only `updateMetadataURI`, emits old and new so socials
+  swapped after launch are auditable.
+- **Pool boost** (opt-in at launch): the creator's fee share accrues to `poolBoost` instead
+  of `creatorFeesAccrued`, and is added to the pool's USDC side at graduation. It must
+  **never** count toward the graduation threshold. Effect is a ~1–4% deeper pool — a
+  **trust signal, not an economic mechanism**. Do not let the UI imply otherwise, and do
+  not call it "holder fee sharing": nobody receives anything.
+- **Symbol lock — DISABLED.** `symbolLockDuration` was 5 minutes; it is now **0** on the
+  live deployment. See §7B.
+- **Launch cooldown — 5 seconds** per creator address (`launchCooldown`, keyed on
+  `lastLaunchTimestamp[msg.sender]`). Bypassable with a second address or a factory
+  contract, so it is **not** a spam control; the 0.5 USDC creation fee is.
+
+---
+
+# 7B. SETTLED THIS SESSION
+
+## Symbol lock removed, launch cooldown 5s
+
+`symbolLockDuration` **0**, `launchCooldown` **5**. Both by setter on the live deployment:
+no redeploy, no bytecode change, reversible.
+
+**A duration of 0 disables the check outright rather than shortening it** — proven in
+`test/SymbolLock.test.js`, including the boundary where two launches of the same symbol
+land in ONE block and `unlocksAt == now`, which `>=` passes and `>` would not. The write
+still happens, so the guard is still evaluated and still costs gas; it simply can never
+fire.
+
+Priced before deciding, with the removal measured through the harness
+(`redproof.py remove-symbol-lock`):
+
+| | lock present | code removed |
+|---|---|---|
+| bytecode | 24,030 | 23,734 (**−296**) |
+| `createToken` gas | 1,065,491 | 1,040,685 (**−24,806**, ~0.0005 USDC) |
+
+Setting 0 recovers **none** of that — the SSTORE remains. Cutting the code out would, at
+the cost of a fourth address, re-verification, and breaking five existing tests. Not worth
+it on those numbers. `isSymbolAvailable()` stays honest at duration 0: it reports "not
+currently locked", which is now permanently true.
+
+**Consequence: symbols are fully duplicable with no delay.** Collision surfacing is a hard
+frontend requirement, not a nice-to-have — `FRONTEND_BUILD_V2.md` rule 2.
+
+⚠ `symbolLockDuration` is inside `currentEconomicsHash()`, so this change **moved the
+hash**. Any `createToken` carrying a pre-change hash now reverts `EconomicsChanged`.
+`launchCooldown` is not hashed, so that half invalidated nothing.
+
+## Three test-calibration errors, kept with their reasons
+
+All three were mine, in the R15 suite, and each looked like a contract finding first:
+
+1. **Leaving 0.3 USDC to strand a holder** — ample. A transaction here costs ~0.004 USDC,
+   so the sell went through and proved nothing.
+2. **Spending down to a quarter of a transaction** — the BUY could then not afford its own
+   gas and reverted, moving the trap to the wrong operation. Gas and settlement come out of
+   one balance, so sizing one against the other fights you; sweep AFTER the buy instead.
+3. **Snapshotting the factory before `createToken`** — measures the creation fee as well as
+   the trade, and fails by exactly `creationFeeUsdc`. Snapshot immediately before the buy.
+
+The general lesson: on Arc, any test that reasons about a balance must account for gas
+coming out of that same balance, at every step.
 
 ---
 

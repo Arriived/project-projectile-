@@ -52,7 +52,7 @@ concluding that it has been.
 
 ---
 
-## 2. There is NO name uniqueness, and symbol "uniqueness" is a 5-minute cooldown
+## 2. There is NO name uniqueness, and symbols are now FULLY DUPLICABLE
 
 **Rule.** Never present a token's name or symbol as identifying. Show the contract address
 alongside them everywhere a user could act on the distinction, and warn on collision with
@@ -65,9 +65,14 @@ an existing token rather than relying on the contract to prevent one.
 | **name** | **Nothing at all.** Not stored, not hashed, not compared. It is passed to the `LFX1Token` constructor and emitted in `TokenCreated`, and that is the end of it. The `Curve` struct has no name field. **Unlimited duplicate names, always, with no delay.** |
 | **symbol** | A **time-limited reservation**, not uniqueness. `symbolUnlocksAt[symbolHash]` is checked at [LFX1.sol:320](contracts/LFX1.sol:320) and set at [:329](contracts/LFX1.sol:329) to `block.timestamp + symbolLockDuration`. |
 
-`symbolLockDuration` is **5 minutes** ([LFX1.sol:70](contracts/LFX1.sol:70)), owner-settable.
-So a symbol is blocked for five minutes after a launch that used it, and is then free for
-anyone. Two tokens with the same symbol five minutes apart is normal, expected behaviour.
+**`symbolLockDuration` is now 0 on the live deployment, so the lock never fires at all.**
+It was 5 minutes; it was removed as friction without protection — bypassable by case, and
+unable to back a "ticker is taken" UI. Two tokens with the same symbol in the same block is
+now normal, expected behaviour, proven in `test/SymbolLock.test.js`.
+
+**Surfacing collisions is therefore a HARD REQUIREMENT, not a nice-to-have.** Nothing in
+the contract stops a launch impersonating an existing token's symbol, and nothing delays
+it. The only defence a user gets is what the UI shows them.
 
 **And within those five minutes it is bypassable by case.** `caseSensitiveSymbols` defaults
 to `true` ([LFX1.sol:74](contracts/LFX1.sol:74)), so the hash is over the raw bytes: `CAT`
@@ -88,3 +93,32 @@ Separately, `launchCooldown` is **10 seconds per creator address**
 ([LFX1.sol:67](contracts/LFX1.sol:67), keyed on `lastLaunchTimestamp[msg.sender]`) and is
 bypassable with a second address or a factory contract. It is not a spam control; the
 creation fee is.
+
+
+---
+
+## 3. Every quote and every trade needs a gas reserve. Gas IS the settlement asset.
+
+**Rule.** Never let a user spend their whole balance. Reserve gas explicitly, show the
+reserve, and cap "max" buttons at balance minus reserve. Refuse to submit a trade that
+would leave less than the cost of one transaction.
+
+**Reason — measured on Arc testnet, not reasoned about.** Arc pays gas in USDC, so the
+settlement asset and the gas asset are one balance. A wallet was left holding
+**471 trillion tokens and 0.0016 USDC**, and **could not sell them** —
+`insufficient funds for gas * price + value`. The position was not illiquid; the holder
+simply could not afford to move it.
+
+This is not an edge case, it is what a "max" button does by default. On a chain where gas
+is a different asset, spending the entire balance is normal and harmless. Here it strands
+the user in a position they can see and cannot exit.
+
+Two consequences beyond the max button:
+
+- **A buy that spends the entire balance cannot succeed at all** — the gas for that very
+  buy comes out of the amount being spent. The failure is confusing without a reserve.
+- **Selling needs gas too.** A user who spent down to nearly nothing on the way in has no
+  way out. The reserve must cover the exit, not just the entry.
+
+Recorded as R15 in `CLAUDE.md`, executed by `scripts/smoke-r15.js` against the live
+deployment.
