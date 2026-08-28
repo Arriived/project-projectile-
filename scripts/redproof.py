@@ -113,6 +113,20 @@ def mut_lp_elsewhere(s):
     return s.replace(a, "            address(0xBEEF), // MUTATED")
 
 
+def mut_helper_no_graduate(s):
+    """Break the bundle: correct the pair but do not graduate in the same call. Every
+    atomicity test must go red."""
+    a = _anchor(s, "        lfx1.graduate(p.token);")
+    return s.replace(a, "        // MUTATED: bundle broken, graduation not bundled")
+
+
+def mut_helper_floor_not_ceil(s):
+    """Floor instead of ceil on the USDC step, so D lands just BELOW the window. This is
+    the bug class that made graduate() revert with GraduationFailed."""
+    a = _anchor(s, "            usdcNeeded = (rhs - lhs + T - 1) / T; // ceil, lands D in [0, T)")
+    return s.replace(a, "            usdcNeeded = (rhs - lhs) / T; // MUTATED: floor, lands D below the window")
+
+
 def mut_multicurve_claim_prank(s):
     a = _anchor(s, "        vm.prank(creator);")
     return s.replace(a, "        // MUTATED: prank removed, restoring the dead-claim bug")
@@ -172,6 +186,18 @@ MUTATIONS = {
         "suite": None,
         "fn": mut_lp_elsewhere,
         "doc": "sends LP off the snapshotted recipient; fork test 2 must go RED",
+    },
+    "helper-no-graduate": {
+        "file": "contracts/GraduationHelper.sol",
+        "suite": None,
+        "fn": mut_helper_no_graduate,
+        "doc": "breaks the atomic bundle; every GraduationHelper atomicity test must go RED",
+    },
+    "helper-floor-not-ceil": {
+        "file": "contracts/GraduationHelper.sol",
+        "suite": None,
+        "fn": mut_helper_floor_not_ceil,
+        "doc": "floors the USDC step so D lands below the window; reintroduces GraduationFailed",
     },
     "multicurve-claim-prank": {
         "file": MULTI_HANDLER,
