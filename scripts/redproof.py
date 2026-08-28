@@ -127,6 +127,20 @@ def mut_helper_floor_not_ceil(s):
     return s.replace(a, "            usdcNeeded = (rhs - lhs) / T; // MUTATED: floor, lands D below the window")
 
 
+GUARD_SRC = '        bytes32 symbolHash = caseSensitiveSymbols\n            ? keccak256(bytes(symbol))\n            : keccak256(bytes(_toUpperAscii(symbol)));\n        uint256 unlocksAt = symbolUnlocksAt[symbolHash];\n        if (!(unlocksAt == 0 || block.timestamp >= unlocksAt)) revert SymbolLocked(unlocksAt);'
+WRITE_SRC = '        symbolUnlocksAt[symbolHash] = block.timestamp + symbolLockDuration;'
+
+
+def mut_remove_symbol_lock(s):
+    """Cut the symbol lock out entirely -- the hash, the guard and the write -- to
+    price what setting symbolLockDuration = 0 does NOT recover. Measurement only; the
+    symbol-lock tests are expected to go red under it."""
+    a = _anchor(s, GUARD_SRC)
+    s = s.replace(a, "        // MUTATED: symbol lock guard removed")
+    b = _anchor(s, WRITE_SRC)
+    return s.replace(b, "        // MUTATED: symbol lock write removed")
+
+
 def mut_multicurve_claim_prank(s):
     a = _anchor(s, "        vm.prank(creator);")
     return s.replace(a, "        // MUTATED: prank removed, restoring the dead-claim bug")
@@ -198,6 +212,12 @@ MUTATIONS = {
         "suite": None,
         "fn": mut_helper_floor_not_ceil,
         "doc": "floors the USDC step so D lands below the window; reintroduces GraduationFailed",
+    },
+    "remove-symbol-lock": {
+        "file": SRC,
+        "suite": None,
+        "fn": mut_remove_symbol_lock,
+        "doc": "cuts the symbol lock out; gas/bytes measurement, lock tests go red",
     },
     "multicurve-claim-prank": {
         "file": MULTI_HANDLER,
