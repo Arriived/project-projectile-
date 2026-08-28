@@ -308,7 +308,7 @@ def main():
         keep = lambda l: (
             " passing" in l or " failing" in l or "AssertionError" in l
             or "expected" in l or re.match(r"\s+\d+\)\s", l) is not None
-            or "reverted" in l
+            or "reverted" in l or "MEASURE" in l
         )
 
     printed = False

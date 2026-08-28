@@ -117,8 +117,8 @@ describe('symbol lock gas and size', function () {
     const first = await (await factory.connect(alice).createToken('T', 'AAA', '', hash, false)).wait();
     const second = await (await factory.connect(alice).createToken('T', 'BBB', '', hash, false)).wait();
 
-    console.log(`      deployed bytecode : ${(deployed.length - 2) / 2} bytes`);
-    console.log(`      createToken gas   : ${first.gasUsed} (cold symbol slot)`);
-    console.log(`      createToken gas   : ${second.gasUsed} (second, different symbol)`);
+    console.log(`      MEASURE deployed bytecode : ${(deployed.length - 2) / 2} bytes`);
+    console.log(`      MEASURE createToken gas   : ${first.gasUsed} (cold symbol slot)`);
+    console.log(`      MEASURE createToken gas   : ${second.gasUsed} (second, different symbol)`);
   });
 });
