@@ -447,9 +447,88 @@ const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function allowance(address owner, address spender) view returns (uint256)",
   "function approve(address spender, uint256 amount) returns (bool)",
+  // Rule 7. Present on Arc's USDC -- verified live at 0x3600...0000, alongside
+  // paused(), blacklister(), masterMinter() and the rest of the FiatToken surface.
+  "function isBlacklisted(address) view returns (bool)",
 ];
 
 const $ = (id) => document.getElementById(id);
+
+// ══ GAS, FEES AND THE ONE-BALANCE PROBLEM ════════════════════════════════
+// FRONTEND_BUILD_V2 rules 3, 4 and 6. On Arc, gas IS the settlement asset: the 18-decimal
+// native balance and the 6-decimal ERC-20 view are the SAME money. So every spend competes
+// with the gas needed to make it, and a user who spends everything is stranded holding a
+// token they cannot sell. Measured on testnet: a wallet left with 0.0016 USDC held 471
+// trillion tokens and could not move them.
+
+const GWEI = 1000000000n;
+const MIN_MAX_FEE = 20n * GWEI;   // rule 6: Arc's documented floor. Below it a transaction
+                                  // "may remain pending indefinitely or fail outright".
+const TIP = 1n * GWEI;            // 0 is accepted; a small tip improves inclusion under load
+const SCALE_18_TO_6 = 1000000000000n;
+const GAS_LIMIT_TRADE = 600000n;  // Arc's eth_estimateGas returns NO margin, so budget high
+const RESERVE_MULTIPLE = 3n;      // headroom: approve + trade + one retry
+
+// Read the fee from the chain EVERY time. The base-fee ceiling is 20,000 Gwei -- a
+// thousand times the floor -- so a reserve sized from the floor, or from a quiet-period
+// sample, is wrong by up to 1000x exactly when the network is busy.
+async function currentFees() {
+  let base = MIN_MAX_FEE;
+  try {
+    const fd = await readProvider.getFeeData();
+    const seen = fd.maxFeePerGas ?? fd.gasPrice ?? 0n;
+    if (seen > base) base = seen;
+  } catch { /* fall back to the floor rather than blocking the trade */ }
+  return { maxFeePerGas: base, maxPriorityFeePerGas: TIP };
+}
+
+// One transaction's worth of gas, in 6dp USDC, rounded up.
+async function txCostUsdc6(gasLimit = GAS_LIMIT_TRADE) {
+  const { maxFeePerGas } = await currentFees();
+  const wei = gasLimit * maxFeePerGas;
+  return (wei + SCALE_18_TO_6 - 1n) / SCALE_18_TO_6;
+}
+
+// What the user may actually spend: balance minus a reserve that covers the trade, the
+// approve that may precede it, and a retry. Never offer "max" without this.
+async function availableToTrade(balance6) {
+  const reserve = (await txCostUsdc6()) * RESERVE_MULTIPLE;
+  return { available: balance6 > reserve ? balance6 - reserve : 0n, reserve };
+}
+
+// Rule 4: decide by ARITHMETIC, never by parsing a revert string. Arc's docs say the
+// strings are not a stable contract and Zero8 changes them on 3 September -- a client that
+// parses them does not throw when they change, it silently stops warning.
+async function affordabilityProblem(balance6, spend6) {
+  const { available, reserve } = await availableToTrade(balance6);
+  if (balance6 === 0n) {
+    return "This wallet has no USDC. On Arc, USDC is also the gas token, so you need some "
+         + "before any transaction — including an approval. "
+         + '<a href="https://faucet.circle.com" target="_blank">faucet.circle.com</a>';
+  }
+  if (spend6 > available) {
+    const fmt = (v) => Number(ethers.formatUnits(v, 6)).toFixed(4);
+    return `Not enough USDC once gas is reserved. Balance ${fmt(balance6)}, `
+         + `gas reserve ${fmt(reserve)}, available to trade ${fmt(available)}. `
+         + "Gas is paid in USDC on Arc, so spending your whole balance would leave you "
+         + "unable to sell.";
+  }
+  return null;
+}
+
+// Rule 7. A blocklisted wallet cannot send OR receive USDC, and USDC is the gas token, so
+// every path fails and none of them explains why. Say it plainly instead.
+async function blocklistProblem(address) {
+  try {
+    const readUsdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, readProvider);
+    if (await readUsdc.isBlacklisted(address)) {
+      return "This wallet is blocked by USDC's issuer and cannot send or receive USDC. "
+           + "On Arc that also means it cannot pay gas, so no transaction will succeed. "
+           + "This is set by Circle, not by us.";
+    }
+  } catch { /* view missing or RPC down: do not block the user on a check we cannot make */ }
+  return null;
+}
 
 // ── Safe rendering helpers ──────────────────────────────────────────────
 // Token name/symbol/description are supplied by WHOEVER created the token —
@@ -1088,26 +1167,28 @@ $("drawerConfirm").addEventListener("click", async () => {
         return;
       }
 
+      // Rule 7 first: a blocklisted wallet fails everything, including the approval.
+      const blocked = await blocklistProblem(userAddress);
+      if (blocked) { setDrawerStatus(blocked, "error"); $("drawerConfirm").disabled = false; return; }
+
+      // Rules 3 + 4: arithmetic, before submitting. Gas comes out of this same balance.
       const balance = await withRetry(() => usdc.balanceOf(userAddress), { onRetry });
-      if (balance < usdcIn) {
-        setDrawerStatus(`Not enough USDC. Have ${ethers.formatUnits(balance, 6)}. Get testnet USDC from <a href="https://faucet.circle.com" target="_blank">faucet.circle.com</a>.`, "error");
-        $("drawerConfirm").disabled = false;
-        return;
-      }
+      const problem = await affordabilityProblem(balance, usdcIn);
+      if (problem) { setDrawerStatus(problem, "error"); $("drawerConfirm").disabled = false; return; }
 
       const allowance = await withRetry(() => usdc.allowance(userAddress, FACTORY_ADDRESS), { onRetry });
       if (allowance < usdcIn) {
         const budgetWei = ethers.parseUnits(APPROVAL_BUDGET_USDC.toString(), 6);
         const approveAmount = usdcIn > budgetWei ? usdcIn : budgetWei;
         setDrawerStatus(`<span class="spinner"></span> Approving USDC (covers this and future trades up to $${ethers.formatUnits(approveAmount, 6)}) — confirm in your wallet…`, "warn");
-        const approveTx = await withRetry(() => usdc.approve(FACTORY_ADDRESS, approveAmount), { onRetry });
+        const approveTx = await withRetry(async () => usdc.approve(FACTORY_ADDRESS, approveAmount, await currentFees()), { onRetry });
         setDrawerStatus('<span class="spinner"></span> Waiting for approval…', "warn");
         await withRetry(() => approveTx.wait(), { onRetry });
         refreshAllowancePill();
       }
 
       setDrawerStatus('<span class="spinner"></span> Confirm the buy in your wallet…', "warn");
-      const tx = await withRetry(() => factory.buy(activeToken.contract_address, usdcIn, minOut), { onRetry });
+      const tx = await withRetry(async () => factory.buy(activeToken.contract_address, usdcIn, minOut, await currentFees()), { onRetry });
       setDrawerStatus('<span class="spinner"></span> Waiting for confirmation…', "warn");
       await withRetry(() => tx.wait(), { onRetry });
       setDrawerStatus("✓ Bought. This may take a few seconds to reflect in the feed.", "ok");
@@ -1124,9 +1205,26 @@ $("drawerConfirm").addEventListener("click", async () => {
         return;
       }
 
+      const blockedSell = await blocklistProblem(userAddress);
+      if (blockedSell) { setDrawerStatus(blockedSell, "error"); $("drawerConfirm").disabled = false; return; }
+
       const balance = await withRetry(() => tokenContract.balanceOf(userAddress), { onRetry });
       if (balance < tokensIn) {
         setDrawerStatus(`Not enough ${activeToken.symbol}. You have ${ethers.formatUnits(balance, 18)}.`, "error");
+        $("drawerConfirm").disabled = false;
+        return;
+      }
+
+      // The exit needs gas, and it is paid in USDC. This is the stranding case: holding
+      // tokens with too little USDC to sell them. Checked by arithmetic, before submitting.
+      const usdcForGas = await withRetry(() => usdc.balanceOf(userAddress), { onRetry });
+      const needForSell = (await txCostUsdc6()) * 2n; // approve + sell
+      if (usdcForGas < needForSell) {
+        const fmt = (v) => Number(ethers.formatUnits(v, 6)).toFixed(4);
+        setDrawerStatus(
+          `Not enough USDC to pay for this sell. You have ${fmt(usdcForGas)} and need about `
+          + `${fmt(needForSell)} for gas. On Arc gas is paid in USDC, so holding tokens is `
+          + `not enough to sell them.`, "error");
         $("drawerConfirm").disabled = false;
         return;
       }
@@ -1137,13 +1235,13 @@ $("drawerConfirm").addEventListener("click", async () => {
       const allowance = await withRetry(() => tokenContract.allowance(userAddress, FACTORY_ADDRESS), { onRetry });
       if (allowance < tokensIn) {
         setDrawerStatus('<span class="spinner"></span> Approving token for sale — confirm in your wallet…', "warn");
-        const approveTx = await withRetry(() => tokenContract.approve(FACTORY_ADDRESS, tokensIn), { onRetry });
+        const approveTx = await withRetry(async () => tokenContract.approve(FACTORY_ADDRESS, tokensIn, await currentFees()), { onRetry });
         setDrawerStatus('<span class="spinner"></span> Waiting for approval…', "warn");
         await withRetry(() => approveTx.wait(), { onRetry });
       }
 
       setDrawerStatus('<span class="spinner"></span> Confirm the sell in your wallet…', "warn");
-      const tx = await withRetry(() => factory.sell(activeToken.contract_address, tokensIn, minOut), { onRetry });
+      const tx = await withRetry(async () => factory.sell(activeToken.contract_address, tokensIn, minOut, await currentFees()), { onRetry });
       setDrawerStatus('<span class="spinner"></span> Waiting for confirmation…', "warn");
       await withRetry(() => tx.wait(), { onRetry });
       setDrawerStatus("✓ Sold. This may take a few seconds to reflect in the feed.", "ok");

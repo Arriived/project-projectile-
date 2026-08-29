@@ -364,11 +364,17 @@ const RPC_URL = "https://rpc.testnet.arc.io"; // documented host; rpc.testnet.ar
 const EXPLORER_URL = "https://testnet.arcscan.app";
 
 const FACTORY_ABI = [
-  "function createToken(string name, string symbol, string metadataURI) returns (address)",
+  // FIVE arguments. The three-argument form never existed on LFX1 -- it was left over
+  // from ArcLaunchFactory, five deployments ago, so every create call failed.
+  "function createToken(string name, string symbol, string metadataURI, bytes32 expectedEconomicsHash, bool poolBoostEnabled) returns (address)",
+  "function currentEconomicsHash() view returns (bytes32)",
   "function creationFeeUsdc() view returns (uint256)",
   "function launchCooldown() view returns (uint256)",
   "function lastLaunchTimestamp(address) view returns (uint256)",
-  "function symbolTaken(bytes32) view returns (bool)",
+  // symbolTaken(bytes32) never existed on LFX1 either. The real view is
+  // isSymbolAvailable(string) -- and with symbolLockDuration now 0 it always returns true,
+  // so it can no longer answer "is this ticker taken". See FRONTEND_BUILD_V2 rule 2.
+  "function isSymbolAvailable(string) view returns (bool)",
   "event TokenCreated(address indexed token, address indexed creator, string name, string symbol, string metadataURI)"
 ];
 const ERC20_ABI = [
@@ -378,6 +384,88 @@ const ERC20_ABI = [
 ];
 
 let provider, signer, userAddress, factory, usdc, requiredFee;
+
+// Read-only provider, so fee reads and the blocklist check work before a wallet connects.
+// batchMaxCount:1 -- Arc's RPC rejects batched requests.
+const readProvider = new ethers.JsonRpcProvider(RPC_URL, undefined, { batchMaxCount: 1 });
+
+// NOTE: this block is copied verbatim from terminal.html. There is no build step by
+// design, so the duplication is deliberate -- but the two copies must stay identical.
+// ══ GAS, FEES AND THE ONE-BALANCE PROBLEM ════════════════════════════════
+// FRONTEND_BUILD_V2 rules 3, 4 and 6. On Arc, gas IS the settlement asset: the 18-decimal
+// native balance and the 6-decimal ERC-20 view are the SAME money. So every spend competes
+// with the gas needed to make it, and a user who spends everything is stranded holding a
+// token they cannot sell. Measured on testnet: a wallet left with 0.0016 USDC held 471
+// trillion tokens and could not move them.
+
+const GWEI = 1000000000n;
+const MIN_MAX_FEE = 20n * GWEI;   // rule 6: Arc's documented floor. Below it a transaction
+                                  // "may remain pending indefinitely or fail outright".
+const TIP = 1n * GWEI;            // 0 is accepted; a small tip improves inclusion under load
+const SCALE_18_TO_6 = 1000000000000n;
+const GAS_LIMIT_TRADE = 600000n;  // Arc's eth_estimateGas returns NO margin, so budget high
+const RESERVE_MULTIPLE = 3n;      // headroom: approve + trade + one retry
+
+// Read the fee from the chain EVERY time. The base-fee ceiling is 20,000 Gwei -- a
+// thousand times the floor -- so a reserve sized from the floor, or from a quiet-period
+// sample, is wrong by up to 1000x exactly when the network is busy.
+async function currentFees() {
+  let base = MIN_MAX_FEE;
+  try {
+    const fd = await readProvider.getFeeData();
+    const seen = fd.maxFeePerGas ?? fd.gasPrice ?? 0n;
+    if (seen > base) base = seen;
+  } catch { /* fall back to the floor rather than blocking the trade */ }
+  return { maxFeePerGas: base, maxPriorityFeePerGas: TIP };
+}
+
+// One transaction's worth of gas, in 6dp USDC, rounded up.
+async function txCostUsdc6(gasLimit = GAS_LIMIT_TRADE) {
+  const { maxFeePerGas } = await currentFees();
+  const wei = gasLimit * maxFeePerGas;
+  return (wei + SCALE_18_TO_6 - 1n) / SCALE_18_TO_6;
+}
+
+// What the user may actually spend: balance minus a reserve that covers the trade, the
+// approve that may precede it, and a retry. Never offer "max" without this.
+async function availableToTrade(balance6) {
+  const reserve = (await txCostUsdc6()) * RESERVE_MULTIPLE;
+  return { available: balance6 > reserve ? balance6 - reserve : 0n, reserve };
+}
+
+// Rule 4: decide by ARITHMETIC, never by parsing a revert string. Arc's docs say the
+// strings are not a stable contract and Zero8 changes them on 3 September -- a client that
+// parses them does not throw when they change, it silently stops warning.
+async function affordabilityProblem(balance6, spend6) {
+  const { available, reserve } = await availableToTrade(balance6);
+  if (balance6 === 0n) {
+    return "This wallet has no USDC. On Arc, USDC is also the gas token, so you need some "
+         + "before any transaction — including an approval. "
+         + '<a href="https://faucet.circle.com" target="_blank">faucet.circle.com</a>';
+  }
+  if (spend6 > available) {
+    const fmt = (v) => Number(ethers.formatUnits(v, 6)).toFixed(4);
+    return `Not enough USDC once gas is reserved. Balance ${fmt(balance6)}, `
+         + `gas reserve ${fmt(reserve)}, available to trade ${fmt(available)}. `
+         + "Gas is paid in USDC on Arc, so spending your whole balance would leave you "
+         + "unable to sell.";
+  }
+  return null;
+}
+
+// Rule 7. A blocklisted wallet cannot send OR receive USDC, and USDC is the gas token, so
+// every path fails and none of them explains why. Say it plainly instead.
+async function blocklistProblem(address) {
+  try {
+    const readUsdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, readProvider);
+    if (await readUsdc.isBlacklisted(address)) {
+      return "This wallet is blocked by USDC's issuer and cannot send or receive USDC. "
+           + "On Arc that also means it cannot pay gas, so no transaction will succeed. "
+           + "This is set by Circle, not by us.";
+    }
+  } catch { /* view missing or RPC down: do not block the user on a check we cannot make */ }
+  return null;
+}
 
 const $ = (id) => document.getElementById(id);
 const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
@@ -519,7 +607,10 @@ $("tokenSymbol").addEventListener("input", (e) => {
   symbolCheckTimer = setTimeout(async () => {
     if (!factory) return;
     try {
-      const taken = await factory.symbolTaken(toUpperSymbolHash(val));
+      // symbolLockDuration is 0, so this is always true and CANNOT mean "available".
+      // Kept only because the contract still evaluates the guard; the honest collision
+      // warning has to come from the indexer, not from here.
+      const taken = !(await factory.isSymbolAvailable(val));
       if (taken) setStatus($("symbolStatus"), "That symbol is already taken on this contract.", "error");
       else setStatus($("symbolStatus"), "Available.", "ok");
     } catch { /* not connected yet — silent */ }
@@ -545,6 +636,13 @@ async function handleCreate() {
   try {
     const balance = await withRetry(() => usdc.balanceOf(userAddress));
     $("walletBalance").textContent = Number(ethers.formatUnits(balance, 6)).toFixed(2) + " USDC";
+    const blocked = await blocklistProblem(userAddress);
+    if (blocked) { setStatus($("createStatus"), blocked, "error"); return; }
+
+    // The creation fee is a spend, and the gas to pay it comes out of the same balance.
+    const feeProblem = await affordabilityProblem(balance, requiredFee);
+    if (feeProblem) { setStatus($("createStatus"), feeProblem, "error"); return; }
+
     if (balance < requiredFee) {
       setStatus($("createStatus"),
         `Not enough USDC. Need ${ethers.formatUnits(requiredFee, 6)}, have ${ethers.formatUnits(balance, 6)}. ` +
@@ -558,7 +656,11 @@ async function handleCreate() {
       setStatus($("createStatus"), '<span class="spinner"></span> Approving USDC — confirm in your wallet…', "warn");
       // Safe to retry: approving the same amount twice is harmless even if a first
       // attempt secretly succeeded before the rate-limited response reached us.
-      const approveTx = await withRetry(() => usdc.approve(FACTORY_ADDRESS, requiredFee));
+      // EXACTLY the fee. Never MaxUint256 -- rule 1. creationFeeUsdc is NOT in the
+      // economics hash, so the pin does not cover it: the owner can raise the fee between
+      // the quote and the transaction, and an unlimited approval would let that take the
+      // wallet rather than fail the launch.
+      const approveTx = await withRetry(async () => usdc.approve(FACTORY_ADDRESS, requiredFee, await currentFees()));
       setStatus($("createStatus"), '<span class="spinner"></span> Waiting for approval to confirm…', "warn");
       // .wait() just resumes polling for the same already-broadcast transaction — safe
       // to retry, this never resends anything.
@@ -566,7 +668,15 @@ async function handleCreate() {
     }
 
     setStatus($("createStatus"), '<span class="spinner"></span> Creating token — confirm in your wallet…', "warn");
-    const tx = await withRetry(() => factory.createToken(name, symbol, metadataURI));
+    // FRONTEND_BUILD_V2 rule 5: fetch the economics hash HERE, in the same user action
+    // that sends the transaction. Never at page load, never held across the wallet
+    // confirmation dialog, never reused between attempts. Twelve owner-settable values
+    // feed it, and setting symbolLockDuration to 0 this session already moved it --
+    // any pin taken before that now reverts EconomicsChanged.
+    const expectedEconomicsHash = await withRetry(() => factory.currentEconomicsHash());
+    const tx = await withRetry(async () => factory.createToken(
+      name, symbol, metadataURI, expectedEconomicsHash, false, await currentFees()
+    ));
     setStatus($("createStatus"), '<span class="spinner"></span> Waiting for confirmation…', "warn");
     const receipt = await withRetry(() => tx.wait());
 

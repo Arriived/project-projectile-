@@ -158,6 +158,62 @@ own formulas**, not from anything in this file — a regression and arithmetic o
 explicitly cannot catch a conceptual error in the curve design, because it shares that
 source.
 
+### It happened, in the frontend, and it was far worse than this file said
+
+`terminal.html` carried `calculateBuyOutput` / `calculateSellOutput` / `ceilDiv` — the
+curve re-derived in JavaScript. The function took `buyFeeBps` and **had no snipe-tax
+parameter at all**, while `buy()` charges `c.buyFeeBps + taxBps`.
+
+Measured against the live deployment, not estimated
+(`scripts/verify-frontend-pricing.js` launches a token and compares per second):
+
+| elapsed | snipe tax | JS error |
+|---|---|---|
+| t=0 | 9800 bps | **98.96x** |
+| t=1 | 9500 | 11.00x |
+| t=2 | 9000 | 5.21x |
+| t=3 | 8000 | 2.54x |
+| t=4 | 6000 | 1.68x |
+| t=5+ | ≤ 4000 | 1.00x |
+
+**This file previously said 8.7x, and in the wrong direction.** The real figure is an order
+of magnitude larger, and the sign is inverted: the JS math **OVERSTATES** what the buyer
+receives, it does not understate. The 8.7x number was about a *stale quote* — taken early,
+executed later, as the tax decays — which is favourable to the buyer and harmless. This is
+a different bug that happens to live in the same place, and conflating them hid it.
+
+**Overstating is the direction that breaks trading.** `minTokensOut` is derived from the
+quote, so a 98.96x overstatement puts the slippage floor ~97x above anything achievable and
+**every buy in the first seconds reverts**. Not a display defect — a dead buy path during
+exactly the window the snipe tax exists to govern.
+
+The rule is therefore not "prefer the contract's math". It is: **the contract has
+`quoteBuy` and `quoteSell` as view functions; call them.** They apply the live tax, the
+partial-fill clamp and current reserves, and cannot drift, because they are the contract.
+
+### `currentPrice()` is UNUSABLE for price impact — use a probe quote
+
+The obvious function is a trap. `currentPrice()` returns
+`virtualUsdcReserves * 1e18 / virtualTokenReserves`, which **at launch scale evaluates to
+the integer `2`**. Any impact computed from it rounds to `0.00%`, so the headline number
+the frontend is required to show would silently read zero on a curve where a $500 buy moves
+the price ~20%. Measured, not reasoned about.
+
+**The sanctioned method** is to compare the rate the trade actually gets against the rate a
+negligible trade gets, both from `quoteBuy`, in **tokens-per-USDC** where the magnitudes are
+large enough to keep precision:
+
+```
+probe     = quoteBuy(token, 0.01 USDC)
+marginal  = probe.tokensOut * 1e6 / probe.actualUsdcIn
+effective = quoted.tokensOut * 1e6 / quoted.actualUsdcIn
+impact    = (marginal - effective) / marginal
+```
+
+Validated against an independent figure: 500 USDC returns 168.3M tokens = **20.9% of curve
+supply**, matching the ~21% recorded in §8. Implemented as `buyImpactPct` in
+`frontend/terminal.html`.
+
 ## 1.4 Dual graduation trigger and the one-way state machine
 
 ```
