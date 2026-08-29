@@ -1,39 +1,33 @@
 // Connect / disconnect / switch-chain.
 //
-// Two rules shape this component even at Phase 1:
+// Chain state comes from useArcGuard(), NOT from wagmi's useChainId(). See the header of
+// hooks/useArcGuard.ts for why -- useChainId() reads config state, which wagmi refuses to
+// move to an unconfigured chain, making the wrong-network branch unreachable.
 //
+// Rules shaping this component:
 //   - Browsing requires no wallet (FRONTEND_BUILD_V2 Part II). Nothing here gates the
 //     page; the bar is a control, never a door.
-//   - Wrong network must be detected and offered a one-click switch, with the chain
-//     params prefilled (rule 8).
-//
-// Rejection handling is deliberate rather than incidental. REACT_REBUILD phase 6 says no
-// path may leave the UI in a lying state when a prompt is rejected, and connect/switch
-// are the two prompts that exist at this phase. A rejected switch must leave the UI
-// saying "wrong network", not "switching...".
+//   - Wrong network is detected and offered a one-click switch (rule 8).
+//   - A rejected prompt must never leave the UI in a lying state (REACT_REBUILD phase 6).
 
-import { useAccount, useChainId, useConnect, useDisconnect, useSwitchChain } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useSwitchChain } from "wagmi";
 import { arc } from "../chain";
+import { useArcGuard } from "../hooks/useArcGuard";
 
 function short(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
 export function WalletBar() {
-  const { address, isConnected } = useAccount();
-  const chainId = useChainId();
+  const { address } = useAccount();
+  const guard = useArcGuard();
   const { connect, connectors, isPending: connecting, error: connectError } = useConnect();
   const { disconnect } = useDisconnect();
-  const {
-    switchChain,
-    isPending: switching,
-    error: switchError,
-  } = useSwitchChain();
+  const { switchChain, isPending: switching, error: switchError } = useSwitchChain();
 
-  const onArc = chainId === arc.id;
   const injectedConnector = connectors[0];
 
-  if (!isConnected) {
+  if (guard.status === "disconnected") {
     return (
       <div className="wallet">
         <button
@@ -59,12 +53,16 @@ export function WalletBar() {
     );
   }
 
+  const unusable = !guard.canTransact;
+
   return (
     <div className="wallet">
-      {!onArc && (
+      {unusable && (
         <div className="wrong-net">
           <span className="wrong-net-label">
-            Wrong network (chain {chainId})
+            {guard.status === "wrong"
+              ? `Wrong network (chain ${guard.chainId})`
+              : "Network unconfirmed"}
           </span>
           <button
             className="btn btn-warn"
@@ -83,8 +81,12 @@ export function WalletBar() {
         </div>
       )}
 
-      <span className={`net-pill ${onArc ? "ok" : "bad"}`}>
-        {onArc ? arc.name : `Chain ${chainId}`}
+      <span className={`net-pill ${guard.canTransact ? "ok" : "bad"}`}>
+        {guard.canTransact
+          ? arc.name
+          : guard.status === "wrong"
+            ? `Chain ${guard.chainId}`
+            : "Unconfirmed"}
       </span>
       <span className="addr" title={address}>
         {address ? short(address) : ""}

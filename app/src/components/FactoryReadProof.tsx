@@ -11,9 +11,18 @@ import { useReadContracts } from "wagmi";
 import { formatUnits } from "viem";
 import { lfx1Abi } from "../abi/lfx1";
 import { FACTORY_ADDRESS, EXPLORER_URL } from "../config";
-import { USDC_ERC20_DECIMALS } from "../chain";
+import { USDC_ERC20_DECIMALS, arc } from "../chain";
 
-const factory = { address: FACTORY_ADDRESS, abi: lfx1Abi } as const;
+// `chainId` is pinned on every read, deliberately and explicitly.
+//
+// Measured while the wallet reported Ethereum Mainnet: the reads still went to
+// rpc.testnet.arc.io and the wallet provider received ZERO calls -- so reads were never
+// querying whatever chain the wallet was on. But that was true only IMPLICITLY, because
+// the config happens to list exactly one chain and wagmi fell back to it. The moment a
+// second chain is configured -- mainnet in September, or CCTP source chains for the
+// onramp -- an unpinned read starts following config state instead. Pinning makes the
+// guarantee explicit now, while it is cheap, rather than after it silently stops holding.
+const factory = { address: FACTORY_ADDRESS, abi: lfx1Abi, chainId: arc.id } as const;
 
 export function FactoryReadProof() {
   const { data, isLoading, isError, error, refetch, isFetching } = useReadContracts({

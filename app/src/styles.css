@@ -140,3 +140,15 @@ body {
   font-size: 13px;
 }
 .footnote code { font-family: var(--mono); color: var(--text); }
+
+.banner {
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+.banner-warn {
+  background: #2a2110;
+  border-bottom-color: #4d3d18;
+  color: var(--warn);
+}
+.banner-warn strong { color: #ffd479; }
