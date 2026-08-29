@@ -11,7 +11,8 @@
     "verify:chain": "node --experimental-strip-types scripts/verify-chain.mts",
     "verify:guard": "node --experimental-strip-types scripts/verify-guard.mts",
     "verify": "npm run verify:chain && npm run verify:guard && npm run verify:wallets",
-    "verify:wallets": "node --experimental-strip-types scripts/verify-wallets.mts"
+    "verify:wallets": "node --experimental-strip-types scripts/verify-wallets.mts",
+    "measure:gas": "node --experimental-strip-types scripts/measure-gas.mts"
   },
   "dependencies": {
     "@metamask/connect-evm": "^2.1.1",
