@@ -33,8 +33,10 @@ missing.
 
 ## The exact next action
 
-**The frontend.** The re-freeze is done and the contract work that was queued behind it is
-finished. `LFX1` is deployed, verified and recorded at
+**THE FRONTEND. The contract is CLOSED.** No contract work remains, and none should be
+started without a reason that is written down first. The re-freeze is done, R15 is
+executed, the mechanics are restored (§7A), and the inventory is generated rather than
+hand-maintained. `LFX1` is deployed, verified and recorded at
 **`0x6d79D90F60B30d527e2DDcBb7fe4f64309bAA15A`**; nothing on the contract roadmap is
 outstanding. The critical path is now entirely non-contract: the frontend has not been
 started (§8), and `FRONTEND_BUILD_V2.md` holds the rules it must satisfy.
@@ -321,6 +323,34 @@ Verify Arc/Circle claims against `docs.arc.io` and `developers.circle.com`, neve
 | Base fee paid to the beneficiary, not burned | Confirmed. |
 | Blob txs rejected; `BLOBHASH` 0; `BLOBBASEFEE` 1; EIP-4788 empty | Confirmed. We touch none of them. |
 | **Mainnet chainId 5042** | **UNSOURCED — MUST VERIFY.** From an unreliable secondary source. Circle documents **only testnet 5042002**. Do not put 5042 in the frontend, deploy config or anywhere else until confirmed. |
+
+## Zero8 — Arc Testnet, 3 September 2026, 15:00 UTC
+
+`BREAKING_CHANGES.md` confirms **no consensus-affecting behaviour changes**: it is
+node-operator config and CLI. The contract is unaffected and R15 stands.
+
+**One thing reaches us, and only as a string.** The reth 2.2 / revm 38 upgrade changes the
+insufficient-balance error text — `insufficient funds for gas * price + value` becomes
+revm 38's `OutOfFunds` variant.
+
+**Audited: NOTHING in the suite asserts on RPC error text.** Checked rather than assumed,
+across `test/` and `scripts/`. Every hit is display-only — a `console.log`, or the `detail`
+field of a `check()` — and the only literal string match in the repo,
+`preflight.js:127`, matches `"disagrees"`, which is **our own** thrown `Error`, not a node
+message. So the count of places needing a version-agnostic rewrite was **zero**, and no
+pattern note is warranted for message-matching.
+
+**A real weakness sat underneath it, and that was worth fixing.** The two R15 failure cases
+passed on `catch (e) { check(..., true) }` — pass on ANY throw. Zero8 would not have broken
+them; they would have kept passing **for the wrong reason**, which is test-shape error 3 in
+§5. Both now assert STATE: no tokens received for the unaffordable buy, position still held
+for the unaffordable sell, plus a predictive `balance < gasLimit * gasPrice` check made
+BEFORE submitting. 14/14 against the live deployment.
+
+⚠ **PENDING: re-run `scripts/smoke-r15.js` against testnet after 3 September.** Today is
+29 August, so this has NOT been done. The suite passes pre-Zero8; the point of re-running is
+to confirm the state-based assertions survive the upgrade, which is exactly what they were
+rewritten for.
 
 ## What the token at `0x3600...0000` actually is
 

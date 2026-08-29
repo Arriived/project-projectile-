@@ -7,6 +7,14 @@
 //
 //   BALLISTA_ADDRESS=0x... npx hardhat run scripts/smoke-r15.js --network arcTestnet
 //
+// NOTHING HERE ASSERTS ON A REVERT STRING, deliberately. Zero8 (Arc Testnet, 3 Sep 2026)
+// upgrades reth/revm and changes the insufficient-balance text from
+// "insufficient funds for gas * price + value" to revm 38's OutOfFunds variant. A test that
+// matched on it would break, and worse, a test that passes merely because SOMETHING threw
+// would keep passing for the wrong reason -- which this repo lists as test-shape error 3.
+// So every failure case below asserts the STATE: the trade did not happen, the tokens are
+// still held, the balance did not move. Messages are printed as detail only.
+//
 // Funds a throwaway wallet from the deployer, so it needs the deployer to hold a few USDC.
 // Whatever is left in the throwaway is swept back at the end.
 const hre = require("hardhat");
@@ -75,20 +83,21 @@ async function main() {
   const hash = await ballista.currentEconomicsHash();
   await (await usdcW.approve(BALLISTA, ethers.MaxUint256)).wait();
 
+  const token0 = await createToken(ballista, deployer, hash, "R15A");
+  const tok0 = await ethers.getContractAt("LFX1Token", token0);
   const balNow = await usdc.balanceOf(w.address);
-  let spentAll = false;
+
+  let detail = "";
   try {
-    // Spend the ENTIRE balance on a buy. On Arc this cannot succeed: the gas for the
-    // buy itself comes out of the same balance.
-    const token0 = await createToken(ballista, deployer, hash, "R15A");
+    // Spend the ENTIRE balance on a buy. On Arc this cannot succeed: the gas for the buy
+    // itself comes out of the same balance.
     await (await ballistaW.buy(token0, balNow, 0, { gasLimit: 600000 })).wait();
-    spentAll = true;
   } catch (e) {
-    check("buying the ENTIRE balance fails -- gas comes out of the same pot",
-      true, String(e.shortMessage || e.message).slice(0, 70));
+    detail = String(e.shortMessage || e.message).slice(0, 60);
   }
-  if (spentAll) check("buying the ENTIRE balance fails -- gas comes out of the same pot", false,
-    "it succeeded, which should be impossible when gas is the settlement asset");
+  // Assert the STATE, not the message: no tokens arrived, so the trade did not execute.
+  check("buying the ENTIRE balance does not execute -- gas comes out of the same pot",
+    (await tok0.balanceOf(w.address)) === 0n, detail || "no tokens received");
 
   // ── 4. Spend down until the user can no longer sell ──────────────────
   // Two earlier shapes of this test were wrong, both because gas and settlement come out
@@ -132,18 +141,22 @@ async function main() {
     stranded < txCost6dp, `${stranded} < ${txCost6dp}`);
   check("and it still holds the tokens it bought", (await tokenC.balanceOf(w.address)) > 0n);
 
-  let sellFailed = false;
+  // The predictive form, which is also what the frontend must do: compare the balance
+  // against what the transaction will cost BEFORE submitting. No string, no submission.
+  const needed = 600000n * gasPrice;
+  const haveNative = await p.getBalance(w.address);
+  check("balance is below the cost of the sell, checked BEFORE submitting",
+    haveNative < needed, `have ${haveNative}, need ${needed}`);
+
+  let detail2 = "";
   try {
     await (await ballistaW.sell(token, held, 0, { gasLimit: 600000 })).wait();
   } catch (e) {
-    sellFailed = true;
-    check("holder cannot afford the gas to SELL what they hold",
-      true, String(e.shortMessage || e.message).slice(0, 60));
+    detail2 = String(e.shortMessage || e.message).slice(0, 60);
   }
-  if (!sellFailed) {
-    check("holder cannot afford the gas to SELL what they hold", false,
-      `sell succeeded with ${stranded} left`);
-  }
+  // State again: the position is still held, so the exit did not happen.
+  check("holder cannot SELL -- the position is still there afterwards",
+    (await tokenC.balanceOf(w.address)) === held, detail2 || "tokens still held");
 
   // ── 5. The delta check, executed rather than proven ──────────────────
   // _settleBuy measures the factory's balance around the pull and reverts on any

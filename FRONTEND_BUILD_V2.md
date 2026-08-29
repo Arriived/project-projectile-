@@ -63,7 +63,7 @@ an existing token rather than relying on the contract to prevent one.
 | | what exists |
 |---|---|
 | **name** | **Nothing at all.** Not stored, not hashed, not compared. It is passed to the `LFX1Token` constructor and emitted in `TokenCreated`, and that is the end of it. The `Curve` struct has no name field. **Unlimited duplicate names, always, with no delay.** |
-| **symbol** | A **time-limited reservation**, not uniqueness. `symbolUnlocksAt[symbolHash]` is checked at [LFX1.sol:320](contracts/LFX1.sol:320) and set at [:329](contracts/LFX1.sol:329) to `block.timestamp + symbolLockDuration`. |
+| **symbol** | The mechanism exists but is **switched off**. `symbolUnlocksAt[symbolHash]` is checked at [LFX1.sol:320](contracts/LFX1.sol:320) and written at [:329](contracts/LFX1.sol:329) as `block.timestamp + symbolLockDuration` — with the duration at **0** the stored value is always a past-or-present timestamp, and the `>=` comparison can never fire. It was a 5-minute reservation, never uniqueness. |
 
 **`symbolLockDuration` is now 0 on the live deployment, so the lock never fires at all.**
 It was 5 minutes; it was removed as friction without protection — bypassable by case, and
@@ -105,9 +105,12 @@ would leave less than the cost of one transaction.
 
 **Reason — measured on Arc testnet, not reasoned about.** Arc pays gas in USDC, so the
 settlement asset and the gas asset are one balance. A wallet was left holding
-**471 trillion tokens and 0.0016 USDC**, and **could not sell them** —
-`insufficient funds for gas * price + value`. The position was not illiquid; the holder
-simply could not afford to move it.
+**471 trillion tokens and 0.0016 USDC**, and **could not sell them**. The position was not
+illiquid; the holder simply could not afford to move it.
+
+*(The node reported `insufficient funds for gas * price + value` at the time. Quoted as
+evidence of what happened, not as something to match on — Zero8 changes that exact text,
+which is rule 4's whole point.)*
 
 This is not an edge case, it is what a "max" button does by default. On a chain where gas
 is a different asset, spending the entire balance is normal and harmless. Here it strands
@@ -122,3 +125,62 @@ Two consequences beyond the max button:
 
 Recorded as R15 in `CLAUDE.md`, executed by `scripts/smoke-r15.js` against the live
 deployment.
+
+
+---
+
+## 4. Detect insufficient gas by ARITHMETIC, never by parsing a revert string
+
+**Rule.** Before submitting any trade, estimate the gas, multiply by the gas price, add the
+trade amount, and compare against the wallet's balance. Warn from that comparison. **Never
+match on the text of an RPC error**, in any form — not `includes("insufficient funds")`,
+not a regex, not a switch on the message.
+
+**Reason.** The strings are not a stable contract, and they have just changed. **Zero8
+activates on Arc Testnet on 3 September 2026 at 15:00 UTC**, upgrading reth/revm, and the
+insufficient-balance error text becomes revm 38's `OutOfFunds` variant. `BREAKING_CHANGES.md`
+confirms nothing consensus-affecting moved — the contract is unaffected — but any client
+reading that message stops recognising it.
+
+**The failure mode is silent, and that is what makes it serious.** A frontend that parses
+the string does not throw when the string changes; it simply stops matching, and therefore
+stops warning. The user sees no warning, submits, and the transaction fails — or worse,
+succeeds into the state rule 3 describes. Nothing in the UI reports that the check broke.
+
+Given rule 3 — a holder was measurably left with 471 trillion tokens and 0.0016 USDC,
+unable to sell — a gas warning that fails silently on a node upgrade is the worst version
+of this bug. The check that protects the user must not depend on a string the node is free
+to reword.
+
+`scripts/smoke-r15.js` does it the right way and is worth copying: it compares balance
+against `gasLimit * gasPrice` **before** submitting, and asserts on state afterwards —
+tokens still held, no tokens received — never on a message.
+
+---
+
+## 5. Fetch the economics hash immediately before launching. Never cache it.
+
+**Rule.** Read `currentEconomicsHash()` in the same user action that sends `createToken`.
+Do not read it at page load, do not hold it across a wallet-confirmation dialog, do not
+reuse one between attempts. If the transaction fails with `EconomicsChanged`, re-fetch and
+re-present the terms — do not silently retry with a fresh hash, because the terms the user
+agreed to have genuinely changed.
+
+**Reason.** It moves. `symbolLockDuration` is one of the twelve values inside
+`currentEconomicsHash()`, and setting it to 0 this session **moved the hash**, so any
+`createToken` carrying a pre-change pin now reverts `EconomicsChanged`. Nothing was live so
+nothing broke — but that is exactly the behaviour the frontend has to survive, and it will
+happen again: every one of those twelve values is owner-settable at any time.
+
+The revert is the guard working. It exists so a creator cannot be charged terms they never
+saw. A cached hash turns a correct protection into a confusing failure at the worst moment,
+after the user has already approved a spend.
+
+**The twelve hashed values:** `defaultBuyFeeBps`, `defaultSellFeeBps`,
+`defaultGraduationThresholdUsdc`, `defaultCreatorBuyFeeBps`, `defaultCreatorSellFeeBps`,
+`maxCreatorLaunchBps`, `creatorLaunchWindow`, `lpRecipient`, `activeSnipeTaxTableVersion`,
+`defaultSnipeTaxTreasuryBps`, `caseSensitiveSymbols`, `symbolLockDuration`.
+
+**`creationFeeUsdc` and `launchCooldown` are NOT among them** — which is rule 1's whole
+point for the fee, and why the launch cooldown can change under a pinned launch without
+tripping anything.
