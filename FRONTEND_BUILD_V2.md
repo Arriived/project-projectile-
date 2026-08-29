@@ -1,15 +1,28 @@
-# Frontend build — hard rules
+# Frontend build — hard rules and build brief
 
-Requirements the frontend must satisfy because of something in the contract, not because
-of taste. Each one has a reason attached. **If you are about to remove one of these as a
-needless restriction, read the reason first** — every entry here exists because removing it
-costs a user money.
+This is the single frontend document. It supersedes `FRONTEND_BUILD.md` and absorbs the
+"frictionless build" brief that used to live separately; see the merge note at the end for
+what came from where and what was dropped.
+
+It has two parts, and they are different in kind:
+
+- **Part I — hard rules.** Requirements the frontend must satisfy because of something in
+  the contract, not because of taste. Each one has a reason attached. **If you are about to
+  remove one as a needless restriction, read the reason first** — every entry exists
+  because removing it costs a user money.
+- **Part II — the build brief.** The goal, the CCTP onramp, the signature-count work, and
+  the open questions to report on before building. This part contains decisions still to be
+  made; Part I does not.
 
 The broader frontend requirements (price impact as a headline number, `minTokensOut` never
 defaulting to zero, "creator bought X% at launch", stale quotes inside the snipe window)
 live in `CLAUDE.md` §8. They are not duplicated here, because two copies of a number go
-stale at different rates.
+stale at different rates. The same restraint applies between the two parts below: Part II
+cross-references the rules rather than restating them.
 
+---
+
+# PART I — HARD RULES
 ---
 
 ## 1. The create flow must approve EXACTLY the creation fee. Never `MaxUint256`.
@@ -303,3 +316,343 @@ Chain params to prefill, from `/integrate/infrastructure` and `/arc-chain`:
 The 18-decimal native currency is the part to get right: it is the same balance as the
 6-decimal ERC-20 view (rule 3), and a wallet configured with the wrong decimals will
 display gas costs off by a factor of a trillion.
+
+---
+
+## 9. A bought token is INVISIBLE in the wallet until it is added. Show the balance, and offer `wallet_watchAsset`.
+
+Sources: `docs.metamask.io/wallet/how-to/display/tokens`, MetaMask support on token
+autodetection, MetaMask/core PR #433. Verified 29 August 2026. Decimals and symbols below
+were read off the live deployment, not off the source.
+
+**Rule.** The token page must show **the connected wallet's balance of that token,
+prominently** — not tucked into a drawer, not only after a trade — and must offer a
+one-click **Add to wallet** button calling `wallet_watchAsset`. After a successful first
+buy of a token the user does not yet hold, prompt it once, automatically.
+
+**Reason.** MetaMask's token autodetection only runs on a fixed list of networks —
+Ethereum, Linea, Avalanche, BNB, Polygon, Arbitrum, Optimism, Base, zkSync, Solana. **Arc
+is not on that list and will not be.** So a token launched thirty seconds ago will never
+appear in a wallet by itself. The buy succeeds, the tokens are in the account, and the
+wallet shows nothing.
+
+**On Arc this is worse than the same bug anywhere else, and that is the part to
+understand.** USDC is the gas token, so it *is* the account's native balance — the headline
+number in the wallet. After a buy the user watches that number **go down** and sees nothing
+arrive. It does not read as "nothing happened"; it reads as "my money left and I got
+nothing back." On a chain where USDC is an ordinary ERC-20 the user at least sees one line
+item decrease and can reason about it. Here the only visible evidence of a successful trade
+is the loss.
+
+The token is not missing and the transaction did not fail. But we will never win that
+argument after the fact, so the UI has to prevent it being asked.
+
+### Pass `decimals: 18`. Not 6.
+
+Verified on chain — `decimals()` on two live launch tokens returns **18**; USDC at
+`0x3600…0000` returns **6**. `LFX1Token is ERC20` and does not override OpenZeppelin's
+default, so 18 holds for every token this factory will ever launch.
+
+**The trap is that this codebase drills the opposite number into you.** "USDC is 6 decimals
+in contract amounts" is a standing rule in `CLAUDE.md` §5, 6 appears throughout
+`terminal.html`, and it is the wrong answer here. Pass 6 and MetaMask displays the balance
+**a trillion times too large** — the same failure mode as rule 8's native-currency
+decimals, one field over. A holder with 471 trillion tokens (the real R15 figure) becomes
+unreadable nonsense.
+
+`terminal.html` already gets this right — `formatUnits(bal, 18)` for the launch token, 6
+for USDC. Salvage that pairing deliberately rather than re-deriving it.
+
+### The symbol can be longer than MetaMask accepts, and our contract does not care
+
+| enforces | value |
+|---|---|
+| MetaMask `wallet_watchAsset` | **11 characters max** — raised from 6 in MetaMask/core PR #433, matching the extension's own manual add-token limit |
+| MetaMask's how-to page | *"up to 5 characters"* — **stale doc text, not the enforced value.** Do not design to 5 |
+| `LFX1.createToken` | **nothing.** No length check, no emptiness check, on either `name` or `symbol` |
+
+`createToken` hashes the symbol for the (now disabled — rule 2) lock and otherwise passes it
+straight to the constructor. Any string is accepted, including an empty one and a 200-character
+one. So a creator can launch a token that **no buyer can ever add in one click**, and they
+will not find out at launch — they will find out from buyers.
+
+**This will not surface in testing.** Every token currently on testnet is a 7-character
+symbol (`PRC4587`, `TXS1569`, `TXS3714`, `TXS2809`). All pass. The first failure will be a
+real creator with a long ticker.
+
+Two places to handle it, and both are needed:
+
+- **The create form** warns at >11 characters, at the point the creator can still change it.
+  A warning, not a block — the contract will accept it and refusing to launch what the
+  contract allows is its own kind of lie. Say what the cost is: *"wallets can't one-click-add
+  a symbol this long; your buyers will have to add it by hand."*
+- **The token page** handles the rejection without treating it as a failed trade. The add
+  failing has nothing to do with whether the buy worked.
+
+### Do not gate anything on the return value
+
+`wallet_watchAsset` resolves to a boolean. **A `false`, a rejection, or a throw is not an
+error** — the user declined a convenience, and their tokens are unaffected. Never surface it
+as a failed transaction, never retry it in a loop, and never block the trade flow on it.
+Its behaviour when the token is already tracked is not reliably specified
+(MetaMask/core #880), so it is not a source of truth for "does the user have this token
+added" either. Treat the call as fire-and-forget.
+
+### Always show the contract address too
+
+`wallet_watchAsset` is not universally supported — support varies across WalletConnect
+sessions and mobile wallets, the same split rule 8 already deals with. So the manual path
+must always be available: show the token's contract address with a copy button on every
+token page. That is the fallback when the button does nothing, and it costs one line of UI.
+
+### Read the balance with `balanceOf`, after the receipt — never from the quote
+
+The displayed post-trade balance must come from a fresh `balanceOf` call once the
+transaction is mined, not from the `quoteBuy` figure the user was shown beforehand. The
+snipe tax decays per second and the partial-fill clamp can bind between quote and
+execution, so the amount actually received can be smaller than the amount quoted
+(`CLAUDE.md` §8, and §7A on the clamp). Showing the quote as though it were the outcome
+prints a number the contract did not honour — which is exactly what the ground rules of
+this document forbid.
+
+This is also the honest confirmation that the trade worked: not "we think you got X", but
+the balance the chain reports.
+
+---
+
+# PART II — THE BUILD BRIEF
+
+**The goal is one click to launch, one click to buy, one click to sell, fully
+non-custodial.** A user browses without a wallet, clicks buy/sell/launch, is prompted to
+connect, and from there every action is as few signatures as possible. Bridging is
+invisible. This has to hold for someone in Seoul with no prior crypto and someone in London
+with a MetaMask full of Base USDC.
+
+Build it so a mobile app is a re-skin of the same flows, not a rewrite.
+
+## Sources of truth
+
+**Circle's and Arc's docs are the only source of truth** for anything CCTP, Arc, Gateway,
+App Kit, or Bridge Kit. Never answer from memory or from these notes.
+`developers.circle.com` and `docs.arc.io`. Both publish `llms.txt` indexes.
+
+**The Arc MCP server is already connected** — `.mcp.json` at the repo root, project scope,
+HTTP transport at `https://docs.arc.io/mcp`, no authentication. Query it *before* this file.
+`CLAUDE.md` §9.5 records four things it corrected on its first query, which is the argument
+for reaching for it by default. The `circle-skills` plugin is installed.
+
+**CCTP V1 is legacy. Build on V2.** Circle segregates V1 under `/cctp/v1`. If you find
+yourself reading a V1 page, you are on the wrong path.
+
+## Onramp: CCTP V2 inbound from every supported chain
+
+Do not build a bridge. Use Bridge Kit, which wraps CCTP V2's burn, attestation and mint
+steps. Circle has done this work.
+
+**This is the day-one onramp and it is not optional.** Arc launches with no USDC on it and
+no user holding it. Every chain CCTP supports is a source of users; the onramp sits at the
+top of the entire funnel. `CLAUDE.md` §8 records it as required non-contract scope — its
+absence from the contract sections is not descoping.
+
+Ignore Unified Balance for launch. It requires a prior Gateway deposit that nobody will have
+on day one, and obtaining one costs its own transaction — so for a first-time user it is
+more steps, not fewer. It is a returning-user optimisation and it can come later. CCTP with
+Forwarding Service is also push-based and contract-centric, which keeps our backend out of
+the trust path; Gateway's pull model does not.
+
+### What I already verified — re-verify, don't trust it
+
+- **Arc is domain 26** and is a Forwarding Service destination, with upfront fees supported.
+  Standard Transfer *from* Arc is ~0.5s at 1 confirmation.
+- **Inbound latency is set by the source chain, not Arc.** Fast Transfer:
+  Base/Arbitrum/OP/Solana/Unichain ~8s, Ethereum ~20s. This is seconds, not minutes —
+  bridging in is viable inside a trading session.
+- **The supported-chains table lists "Arc testnet", not Arc mainnet.** Re-check on and after
+  16 September. Do not assume the mainnet row inherits testnet's capabilities. `CLAUDE.md`
+  §8 records the same gap from the other side: Arc mainnet is still absent from Circle's
+  published CCTP address list.
+- Fast Transfer carries a fee and a global allowance. Report what happens to the UX when the
+  allowance is exhausted.
+
+### Always Fast Transfer where the source supports it
+
+This is the rule that decides whether the onramp feels instant or broken.
+
+Fast Transfer is ~8 seconds from Base, Arbitrum, OP, Unichain, Solana, Ink, Linea, Plume,
+World Chain, Codex, Morph, X Layer and EDGE; ~20 seconds from Ethereum and Starknet.
+Standard Transfer on those same chains is **15–19 minutes**, ~30 minutes on Ink, 2–4 hours
+on Starknet and **6–32 hours on Linea**.
+
+Chains without Fast Transfer as a source — Polygon, Avalanche, Sei, Sonic, HyperEVM, Monad,
+Aptos, Stellar, Injective, Cronos, XDC, Pharos — don't need it; their Standard times are
+already seconds. So with the rule applied correctly, every supported route is seconds.
+
+**The failure mode to design for: Fast Transfer has a global allowance and it can be
+exhausted.** When it is, the route falls back to Standard, and a user who expected 8 seconds
+from Base waits 19 minutes. Report what the SDK returns in that state, and surface it in the
+UI **before the user commits**, not after. Give them the real quoted time and let them
+decide.
+
+Also report: Fast Transfer fees and who pays them; whether upfront fees on the source chain
+remove the need for destination gas; and what the recovery path is when a transfer stalls
+(`app-kit/references/bridge-error-recovery`). A stuck bridge with no status and no recovery
+UI will generate more support load than everything else combined.
+
+### Quote the bridge NET, not gross
+
+The Forwarding Service fee is deducted from the USDC minted on the destination. Tell the
+user what will actually land, and **make sure it clears their gas reserve**.
+
+Arriving with exactly the trade amount and nothing for gas is a dead end — and it is
+**rule 3's failure reached by a different route**. The user is on Arc, holding USDC, and
+cannot move it. Landing a bridge that strands its own user is worse than refusing the quote.
+
+### What it looks like
+
+User clicks buy with no Arc USDC → inline panel, no page change, no external redirect →
+source chain and amount, with the real ETA → funds arrive → **the original buy completes
+automatically**. The word "bridge" should not appear, and the user should never have to come
+back and start again.
+
+Bridging **out** matters too — people who profit will want USDC off Arc. Arc as a source
+settles in about half a second at one confirmation. Don't leave this to a later release; a
+launchpad you can't withdraw from is a trust problem.
+
+### The build-step collision — settle this before writing code
+
+Bridge Kit and App Kit are npm packages (`@circle-fin/bridge-kit`, adapters for
+viem/ethers/Solana). Our frontend is deliberately plain HTML/CSS/JS with no build tooling,
+and `CLAUDE.md`'s stack line commits to that.
+
+Three options: bundle only the onramp module with a one-off esbuild step and keep the trading
+app buildless; find a CDN-hosted ESM build; or hand-roll CCTP V2 against the contracts and
+the attestation API with plain ethers.
+
+**I lean to the first** — one bundled module, checked in as a built artifact, the rest
+untouched. Hand-rolling CCTP throws away the 95% Circle already did. Tell me if you disagree,
+then do it.
+
+## Getting to fewer signatures
+
+Right now a first buy is realistically: connect, approve USDC, buy. A sell is: approve the
+launch token, sell. That is not one click, and no amount of frontend work fixes it alone.
+
+**Two of the four original paths are dead — the contract is frozen and `CLAUDE.md` records
+it as CLOSED.** See the merge note at the end for what was dropped and why. Everything below
+is frontend and infrastructure work requiring no contract change:
+
+**1. Budgeted approval.** Two transactions the first time, one every time after. Zero
+contract change. The floor, and what `terminal.html` already does — `APPROVAL_BUDGET_USDC`
+is 500, a budget rather than `MaxUint256`.
+
+⚠ **This does not extend to the creation fee, and the two must not be unified.** Rule 1
+requires an exact-amount approval for `createToken`. That is not an inconsistency: they are
+different hazards. R13 records that `creationFeeUsdc` is **absent from
+`currentEconomicsHash()`**, so the owner can raise it between the creator seeing terms and
+their transaction landing, and the pin cannot fire. Trading fees *are* hashed and snapshotted
+per curve, so a standing trading approval is bounded by terms that cannot move underneath it.
+**Do not refactor these into one "approve once" helper** — the shared shape is a coincidence,
+not a common case.
+
+**2. ERC-4337 smart accounts.** Arc supports 4337 with a full provider list — Privy, Dynamic,
+Turnkey, Para, Crossmint, Thirdweb, ZeroDev, Pimlico, Biconomy, Circle Wallets. A smart
+account batches approve+buy into one UserOperation, and a paymaster can sponsor the first
+transaction so a user with zero USDC isn't stuck before they start. It also gives
+email/passkey onboarding, which is what makes this work for users who have never held crypto.
+
+**On Arc the paymaster argument is stronger than on any other chain**: USDC is the gas token,
+so a zero-balance user cannot even *approve*. There is no "I hold ETH for gas but no USDC"
+state to fall back on — zero balance is total paralysis, not partial.
+
+**3. EIP-7702**, batching from a plain EOA with no smart account. `CLAUDE.md` §9.1 records
+Arc as behaving *"as on Ethereum"* for EIP-7702, so this looks live — verify against
+`evm-differences` before relying on it. **`terminal.html` already ships EIP-5792 batching as
+progressive enhancement** (`wallet_getCapabilities` → `wallet_sendCalls`, with any
+non-supporting wallet falling back silently). Salvage that; it is the safe half of this and
+it is already written.
+
+I want your recommendation on which combination gets to one click without custody, and what
+it costs in build time. Be honest if 4337 is more than the remaining schedule can absorb —
+budgeted approval plus a good connect flow may be the right launch answer, with 4337
+following.
+
+## Wallet and connection
+
+- Browsing requires no wallet. Buy, sell, and launch buttons are always live and prompt
+  connection on click. Never a gate in front of the content.
+- Support injected wallets (MetaMask, Rabby), WalletConnect for mobile, and — depending on
+  the 4337 answer — email/passkey.
+- Auto-detect wrong network and offer to add/switch to Arc in one click, with the chain
+  params prefilled. **Rule 8 carries the params and the WalletConnect caveat.**
+- **No private keys in browser storage, in any form, under any framing.**
+- **Balances change with no `Transfer` event.** Gas is deducted natively from the same
+  balance the ERC-20 view reads, so any UI reconciling a balance from events will drift.
+  Always read `balanceOf`. Rule 9 requires the same thing for the launch token, for an
+  unrelated reason — between them, no balance in this app should ever be inferred.
+
+## Taking inspiration from Pons
+
+Study their interface for flow and information density, not for copy. What to take: how
+little ceremony sits between landing and trading, one primary action per screen, and **the
+token page as the unit of navigation**. `CLAUDE.md` §7C makes that last point the scope
+decision for this whole build — a launchpad, not a trading terminal.
+
+What not to take: their fee framing. Their docs claim a zero-fee pool means trading their
+tokens doesn't cost a Uniswap fee on top. That's misleading — a 0% pool fee plus a 1% hook
+fee costs a trader the same as a 1% LP fee. Do not reproduce that claim in our copy. Our
+differentiator is being the one that doesn't do this.
+
+**Hold our own copy to the same standard**, which is the harder half. `CLAUDE.md` §7A: never
+market the creator split as "90/10" — it blends to **70%**, and both splits are readable on a
+verified contract in thirty seconds. Never say "creators are capped at 2.5%" — the cap limits
+only the *privileged* launch-buy path and nothing stops a second address. Say "up to 98%" of
+the snipe tax, not "98%". Trust is the moat; a claim a competitor can falsify in one page
+load costs more than the feature it oversold.
+
+## Ground rules
+
+Report before building. Inventory `create-token.html` and `terminal.html` first — `CLAUDE.md`
+§7C says salvage the engine and ship neither. Verify every Circle/Arc claim against their
+docs, **including the ones written above**. Flag anything where the interface would show a
+number the contract wouldn't honour. Don't tell me it's finished when it's untested against
+the live testnet deploy.
+
+---
+
+# MERGE NOTE — what became of the second document
+
+Merged 29 August 2026 from `FRONTEND_BUILD_V2_2.md` ("Frontend — frictionless build"), which
+existed in parallel and was never in the repo. This section exists because a `CLAUDE.md`
+rewrite once silently dropped three whole sections and nothing could have noticed (§7A). A
+merge that records what it discarded can be audited; one that doesn't, cannot.
+
+**Merged in, substantively unchanged:** the goal statement, sources of truth, the entire CCTP
+V2 onramp section (the Fast Transfer rule, the verified latencies, the allowance-exhaustion
+failure mode, what it looks like, bridging out), the build-step collision question, the wallet
+and connection bullets, the Pons framing, and the ground rules.
+
+**Merged with additions** — all of them cross-references to facts already established
+elsewhere in the repo, not new claims: the bridge-net-not-gross point now names rule 3 as the
+failure it reaches; the 4337 entry states why a paymaster matters more on Arc than elsewhere;
+EIP-7702 points at the EIP-5792 batching already shipped in `terminal.html`; the approval
+entry states why it must not be unified with rule 1; and the Pons section turns the
+fee-framing discipline onto our own copy.
+
+**Dropped — both dead, and dead for the same reason.** The contract is frozen at
+`0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`, 24,033 / 24,576 bytes, verified, with
+`CLAUDE.md` recording it as CLOSED: *"No contract work remains and none should be started
+without a reason written down first."*
+
+| dropped | what it asked | why it is dead |
+|---|---|---|
+| **EIP-2612 permit on the USDC leg** | Whether `LFX1.buy` has a permit path, and what one would cost in bytecode — framed as *"`LFX1` freezes this week with 568 bytes left, so this is now or never"* | The freeze happened. "Now or never" resolved to never. The byte figure was stale too: **543** free, not 568 |
+| **`LFX1Token` standing allowance** | Whether the token could grant the factory a standing allowance at deployment, making every sell a single transaction forever. Marked *"escalate now if it touches the contract"* | It touches the contract. It is also a trust regression the positioning cannot absorb: the factory could move any holder's tokens at will, on a project whose stated moat is verifiability |
+
+Neither is lost — both are recorded here with their reasoning, so a post-mainnet contract
+revision can pick them up deliberately rather than rediscovering them. **Neither is a reason
+to reopen the contract before mainnet.** If one is revived it starts with a written reason,
+per `CLAUDE.md` §5.
+
+**One caveat carried over deliberately.** The *"what I already verified"* figures in the
+onramp section came from the parallel document and have **not** been re-verified inside this
+repo. Their own heading says to re-verify; that instruction is load-bearing, not modesty.
