@@ -206,6 +206,7 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
     error ZeroAddress();
     error UsdcTransferMismatch();
     error ZeroAmount();
+    error OwnershipCannotBeRenounced();
 
     constructor(address usdc_, address treasury_, address initialRouter_) Ownable(msg.sender) {
         if (!(usdc_ != address(0) && treasury_ != address(0))) revert ZeroAddress();
@@ -827,6 +828,10 @@ contract LFX1 is Ownable, ReentrancyGuard, Pausable {
     function setTreasury(address treasury_) external onlyOwner {
         if (!(treasury_ != address(0))) revert ZeroAddress();
         treasury = treasury_;
+    }
+
+    function renounceOwnership() public pure override {
+        revert OwnershipCannotBeRenounced();
     }
 
     function pause() external onlyOwner {

@@ -155,6 +155,19 @@ def mut_r17_block_renounce(s):
     return s.replace(b, R17_OVERRIDE + b)
 
 
+R17_LIVE_OVERRIDE = '    function renounceOwnership() public pure override {\n        revert OwnershipCannotBeRenounced();\n    }\n\n'
+
+
+def mut_r17_unblock_renounce(s):
+    """Remove the R17 override, restoring Ownable's live renounceOwnership(). The R17
+    tests must go red; the two RESIDUAL tests must stay green, since they exercise
+    transferOwnership and never touched the override."""
+    a = _anchor(s, R17_LIVE_OVERRIDE)
+    return s.replace(a, "    // MUTATED: R17 override removed
+
+")
+
+
 def mut_multicurve_claim_prank(s):
     a = _anchor(s, "        vm.prank(creator);")
     return s.replace(a, "        // MUTATED: prank removed, restoring the dead-claim bug")
@@ -238,6 +251,12 @@ MUTATIONS = {
         "suite": None,
         "fn": mut_r17_block_renounce,
         "doc": "R17 candidate fix: renounceOwnership() reverts. Byte-cost measurement",
+    },
+    "r17-unblock-renounce": {
+        "file": SRC,
+        "suite": None,
+        "fn": mut_r17_unblock_renounce,
+        "doc": "removes the R17 override; the R17 tests must go RED, residuals stay green",
     },
     "multicurve-claim-prank": {
         "file": MULTI_HANDLER,
