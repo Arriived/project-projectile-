@@ -415,11 +415,11 @@
 const SUPABASE_URL = "https://zohthxhjcvmrziwqaiev.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpvaHRoeGhqY3Ztcnppd3FhaWV2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ4NDEzNzgsImV4cCI6MjEwMDQxNzM3OH0.IqVTo6KI2xTeIVrhmu56Rw-rwd0gDTH-malqgmIg2hA"; // Settings -> API Keys -> anon/public key. Safe to expose client-side — protected by Row Level Security, not secrecy.
 
-const FACTORY_ADDRESS = "0x63C4c5b7D7add4dbE9Bf8f155711dd00F566Ec57";
+const FACTORY_ADDRESS = "0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b";
 const USDC_ADDRESS = "0x3600000000000000000000000000000000000000";
 const CHAIN_ID_DEC = 5042002;
 const CHAIN_ID_HEX = "0x" + CHAIN_ID_DEC.toString(16);
-const RPC_URL = "https://rpc.testnet.arc.network";
+const RPC_URL = "https://rpc.testnet.arc.io"; // documented host; rpc.testnet.arc.network also works
 const EXPLORER_URL = "https://testnet.arcscan.app";
 const POLL_INTERVAL_MS = 6000;
 const BPS_DENOMINATOR = 10000n;
@@ -432,7 +432,17 @@ const TOTAL_TOKEN_SUPPLY = 1_000_000_000n * 10n ** 18n; // fixed supply, matches
 const FACTORY_ABI = [
   "function buy(address token, uint256 usdcIn, uint256 minTokensOut)",
   "function sell(address token, uint256 tokensIn, uint256 minUsdcOut)",
+  // Quotes come from the CONTRACT. Never re-derive the curve -- CLAUDE.md 1.3.
+  "function quoteBuy(address token, uint256 usdcIn) view returns (tuple(uint256 tokensOut, uint256 newVirtualUsdc, uint256 newVirtualToken, uint256 actualUsdcIn, uint256 actualFee))",
+  "function quoteSell(address token, uint256 tokensIn) view returns (tuple(uint256 actualTokensIn, uint256 newVirtualUsdc, uint256 newVirtualToken, uint256 usdcOutGross, uint256 fee))",
+  "function currentPrice(address token) view returns (uint256)",
+  "function currentSnipeTaxBps(address token) view returns (uint16)",
 ];
+
+// Read-only provider so quotes work with NO wallet connected -- browsing must never
+// require one. batchMaxCount:1 because Arc's RPC rejects batched requests.
+const readProvider = new ethers.JsonRpcProvider(RPC_URL, undefined, { batchMaxCount: 1 });
+const readFactory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, readProvider);
 const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function allowance(address owner, address spender) view returns (uint256)",
@@ -494,8 +504,6 @@ async function fetchTokens(filterQuery) {
 // Uses BigInt throughout — virtual reserves can exceed 10^27, far past what
 // a JS Number can represent safely. Getting this wrong wouldn't just be a
 // display bug, it would silently mis-calculate slippage protection.
-function ceilDiv(a, b) { return (a + b - 1n) / b; }
-
 function safeBigInt(value, fieldName) {
   try {
     return BigInt(value);
@@ -504,24 +512,63 @@ function safeBigInt(value, fieldName) {
   }
 }
 
-function calculateBuyOutput(virtualUsdcReserves, virtualTokenReserves, usdcIn, buyFeeBps) {
-  const fee = (usdcIn * BigInt(buyFeeBps)) / BPS_DENOMINATOR;
-  const usdcInAfterFee = usdcIn - fee;
-  const k = virtualUsdcReserves * virtualTokenReserves;
-  const newVirtualUsdc = virtualUsdcReserves + usdcInAfterFee;
-  const newVirtualToken = ceilDiv(k, newVirtualUsdc);
-  if (newVirtualToken > virtualTokenReserves) return 0n; // guard against malformed data
-  return virtualTokenReserves - newVirtualToken;
+// The JS curve math that used to live here is GONE, deliberately.
+//
+// calculateBuyOutput / calculateSellOutput / ceilDiv re-derived _quoteBuy and _quoteSell
+// in JavaScript. CLAUDE.md 1.3 forbids exactly that, and this is why: the buy function
+// took only buyFeeBps and had NO snipe-tax parameter, while the contract charges
+// c.buyFeeBps + taxBps. Measured against the live deployment (scripts/verify-frontend-
+// pricing.js): at t=0 it OVERSTATES tokens received by 98.96x, still 11x at t=1 and 5.2x
+// at t=2, converging only around t=5. Overstating is the dangerous direction -- minOut is
+// derived from it, so the floor would sit ~97x above anything achievable and EVERY buy in
+// the first seconds would revert. It also ignored the partial-fill clamp, and ran
+// against reserves from the indexer feed rather than the chain, so it could be stale even
+// when the arithmetic was right.
+//
+// quoteBuy/quoteSell are view functions ON the contract. They apply the live snipe tax,
+// the clamp and the current reserves, and cannot drift from the contract because they are
+// the contract.
+//
+// Shapes, which matter:
+//   quoteBuy  -> { tokensOut, newVirtualUsdc, newVirtualToken, actualUsdcIn, actualFee }
+//   quoteSell -> { actualTokensIn, newVirtualUsdc, newVirtualToken, usdcOutGross, fee }
+// The seller receives usdcOutGross MINUS fee, and sell() compares minUsdcOut against that
+// NET figure. Quoting gross would overstate the payout and is test-shape error 5 in
+// CLAUDE.md 5 -- "asserting against gross payout where the contract compares net".
+async function quoteBuyOnChain(tokenAddress, usdcIn) {
+  const q = await readFactory.quoteBuy(tokenAddress, usdcIn);
+  return { out: q.tokensOut, actualIn: q.actualUsdcIn, fee: q.actualFee };
 }
 
-function calculateSellOutput(virtualUsdcReserves, virtualTokenReserves, tokensIn, sellFeeBps) {
-  const k = virtualUsdcReserves * virtualTokenReserves;
-  const newVirtualToken = virtualTokenReserves + tokensIn;
-  const newVirtualUsdc = ceilDiv(k, newVirtualToken);
-  if (newVirtualUsdc > virtualUsdcReserves) return 0n; // guard against malformed data
-  const usdcOutGross = virtualUsdcReserves - newVirtualUsdc;
-  const fee = (usdcOutGross * BigInt(sellFeeBps)) / BPS_DENOMINATOR;
-  return usdcOutGross - fee;
+async function quoteSellOnChain(tokenAddress, tokensIn) {
+  const q = await readFactory.quoteSell(tokenAddress, tokensIn);
+  return { out: q.usdcOutGross - q.fee, actualIn: q.actualTokensIn, fee: q.fee };
+}
+
+// Price impact as a HEADLINE number, not a footnote. The curve is thin -- a $500 buy at
+// launch takes ~21% of supply with ~19% slippage -- and a user who receives 19% less than
+// a quoted rate assumes they were robbed.
+//
+// NOT computed from currentPrice(). That returns virtualUsdcReserves*1e18/virtualToken-
+// Reserves, which at launch scale evaluates to the integer 2 -- so any impact derived from
+// it rounds to 0.00% and the headline number silently lies. Measured, not guessed.
+//
+// Instead: compare the rate this trade actually gets against the rate a negligible trade
+// would get, both from quoteBuy, in tokens-per-USDC where the magnitudes are large enough
+// to keep precision.
+const IMPACT_PROBE = 10000n; // 0.01 USDC -- small enough to read as the marginal rate
+
+async function buyImpactPct(tokenAddress, quoted) {
+  try {
+    if (quoted.out === 0n || quoted.actualIn === 0n) return null;
+    const probe = await readFactory.quoteBuy(tokenAddress, IMPACT_PROBE);
+    if (probe.tokensOut === 0n || probe.actualUsdcIn === 0n) return null;
+    // Rates scaled by 1e6 so integer division keeps resolution.
+    const marginal = (probe.tokensOut * 1000000n) / probe.actualUsdcIn;
+    const effective = (quoted.out * 1000000n) / quoted.actualIn;
+    if (marginal === 0n || effective >= marginal) return 0;
+    return Number(((marginal - effective) * 10000n) / marginal) / 100;
+  } catch { return null; }
 }
 
 // ── Retry helper — same reasoning as create-token.html: this RPC endpoint
@@ -855,7 +902,7 @@ async function renderPriceChart(tokenAddress) {
 
   // Price per trade, in USDC per whole token. Number() is fine here — this is purely
   // for plotting a chart, not for any trade-execution math, where BigInt precision
-  // actually matters (see calculateBuyOutput).
+  // actually matters (see quoteBuyOnChain).
   const points = trades
     .map((t) => {
       const usdcAmt = Number(t.usdc_amount) / 1e6;
@@ -909,37 +956,73 @@ function closeDrawer() {
 $("drawerClose").addEventListener("click", closeDrawer);
 $("drawerBackdrop").addEventListener("click", (e) => { if (e.target === $("drawerBackdrop")) closeDrawer(); });
 
-function updateQuote() {
+// Slippage floor. NEVER zero -- CLAUDE.md 8: on an exhausted curve a zero default
+// silently does nothing, and on a thin curve it means arbitrary sandwiching.
+const SLIPPAGE_BPS = 200n; // 2%
+function applySlippage(out) { return (out * (10000n - SLIPPAGE_BPS)) / 10000n; }
+
+// Quotes are now an async round trip to the chain, so a slow response for an old amount
+// can land after a newer one. Every call takes a ticket and only the newest writes to the
+// DOM -- otherwise a user who clicks 10 then 100 can be shown the quote for 10.
+let quoteTicket = 0;
+
+async function updateQuote() {
   if (!activeToken || selectedAmount === null || selectedAmount <= 0) {
     $("drawerConfirm").disabled = true;
     $("drawerConfirm").textContent = "Select an amount";
     return;
   }
 
-  try {
-    const vUsdc = safeBigInt(activeToken.virtual_usdc_reserves, "virtual USDC reserves");
-    const vToken = safeBigInt(activeToken.virtual_token_reserves, "virtual token reserves");
+  const ticket = ++quoteTicket;
+  const tokenAtRequest = activeToken.contract_address;
+  const sideAtRequest = activeSide;
+  $("drawerConfirm").disabled = true;
+  $("drawerReceive").textContent = "…";
+  $("drawerMin").textContent = "…";
 
-    if (activeSide === "buy") {
-      const usdcIn = ethers.parseUnits(selectedAmount.toString(), 6);
-      const expectedOut = calculateBuyOutput(vUsdc, vToken, usdcIn, activeToken.buy_fee_bps);
-      const minOut = (expectedOut * 98n) / 100n;
-      $("drawerPay").textContent = selectedAmount + " USDC";
-      $("drawerReceive").textContent = Number(ethers.formatUnits(expectedOut, 18)).toLocaleString(undefined, { maximumFractionDigits: 2 }) + " " + (activeToken.symbol || "");
-      $("drawerMin").textContent = Number(ethers.formatUnits(minOut, 18)).toLocaleString(undefined, { maximumFractionDigits: 2 }) + " " + (activeToken.symbol || "");
+  try {
+    const isBuy = sideAtRequest === "buy";
+    const amountIn = isBuy
+      ? ethers.parseUnits(selectedAmount.toString(), 6)
+      : ethers.parseUnits(selectedAmount.toString(), 18);
+
+    const q = isBuy
+      ? await quoteBuyOnChain(tokenAtRequest, amountIn)
+      : await quoteSellOnChain(tokenAtRequest, amountIn);
+    const impact = isBuy ? await buyImpactPct(tokenAtRequest, q) : null;
+
+    // A stale response for a superseded amount must not overwrite the current one.
+    if (ticket !== quoteTicket) return;
+
+    const minOut = applySlippage(q.out);
+    const sym = activeToken.symbol || "";
+
+    if (isBuy) {
+      // actualUsdcIn, not the requested amount: the clamp may fill less than offered near
+      // graduation, and showing the offer would promise a spend the contract will not make.
+      $("drawerPay").textContent = Number(ethers.formatUnits(q.actualIn, 6)).toFixed(4) + " USDC"
+        + (q.actualIn < amountIn ? " (clamped — curve nearly full)" : "");
+      $("drawerReceive").textContent =
+        Number(ethers.formatUnits(q.out, 18)).toLocaleString(undefined, { maximumFractionDigits: 2 }) + " " + sym;
+      $("drawerMin").textContent =
+        Number(ethers.formatUnits(minOut, 18)).toLocaleString(undefined, { maximumFractionDigits: 2 }) + " " + sym
+        + (impact === null ? "" : `  ·  price impact ${impact.toFixed(2)}%`);
     } else {
-      const tokensIn = ethers.parseUnits(selectedAmount.toString(), 18);
-      const expectedOut = calculateSellOutput(vUsdc, vToken, tokensIn, activeToken.sell_fee_bps);
-      const minOut = (expectedOut * 98n) / 100n;
-      $("drawerPay").textContent = selectedAmount.toLocaleString(undefined, { maximumFractionDigits: 4 }) + " " + (activeToken.symbol || "");
-      $("drawerReceive").textContent = Number(ethers.formatUnits(expectedOut, 6)).toFixed(4) + " USDC";
+      $("drawerPay").textContent =
+        Number(ethers.formatUnits(q.actualIn, 18)).toLocaleString(undefined, { maximumFractionDigits: 4 }) + " " + sym
+        + (q.actualIn < amountIn ? " (clamped)" : "");
+      $("drawerReceive").textContent = Number(ethers.formatUnits(q.out, 6)).toFixed(4) + " USDC";
       $("drawerMin").textContent = Number(ethers.formatUnits(minOut, 6)).toFixed(4) + " USDC";
     }
+
     $("drawerConfirm").disabled = false;
-    $("drawerConfirm").textContent = signer ? (activeSide === "buy" ? "Buy" : "Sell") : "Connect wallet to continue";
+    $("drawerConfirm").textContent = signer ? (isBuy ? "Buy" : "Sell") : "Connect wallet to continue";
   } catch (err) {
+    if (ticket !== quoteTicket) return;
     $("drawerStatus").className = "drawer-status error";
-    $("drawerStatus").textContent = err.message;
+    $("drawerStatus").textContent =
+      "Could not price this trade: " + (err.shortMessage || err.message);
+    $("drawerConfirm").disabled = true;
   }
 }
 
@@ -991,13 +1074,19 @@ $("drawerConfirm").addEventListener("click", async () => {
   $("drawerConfirm").disabled = true;
 
   try {
-    const vUsdc = safeBigInt(activeToken.virtual_usdc_reserves, "virtual USDC reserves");
-    const vToken = safeBigInt(activeToken.virtual_token_reserves, "virtual token reserves");
-
+    // Re-quote from the CHAIN at submit time. A quote taken during the snipe window is
+    // stale within one second -- CLAUDE.md 8 measured an 8.7x swing as the tax decays --
+    // so the number used for minOut must be fetched now, not carried from the panel.
     if (activeSide === "buy") {
       const usdcIn = ethers.parseUnits(selectedAmount.toString(), 6);
-      const expectedOut = calculateBuyOutput(vUsdc, vToken, usdcIn, activeToken.buy_fee_bps);
-      const minOut = (expectedOut * 98n) / 100n;
+      const q = await withRetry(() => quoteBuyOnChain(activeToken.contract_address, usdcIn), { onRetry });
+      const expectedOut = q.out;
+      const minOut = applySlippage(expectedOut);
+      if (minOut === 0n) {
+        setDrawerStatus("This trade prices to zero — the curve may be full or the amount too small.", "error");
+        $("drawerConfirm").disabled = false;
+        return;
+      }
 
       const balance = await withRetry(() => usdc.balanceOf(userAddress), { onRetry });
       if (balance < usdcIn) {
@@ -1024,8 +1113,16 @@ $("drawerConfirm").addEventListener("click", async () => {
       setDrawerStatus("✓ Bought. This may take a few seconds to reflect in the feed.", "ok");
     } else {
       const tokensIn = ethers.parseUnits(selectedAmount.toString(), 18);
-      const expectedOut = calculateSellOutput(vUsdc, vToken, tokensIn, activeToken.sell_fee_bps);
-      const minOut = (expectedOut * 98n) / 100n;
+      // usdcOutGross MINUS fee. sell() compares minUsdcOut against the NET payout, so
+      // quoting gross here would set an unreachable floor and revert every sell.
+      const q = await withRetry(() => quoteSellOnChain(activeToken.contract_address, tokensIn), { onRetry });
+      const expectedOut = q.out;
+      const minOut = applySlippage(expectedOut);
+      if (minOut === 0n) {
+        setDrawerStatus("This trade prices to zero — try a larger amount.", "error");
+        $("drawerConfirm").disabled = false;
+        return;
+      }
 
       const balance = await withRetry(() => tokenContract.balanceOf(userAddress), { onRetry });
       if (balance < tokensIn) {

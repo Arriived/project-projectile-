@@ -1,7 +1,7 @@
 const hre = require("hardhat");
 
 // Same address your factory was deployed to and verified at.
-const FACTORY_ADDRESS = process.env.FACTORY_ADDRESS || "0x63C4c5b7D7add4dbE9Bf8f155711dd00F566Ec57";
+const FACTORY_ADDRESS = process.env.FACTORY_ADDRESS || "0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b";
 const ARC_TESTNET_USDC = "0x3600000000000000000000000000000000000000";
 
 const ERC20_MIN_ABI = [
@@ -53,7 +53,12 @@ async function main() {
     console.log("Approved.");
   }
 
-  const tx = await factory.createToken(name, symbol, metadataURI || "");
+  // createToken is FIVE args now: (name, symbol, metadataURI, expectedEconomicsHash,
+  // poolBoostEnabled). The hash is fetched HERE, immediately before the call, and never
+  // cached -- twelve owner-settable values feed it, and symbolLockDuration moving this
+  // session already invalidated every pin taken before it.
+  const expectedEconomicsHash = await factory.currentEconomicsHash();
+  const tx = await factory.createToken(name, symbol, metadataURI || "", expectedEconomicsHash, false);
   console.log(`\nTransaction sent: ${tx.hash}`);
   console.log("Waiting for confirmation...");
   const receipt = await tx.wait();

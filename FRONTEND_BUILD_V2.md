@@ -251,3 +251,35 @@ Circle can pause or blocklist and there is no fallback path. That remains true f
 protocol. But at the *wallet* level the condition is now detectable in advance, so the
 user gets an explanation instead of a wall. Detection is not mitigation of the underlying
 risk — it is mitigation of the confusion, which is the part a frontend can actually own.
+
+
+---
+
+## 8. WalletConnect needs the same `wallet_addEthereumChain` treatment as injected wallets
+
+Source: `docs.arc.io/integrate/connect-to-arc`, verified 29 August 2026.
+
+**Rule.** The chain-add/switch path must run for WalletConnect sessions, not just injected
+providers. `ensureArcNetwork` already does this for MetaMask and Rabby; the WalletConnect
+path needs the same handling, with the chain params prefilled.
+
+**Reason, verbatim:** *"Arc Testnet (chain ID 5042002) is not registered in the
+WalletConnect chain registry. On first connection, WalletConnect issues a
+`wallet_addEthereumChain` call per user."*
+
+So every mobile user hits an add-chain prompt on first connect. That is unavoidable, but it
+must be *expected and explained* rather than appearing as an unlabelled wallet popup in the
+middle of a buy. Handle it in the connect step, before the user commits to a trade.
+
+Chain params to prefill, from `/integrate/infrastructure` and `/arc-chain`:
+
+| field | value |
+|---|---|
+| chainId | `5042002` (`0x4CEDB2`) |
+| RPC | `https://rpc.testnet.arc.io` (documented; `rpc.testnet.arc.network` also works) |
+| explorer | `https://testnet.arcscan.app` |
+| native currency | **USDC, 18 decimals** — not ETH. This is the gas token |
+
+The 18-decimal native currency is the part to get right: it is the same balance as the
+6-decimal ERC-20 view (rule 3), and a wallet configured with the wrong decimals will
+display gas costs off by a factor of a trillion.

@@ -1,6 +1,6 @@
 const hre = require("hardhat");
 
-const FACTORY_ADDRESS = process.env.FACTORY_ADDRESS || "0x63C4c5b7D7add4dbE9Bf8f155711dd00F566Ec57";
+const FACTORY_ADDRESS = process.env.FACTORY_ADDRESS || "0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b";
 
 async function main() {
   const seconds = process.env.COOLDOWN_SECONDS;

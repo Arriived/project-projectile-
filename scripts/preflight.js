@@ -16,7 +16,7 @@ const ERC20_ABI = [
   "function transfer(address to, uint256 amount) returns (bool)",
 ];
 
-const LIVE_FACTORY = "0x63C4c5b7D7add4dbE9Bf8f155711dd00F566Ec57";
+const LIVE_FACTORY = "0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b";
 
 async function main() {
   const net = await ethers.provider.getNetwork();

@@ -951,6 +951,32 @@ coming out of that same balance, at every step.
 
 ---
 
+# 7C. SCOPE: A LAUNCHPAD, NOT A TRADING TERMINAL
+
+**We are building a launchpad.** Launch a token, trade it on its curve, watch it graduate.
+Pons is the reference for shape and flow: a token list and a **token page as the unit of
+navigation**.
+
+**`frontend/terminal.html` is an ABANDONED Axiom-style trading terminal. Do not finish it.**
+Salvage from it freely and delete the rest. No future session should treat it as the
+product.
+
+| salvage | discard |
+|---|---|
+| wallet connect, `ensureArcNetwork` | the terminal shell itself |
+| the `withRetry` wrapper (the RPC is genuinely flaky) | **the JS curve math, entirely** |
+| USDC balance and allowance reads | |
+| `serve.js`, and UI components that fit | |
+
+The JS curve math is gone and must never come back. `calculateBuyOutput`,
+`calculateSellOutput` and `ceilDiv` re-derived the curve without a snipe-tax term —
+measured against the live deployment at **98.96x overstated at t=0**, 11x at t=1, 5.2x at
+t=2. Overstating is the dangerous direction: `minTokensOut` is derived from the quote, so
+the floor sat far above anything achievable and **every buy in the first seconds would have
+reverted**. Quotes come from `quoteBuy`/`quoteSell` on the contract — §1.3.
+
+---
+
 # 8. NON-CONTRACT STATE
 
 - **Frontend: not started. This is the critical path.** Price impact must be a headline number — a $500 buy at launch takes ~21% of supply with ~19% slippage. `minTokensOut` must never default to zero. Show "creator bought X% at launch" on every token page — the 2.5% cap limits only the *privileged* path and does not cap total creator holdings, so disclosure is the actual protection. A quote taken during the snipe window is stale within **one second** and can understate the received amount by ~9x (favourable to the buyer, so `minTokensOut` never trips — but a frozen quote is simply wrong).
@@ -1110,6 +1136,7 @@ and none of it should be hardcoded before then.
 | **Mainnet contract addresses** | USDC, CCTP `TokenMessengerV2`, `MessageTransmitterV2`, and anything else depended on. The docs say to always check the contract-addresses page rather than reusing a testnet value. |
 | **Fee parameters** | Floor (20 Gwei), ceiling (20,000 Gwei) and throughput are **explicitly testnet configuration** and *"may change before mainnet launch."* Read from the chain. |
 | **Uniswap V2 deployment** | The v2 router/factory addresses in §6 came from Uniswap's SDK **for a chain that did not exist yet**. Confirm code is actually deployed at those addresses on mainnet before graduation depends on them — `scripts/refreeze-preflight.js` already does this check and reports NO CODE on testnet. |
+| **Everything resolves ON THE DAY** | Confirmed by the MCP server: *"Mainnet addresses are not yet available"*, and both mainnet phases are listed as **Upcoming** with no chain ID published. Nothing can be pre-wired. **So anything that can fetch-and-verify at runtime should be built that way NOW, not hardcoded and swapped later** — chain ID from the provider, contract addresses from config fetched at boot, fee parameters from `eth_gasPrice`/`eth_feeHistory`, and a startup assertion that what was fetched matches what was expected. A frontend that hardcodes testnet values needs a rebuild on 16 September; one that resolves them needs a config change. |
 | **Testnet-vs-mainnet USDC parity** | Unverifiable until mainnet exists. §2 records testnet USDC as the same KIND of token, not the same token. |
 
 ---

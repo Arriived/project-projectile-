@@ -4,7 +4,12 @@ require("@nomicfoundation/hardhat-verify");
 require("solidity-coverage");
 require("dotenv").config();
 
-const ARC_TESTNET_RPC_URL = process.env.ARC_TESTNET_RPC_URL || "https://rpc.testnet.arc.network";
+// rpc.testnet.arc.io is the host Arc documents (/integrate/infrastructure, /arc-chain).
+// rpc.testnet.arc.network also works -- every deployment through 0xEDeed1F0 used it -- and
+// is kept here as a known-good alias, but it is undocumented and carries no guarantee.
+// Both were tested against the live factory before switching: same chainId, same reads.
+const ARC_TESTNET_RPC_URL = process.env.ARC_TESTNET_RPC_URL || "https://rpc.testnet.arc.io";
+const ARC_TESTNET_RPC_ALIAS = "https://rpc.testnet.arc.network"; // working, undocumented
 const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY;
 const MAINNET_RPC_URL = process.env.MAINNET_RPC_URL;
 
