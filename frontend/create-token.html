@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,620&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<!-- Generated selector -> copy map. On Arc ethers does not decode custom errors. -->
+<script src="revert-errors.js"></script>
 <style>
   :root {
     --paper: #EEF2EF;
@@ -541,7 +543,7 @@ async function connectWallet() {
     $("walletAddr").textContent = short(userAddress);
     $("createBtn").textContent = "Loading contract details…";
   } catch (err) {
-    setStatus($("connectStatus"), "Connection failed: " + (err.shortMessage || err.message), "error");
+    setStatus($("connectStatus"), "Connection failed: " + explainRevert(err, "no reason returned").message, "error");
     return;
   }
 
@@ -561,7 +563,10 @@ async function loadContractDetails() {
     }
     $("createBtn").textContent = "Create token";
   } catch (err) {
-    const msg = err.shortMessage || err.reason || err.message || "Unknown error";
+    // See revert-errors.js: on Arc these three are all undefined for a contract revert,
+    // so this used to read "Unknown error" for every one of them -- including
+    // EconomicsChanged, which is the one a creator most needs explained.
+    const msg = explainRevert(err, "The transaction failed and no reason was returned.").message;
     setStatus($("createStatus"),
       `Couldn't load contract details: ${msg} — this RPC endpoint is occasionally flaky. ` +
       `<a href="#" id="retryLoadLink">Try again</a>`, "error");
@@ -688,7 +693,10 @@ async function handleCreate() {
 
     showSealed(event.args.token);
   } catch (err) {
-    const msg = err.shortMessage || err.reason || err.message || "Unknown error";
+    // See revert-errors.js: on Arc these three are all undefined for a contract revert,
+    // so this used to read "Unknown error" for every one of them -- including
+    // EconomicsChanged, which is the one a creator most needs explained.
+    const msg = explainRevert(err, "The transaction failed and no reason was returned.").message;
     setStatus($("createStatus"),
       msg.includes("cooldown")
         ? "This wallet is still on cooldown from a recent launch — wait and try again, or check the cooldown timer above."

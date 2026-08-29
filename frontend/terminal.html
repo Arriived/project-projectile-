@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,620&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<!-- Generated selector -> copy map. On Arc ethers does not decode custom errors. -->
+<script src="revert-errors.js"></script>
 <style>
   :root {
     --bg: #0A0F0D;
@@ -660,9 +662,15 @@ async function withRetry(fn, { onRetry } = {}) {
     try {
       return await fn();
     } catch (err) {
-      const isRateLimit = /rate limit|too many requests|request limit/i.test(
-        err.message || err.shortMessage || err?.info?.error?.message || ""
-      );
+      // -32011 first: a numeric JSON-RPC code is stable, the wording is not. The regex is
+      // kept as a fallback because rate-limit codes are not standardised across providers,
+      // but it must never be the ONLY signal.
+      const isRateLimit =
+        err.code === -32011 ||
+        err?.info?.error?.code === -32011 ||
+        /rate limit|too many requests|request limit/i.test(
+          err.message || err.shortMessage || err?.info?.error?.message || ""
+        );
       const maxRetries = isRateLimit ? 6 : 3;
       const baseDelay = isRateLimit ? 2500 : 800;
       if (attempt >= maxRetries) throw err;
@@ -1099,8 +1107,10 @@ async function updateQuote() {
   } catch (err) {
     if (ticket !== quoteTicket) return;
     $("drawerStatus").className = "drawer-status error";
+    // Decode the selector: a failed quote is usually a contract revert (UnknownToken,
+    // CurveNotActive) and ethers hands those back undecoded on Arc.
     $("drawerStatus").textContent =
-      "Could not price this trade: " + (err.shortMessage || err.message);
+      "Could not price this trade: " + explainRevert(err, "no reason returned").message;
     $("drawerConfirm").disabled = true;
   }
 }
@@ -1250,7 +1260,11 @@ $("drawerConfirm").addEventListener("click", async () => {
     $("drawerConfirm").textContent = "Done";
     setTimeout(closeDrawer, 1800);
   } catch (err) {
-    const msg = err.shortMessage || err.reason || err.message || "Unknown error";
+    // Was: err.shortMessage || err.reason || err.message || "Unknown error" -- which on
+    // Arc resolves to "Unknown error" for EVERY contract revert, because ethers leaves all
+    // three undefined and puts the selector in err.data.
+    const explained = explainRevert(err, "The transaction failed and no reason was returned.");
+    const msg = explained.message;
     setDrawerStatus("Failed: " + msg, "error");
     $("drawerConfirm").disabled = false;
   }

@@ -17,7 +17,8 @@
   },
   "scripts": {
     "gen:abi": "node scripts/gen-indexer-abi.js",
-    "build": "hardhat compile && node scripts/gen-indexer-abi.js && node scripts/gen-inventory.js",
-    "inventory": "node scripts/gen-inventory.js"
+    "build": "hardhat compile && node scripts/gen-indexer-abi.js && node scripts/gen-inventory.js && node scripts/gen-revert-copy.js",
+    "inventory": "node scripts/gen-inventory.js",
+    "revert-copy": "node scripts/gen-revert-copy.js"
   }
 }
