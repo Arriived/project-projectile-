@@ -156,6 +156,26 @@ to reword.
 against `gasLimit * gasPrice` **before** submitting, and asserts on state afterwards —
 tokens still held, no tokens received — never on a message.
 
+### When you DO need to tell one revert from another, decode the selector
+
+Sometimes the distinction matters — `EconomicsChanged` should re-fetch and re-present terms
+(rule 5), while `SlippageExceeded` should re-quote. Do that by decoding the **4-byte custom
+error selector** against the ABI. It is ABI data, not prose, so it is stable across the node
+upgrades that move the strings.
+
+**On Arc, ethers does not decode it for you.** Measured against the live deployment: a
+reverting `staticCall` comes back as a raw provider error with `code: 3` and the selector in
+**`e.data`** — `e.revert` is `undefined` and `e.shortMessage` is `undefined`, so the
+idiomatic ethers v6 handling silently matches nothing.
+
+```js
+const sel = e.data || e.error?.data || "";
+if (sel === factory.interface.getError("EconomicsChanged").selector) { /* re-fetch terms */ }
+```
+
+Verified: `EconomicsChanged()` is `0x444df1ec`, and that is exactly what a stale pin returns
+from `0xEDeed1F0...`. `scripts/verify-frontend-txshapes.js` asserts it.
+
 ---
 
 ## 5. Fetch the economics hash immediately before launching. Never cache it.
