@@ -456,6 +456,90 @@ const ERC20_ABI = [
 
 const $ = (id) => document.getElementById(id);
 
+// ══ EIP-5792 BATCHING — PROGRESSIVE ENHANCEMENT ══════════════════════════
+// One click instead of two, where the wallet can do it, and the existing sequential path
+// everywhere else. Nothing below is required for the app to work.
+//
+// The app never asks a wallet to sign an EIP-7702 authorisation. It asks EIP-5792 whether
+// atomic batching is available and, if so, submits approve+buy as one call set. HOW the
+// wallet delivers that -- a 7702 delegation, a 4337 smart account, something else -- is the
+// wallet's business, not ours. That is why this is a small change rather than a second
+// codebase: unsupported wallets fall through to exactly what they do today.
+//
+// Every failure path here falls back rather than surfacing an error. A wallet that half
+// implements 5792 must not be able to break buying.
+
+const BATCH_VERSION = "2.0.0";
+
+async function chainIdHex() {
+  try { return await window.ethereum.request({ method: "eth_chainId" }); }
+  catch { return null; }
+}
+
+// Two capability shapes are in the wild: the current `atomic: { status }` and the earlier
+// `atomicBatch: { supported }`. Accept either, treat anything else as unsupported.
+async function supportsAtomicBatch(from) {
+  if (!window.ethereum?.request) return false;
+  const cid = await chainIdHex();
+  if (!cid) return false;
+  try {
+    const caps = await window.ethereum.request({
+      method: "wallet_getCapabilities",
+      params: [from, [cid]],
+    });
+    const c = caps?.[cid] || caps?.[parseInt(cid, 16)] || {};
+    const status = c.atomic?.status;
+    if (status === "supported" || status === "ready") return true;
+    if (c.atomicBatch?.supported === true) return true;
+    return false;
+  } catch {
+    // Wallets that predate 5792 reject the method outright. That is a "no", not an error.
+    return false;
+  }
+}
+
+// Returns a batch id, or null to mean "fall back". Never throws.
+async function sendCallsOrNull(from, calls) {
+  const cid = await chainIdHex();
+  if (!cid) return null;
+  try {
+    const res = await window.ethereum.request({
+      method: "wallet_sendCalls",
+      params: [{
+        version: BATCH_VERSION,
+        chainId: cid,
+        from,
+        // Atomic or nothing: a partial batch that approved but did not buy would leave a
+        // standing allowance the user did not knowingly grant.
+        atomicRequired: true,
+        calls,
+      }],
+    });
+    return typeof res === "string" ? res : (res?.id ?? null);
+  } catch {
+    return null;
+  }
+}
+
+// Poll until the batch settles. Status 100 = pending, 200 = confirmed; anything else is a
+// failure. Returns true only on a confirmed success.
+async function waitForCalls(id, { timeoutMs = 120000, intervalMs = 1500 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const st = await window.ethereum.request({ method: "wallet_getCallsStatus", params: [id] });
+      const code = typeof st?.status === "number" ? st.status : null;
+      if (code === 200) return true;
+      if (code !== null && code !== 100) return false;
+      // Older wallets report a string status instead of a numeric code.
+      if (st?.status === "CONFIRMED") return true;
+      if (st?.status && st.status !== "PENDING") return false;
+    } catch { return false; }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return false;
+}
+
 // ══ GAS, FEES AND THE ONE-BALANCE PROBLEM ════════════════════════════════
 // FRONTEND_BUILD_V2 rules 3, 4 and 6. On Arc, gas IS the settlement asset: the 18-decimal
 // native balance and the 6-decimal ERC-20 view are the SAME money. So every spend competes
@@ -1187,6 +1271,30 @@ $("drawerConfirm").addEventListener("click", async () => {
       if (problem) { setDrawerStatus(problem, "error"); $("drawerConfirm").disabled = false; return; }
 
       const allowance = await withRetry(() => usdc.allowance(userAddress, FACTORY_ADDRESS), { onRetry });
+
+      // One click, where the wallet supports it. Only worth attempting when an approval
+      // would otherwise be needed -- with allowance already in place the buy is a single
+      // transaction anyway and batching would add a round trip for nothing.
+      if (allowance < usdcIn && await supportsAtomicBatch(userAddress)) {
+        const budgetWei = ethers.parseUnits(APPROVAL_BUDGET_USDC.toString(), 6);
+        const approveAmount = usdcIn > budgetWei ? usdcIn : budgetWei;
+        const calls = [
+          { to: USDC_ADDRESS, data: usdc.interface.encodeFunctionData("approve", [FACTORY_ADDRESS, approveAmount]), value: "0x0" },
+          { to: FACTORY_ADDRESS, data: factory.interface.encodeFunctionData("buy", [activeToken.contract_address, usdcIn, minOut]), value: "0x0" },
+        ];
+        setDrawerStatus('<span class="spinner"></span> Approve and buy in one confirmation…', "warn");
+        const id = await sendCallsOrNull(userAddress, calls);
+        if (id && await waitForCalls(id)) {
+          refreshAllowancePill();
+          setDrawerStatus("✓ Bought in a single confirmation. This may take a few seconds to reflect in the feed.", "ok");
+          $("drawerConfirm").disabled = false;
+          return;
+        }
+        // Anything short of a confirmed success: say nothing about batching and do it the
+        // ordinary way. The user should not be told about a capability that just failed.
+        setDrawerStatus('<span class="spinner"></span> Continuing with separate steps…', "warn");
+      }
+
       if (allowance < usdcIn) {
         const budgetWei = ethers.parseUnits(APPROVAL_BUDGET_USDC.toString(), 6);
         const approveAmount = usdcIn > budgetWei ? usdcIn : budgetWei;
