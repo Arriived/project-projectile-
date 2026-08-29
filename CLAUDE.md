@@ -1053,6 +1053,24 @@ reverted**. Quotes come from `quoteBuy`/`quoteSell` on the contract — §1.3.
     key cannot run DDL** — it is a PostgREST credential and PostgREST exposes no SQL
     endpoint (verified: zero RPC functions on the project). `migrations/APPLY-ALL.sql`
     bundles them for pasting.
+  - **RLS verified with the ANON key, which is the only key that can.** The service-role
+    key bypasses RLS, so it returns rows whether or not the policies work and cannot detect
+    a broken one. 11/11 via `indexer/scripts/verify-anon-access.js`: anon reads
+    `tokens_with_volume`, `tokens` and `trades`; cannot read `indexer_state`; cannot
+    insert, update or delete.
+  - **`tokens_with_volume` is SECURITY INVOKER**, not the Postgres default. Everything it
+    exposes is chain-derived or public, and `trader_address` never leaves its subquery. The
+    trap is that switching to INVOKER can **silently empty the view** — the caller then
+    needs its own SELECT rights, and without them it returns zero rows and no error.
+  - **Judge a destructive RLS check by ROW COUNT, never by HTTP status.** PostgREST returns
+    `204` for a DELETE that matched nothing, which is exactly what RLS produces. A first
+    version of the check read that as "DELETE ALLOWED" and reported a breach that had not
+    happened. Nothing was deleted.
+  - **anon holds DELETE and UPDATE grants; only the missing RLS policy stops them.**
+    Measured: INSERT returns 401 (no grant) but DELETE and UPDATE return 204. Supabase
+    grants broadly to anon by default and `GRANT SELECT` adds rather than replaces, so
+    `000_base_schema.sql` now REVOKEs writes explicitly — two independent barriers instead
+    of one.
   - Rate limiting on the public RPC is real and visible: the backfill stalled for 150s at a
     time under `withRetry`'s backoff. A dedicated provider would fix it.
   - Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `FACTORY_RPC_URL`,

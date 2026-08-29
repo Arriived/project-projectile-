@@ -129,6 +129,15 @@ CREATE POLICY trades_public_read ON public.trades FOR SELECT TO anon, authentica
 
 -- No INSERT/UPDATE/DELETE policy for anon or authenticated: writes stay with the
 -- service-role key, which bypasses RLS. A browser must never be able to write here.
+--
+-- REVOKE as well as omitting the policy, because those are two independent barriers and
+-- only one of them was actually in place. Measured with the anon key: INSERT returned 401
+-- (no grant) but DELETE and UPDATE returned 204 -- meaning anon HOLDS those privileges and
+-- nothing but the absence of an RLS policy was stopping them. One accidental permissive
+-- policy, or one \`ALTER TABLE ... DISABLE ROW LEVEL SECURITY\`, and a browser could empty
+-- the table. Supabase grants broadly to anon by default; GRANT SELECT adds to that, it
+-- does not replace it.
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.tokens, public.trades FROM anon, authenticated;
 GRANT SELECT ON public.tokens, public.trades, public.tokens_with_volume TO anon, authenticated;
 
 -- indexer_state is operational bookkeeping with no reason to be public.
