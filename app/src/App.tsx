@@ -3,11 +3,16 @@
 
 import { WalletBar } from "./components/WalletBar";
 import { FactoryReadProof } from "./components/FactoryReadProof";
-import { useArcGuard } from "./hooks/useArcGuard";
+import { useChain } from "./providers/ChainProvider";
 import { arc } from "./chain";
 
 export function App() {
-  const guard = useArcGuard();
+  const { guard, inAutoPrompt } = useChain();
+
+  // The banner is suppressed while the automatic prompt is open. The user is mid-fix and
+  // has a wallet popup in front of them; alarming them about the state that popup exists
+  // to resolve is noise, and if they accept they should never have seen it at all.
+  const showBanner = guard.status !== "disconnected" && !guard.canTransact && !inAutoPrompt;
 
   return (
     <div className="page">
@@ -18,12 +23,11 @@ export function App() {
         <WalletBar />
       </header>
 
-      {/* The wrong-network state is stated in the body, not only in the header bar.
-          A warning that lives only in a corner is a warning a user scrolls past --
-          and by Phase 2 this banner is what sits above a buy button. Reads are
-          unaffected (they are pinned to Arc) and stay visible, because showing
-          correct chain data is not the same as letting someone act on it. */}
-      {guard.status !== "disconnected" && !guard.canTransact && (
+      {/* Stated in the body, not only in the header bar. A warning that lives only in a
+          corner is one a user scrolls past -- and by Phase 2 this sits above a buy
+          button. Reads are unaffected (they are pinned to Arc) and stay visible, because
+          showing correct chain data is not the same as letting someone act on it. */}
+      {showBanner && (
         <div className="banner banner-warn" role="alert">
           <strong>
             {guard.status === "wrong"

@@ -105,3 +105,45 @@ export function resolveArcGuard({
 
   return { status: "ok", canTransact: true, chainId: arcId };
 }
+
+/**
+ * Whether to raise the automatic switch prompt on connect.
+ *
+ * A user who connects on the wrong chain should be offered the switch immediately rather
+ * than being made to find a button. Accept it and they never see a wrong-network state at
+ * all.
+ *
+ * Three constraints, and each one is a way this could misbehave:
+ *
+ *  - **Only on `wrong`, never on `unknown`.** `unknown` means we have not confirmed the
+ *    chain yet -- typically the moment after connect, before the first probe returns.
+ *    Prompting there would fire a wallet popup because of our own latency, on a user who
+ *    may well be on Arc already.
+ *
+ *  - **Once per connection.** Keyed on connector + address, marked BEFORE the prompt is
+ *    raised so a re-render (or React StrictMode's double-invoked effect) cannot raise a
+ *    second one. After a rejection we do not try again: the operator's instruction is one
+ *    prompt, then let them choose. Reconnecting is the user initiating, not us retrying,
+ *    so it earns a fresh prompt.
+ *
+ *  - **Never while a switch is already in flight.** Otherwise a slow wallet collects a
+ *    queue of identical popups.
+ */
+export function shouldAutoPromptSwitch({
+  status,
+  connectionKey,
+  lastPromptedKey,
+  isSwitching,
+}: {
+  status: ArcGuard["status"];
+  /** Stable per connection: connector uid + address. Undefined when disconnected. */
+  connectionKey: string | undefined;
+  /** The key we last raised a prompt for, or null if none this session. */
+  lastPromptedKey: string | null;
+  isSwitching: boolean;
+}): boolean {
+  if (status !== "wrong") return false;
+  if (!connectionKey) return false;
+  if (isSwitching) return false;
+  return lastPromptedKey !== connectionKey;
+}

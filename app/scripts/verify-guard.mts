@@ -24,7 +24,7 @@
 // Each is also caught by the final invariant, which is the check that survives someone
 // updating row expectations to match broken behaviour.
 
-import { resolveArcGuard, MAX_PROBE_AGE_MS } from "../src/lib/arcGuard.ts";
+import { resolveArcGuard, shouldAutoPromptSwitch, MAX_PROBE_AGE_MS } from "../src/lib/arcGuard.ts";
 
 const ARC = 5042002;
 const MAINNET = 1;
@@ -163,5 +163,84 @@ console.log(
     `  — ${bad.length} violation(s)`
 );
 
-console.log(`\n${rows.length + 1 - failures}/${rows.length + 1} checks passed`);
+// ── The automatic switch prompt on connect ────────────────────────────────────
+//
+// One prompt per connection, raised only once the wrong chain is POSITIVELY established,
+// never while a switch is already in flight, and never again after a rejection.
+//
+// To prove these can go red: in lib/arcGuard.ts drop the `status !== "wrong"` guard and
+// A2 fails (it would open a wallet popup on a chain we have not confirmed yet); drop the
+// lastPromptedKey comparison and A4 fails (it would re-prompt after a rejection, forever).
+
+const K1 = "connector-a:0xabc";
+const K2 = "connector-b:0xdef";
+
+type ARow = { name: string; input: Parameters<typeof shouldAutoPromptSwitch>[0]; expect: boolean };
+
+const autoRows: ARow[] = [
+  {
+    name: "A1  wrong chain, never prompted -> PROMPT",
+    input: { status: "wrong", connectionKey: K1, lastPromptedKey: null, isSwitching: false },
+    expect: true,
+  },
+  {
+    name: "A2  chain UNCONFIRMED -> do not prompt (would popup from our own latency)",
+    input: { status: "unknown", connectionKey: K1, lastPromptedKey: null, isSwitching: false },
+    expect: false,
+  },
+  {
+    name: "A3  already on Arc -> do not prompt",
+    input: { status: "ok", connectionKey: K1, lastPromptedKey: null, isSwitching: false },
+    expect: false,
+  },
+  {
+    name: "A4  REJECTED: already prompted this connection -> do NOT retry",
+    input: { status: "wrong", connectionKey: K1, lastPromptedKey: K1, isSwitching: false },
+    expect: false,
+  },
+  {
+    name: "A5  a switch is already in flight -> do not stack a second popup",
+    input: { status: "wrong", connectionKey: K1, lastPromptedKey: null, isSwitching: true },
+    expect: false,
+  },
+  {
+    name: "A6  a DIFFERENT connection -> earns its own single prompt",
+    input: { status: "wrong", connectionKey: K2, lastPromptedKey: K1, isSwitching: false },
+    expect: true,
+  },
+  {
+    name: "A7  disconnected (no key) -> never prompt",
+    input: { status: "wrong", connectionKey: undefined, lastPromptedKey: null, isSwitching: false },
+    expect: false,
+  },
+];
+
+for (const row of autoRows) {
+  const got = shouldAutoPromptSwitch(row.input);
+  const ok = got === row.expect;
+  if (!ok) failures++;
+  console.log(`  ${ok ? "PASS" : "FAIL"}  ${row.name}\n        expected ${row.expect}, got ${got}`);
+}
+
+// Invariant: a prompt is only ever raised for a positively-wrong chain, on a connection
+// not already prompted, with nothing in flight.
+const badAuto = autoRows.filter(
+  (r) =>
+    shouldAutoPromptSwitch(r.input) &&
+    !(
+      r.input.status === "wrong" &&
+      !!r.input.connectionKey &&
+      r.input.lastPromptedKey !== r.input.connectionKey &&
+      !r.input.isSwitching
+    )
+);
+const autoInvariant = badAuto.length === 0;
+if (!autoInvariant) failures++;
+console.log(
+  `  ${autoInvariant ? "PASS" : "FAIL"}  auto-prompt implies wrong chain + not yet prompted + not switching` +
+    `  — ${badAuto.length} violation(s)`
+);
+
+const total = rows.length + autoRows.length + 2;
+console.log(`\n${total - failures}/${total} checks passed`);
 if (failures) process.exit(1);
