@@ -10,15 +10,17 @@
     "typecheck": "tsc -b --noEmit",
     "verify:chain": "node --experimental-strip-types scripts/verify-chain.mts",
     "verify:guard": "node --experimental-strip-types scripts/verify-guard.mts",
-    "verify": "npm run verify:chain && npm run verify:guard && npm run verify:wallets",
+    "verify": "npm run verify:chain && npm run verify:guard && npm run verify:wallets && npm run verify:trade",
     "verify:wallets": "node --experimental-strip-types scripts/verify-wallets.mts",
-    "measure:gas": "node --experimental-strip-types scripts/measure-gas.mts"
+    "measure:gas": "node --experimental-strip-types scripts/measure-gas.mts",
+    "verify:trade": "node --experimental-strip-types scripts/verify-trade.mts"
   },
   "dependencies": {
     "@metamask/connect-evm": "^2.1.1",
     "@tanstack/react-query": "^5.62.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-router-dom": "^7.18.3",
     "viem": "^2.56.0",
     "wagmi": "^3.7.7"
   },
