@@ -163,9 +163,7 @@ def mut_r17_unblock_renounce(s):
     tests must go red; the two RESIDUAL tests must stay green, since they exercise
     transferOwnership and never touched the override."""
     a = _anchor(s, R17_LIVE_OVERRIDE)
-    return s.replace(a, "    // MUTATED: R17 override removed
-
-")
+    return s.replace(a, "    // MUTATED: R17 override removed\n\n")
 
 
 def mut_multicurve_claim_prank(s):
