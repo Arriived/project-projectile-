@@ -1,18 +1,32 @@
 // React binding for the chain guard. The DECISION lives in lib/arcGuard.ts as a pure
-// function; this file only gathers the two inputs it needs.
+// function; this file's only job is to keep a FRESH reading of the wallet's chain.
 //
-// Read lib/arcGuard.ts for why the guard exists at all -- short version: wagmi's
-// `useChainId()` reads config state, not wallet state, and with a single-chain config the
-// wrong-network branch was unreachable.
+// Read lib/arcGuard.ts for both bugs this exists to prevent. The short version of the
+// second one, which shapes this file: probing once and then waiting for a `chainChanged`
+// event left the app green and transactable indefinitely after a chain change that
+// emitted no event. So this hook does not rely on being told. It asks, repeatedly.
+//
+// Three triggers, deliberately overlapping:
+//   - an interval, which is the one that is not allowed to fail
+//   - `chainChanged`, kept only as a fast path so detection feels instant
+//   - window focus, because switching networks means leaving and returning to the tab,
+//     and background tabs get their timers throttled
 //
 // Consumers must gate on `canTransact`, never on `isConnected`.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAccount } from "wagmi";
 import { arc } from "../chain";
-import { resolveArcGuard, type ArcGuard } from "../lib/arcGuard";
+import { resolveArcGuard, MAX_PROBE_AGE_MS, type ArcGuard } from "../lib/arcGuard";
 
 export type { ArcGuard };
+
+/**
+ * Well inside MAX_PROBE_AGE_MS, so a healthy poller never lets a reading go stale. This
+ * is one `eth_chainId` to the injected provider -- an in-process call to the extension,
+ * not a network round trip, and not our rate-limited RPC.
+ */
+const POLL_INTERVAL_MS = 3_000;
 
 type Eip1193 = {
   request: (a: { method: string }) => Promise<unknown>;
@@ -20,61 +34,104 @@ type Eip1193 = {
   removeListener?: (e: string, f: (v: unknown) => void) => void;
 };
 
-export function useArcGuard(): ArcGuard {
+export function useArcGuard(): ArcGuard & { reverify: () => void } {
   const { isConnected, chainId: accountChainId, connector } = useAccount();
 
-  // Second, independent source: ask the provider itself. wagmi having surprised us once
-  // about where chain state lives is reason enough not to trust a single reading of it.
-  // This can only ever make the guard MORE restrictive.
-  const [probed, setProbed] = useState<number | undefined>(undefined);
+  const [probe, setProbe] = useState<{ chainId: number | undefined; at: number | undefined }>({
+    chainId: undefined,
+    at: undefined,
+  });
+
+  // Re-render on a timer so a reading going stale flips the UI even when nothing else
+  // changes. Without this a stale probe would sit unnoticed until the next event.
+  const [, setTick] = useState(0);
+
+  const providerRef = useRef<Eip1193 | undefined>(undefined);
+  const aliveRef = useRef(true);
+
+  const readChain = useCallback(async () => {
+    const provider = providerRef.current;
+    if (!provider) {
+      if (aliveRef.current) setProbe({ chainId: undefined, at: undefined });
+      return;
+    }
+    try {
+      const hex = (await provider.request({ method: "eth_chainId" })) as string | undefined;
+      if (!aliveRef.current) return;
+      // A successful read is stamped even when it disagrees -- `at` records when we last
+      // KNEW something, not when we last liked the answer.
+      setProbe({ chainId: hex ? Number.parseInt(hex, 16) : undefined, at: Date.now() });
+    } catch {
+      // A provider that will not answer is not a provider we can call Arc. Clearing `at`
+      // is what makes this fail closed rather than leaving the last good reading standing.
+      if (aliveRef.current) setProbe({ chainId: undefined, at: undefined });
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    let provider: Eip1193 | undefined;
+    aliveRef.current = true;
+    let interval: ReturnType<typeof setInterval> | undefined;
+    let staleTicker: ReturnType<typeof setInterval> | undefined;
+    let detach: (() => void) | undefined;
 
-    const read = async () => {
-      try {
-        const hex = (await provider?.request({ method: "eth_chainId" })) as string | undefined;
-        if (!cancelled) setProbed(hex ? Number.parseInt(hex, 16) : undefined);
-      } catch {
-        // A provider that will not answer is not a provider we can call Arc.
-        if (!cancelled) setProbed(undefined);
-      }
-    };
-
-    const onChainChanged = () => void read();
+    const onChainChanged = () => void readChain();
+    const onFocus = () => void readChain();
 
     (async () => {
       if (!isConnected || !connector) {
-        if (!cancelled) setProbed(undefined);
+        providerRef.current = undefined;
+        if (aliveRef.current) setProbe({ chainId: undefined, at: undefined });
         return;
       }
       try {
-        provider = (await connector.getProvider()) as Eip1193 | undefined;
+        providerRef.current = (await connector.getProvider()) as Eip1193 | undefined;
       } catch {
-        if (!cancelled) setProbed(undefined);
+        providerRef.current = undefined;
+        if (aliveRef.current) setProbe({ chainId: undefined, at: undefined });
         return;
       }
-      await read();
-      // Re-probe on chainChanged. wagmi listens too, but this hook must not depend on
-      // wagmi's propagation being correct -- that assumption is exactly what broke.
+      // The effect may already have been torn down while getProvider() was in flight.
+      if (!aliveRef.current) return;
+
+      await readChain();
+
+      const provider = providerRef.current;
       provider?.on?.("chainChanged", onChainChanged);
+      window.addEventListener("focus", onFocus);
+      detach = () => {
+        try {
+          provider?.removeListener?.("chainChanged", onChainChanged);
+        } catch {
+          /* provider gone */
+        }
+        window.removeEventListener("focus", onFocus);
+      };
+
+      interval = setInterval(() => void readChain(), POLL_INTERVAL_MS);
+      // Independent of the poll: re-render so staleness itself is visible promptly.
+      staleTicker = setInterval(() => setTick((t) => t + 1), 2_000);
     })();
 
     return () => {
-      cancelled = true;
-      try {
-        provider?.removeListener?.("chainChanged", onChainChanged);
-      } catch {
-        /* provider gone; nothing to detach */
-      }
+      aliveRef.current = false;
+      if (interval) clearInterval(interval);
+      if (staleTicker) clearInterval(staleTicker);
+      detach?.();
     };
-  }, [isConnected, connector, accountChainId]);
+  }, [isConnected, connector, accountChainId, readChain]);
 
-  return resolveArcGuard({
+  const guard = resolveArcGuard({
     isConnected,
     accountChainId,
-    probedChainId: probed,
+    probedChainId: probe.chainId,
+    probedAt: probe.at,
+    now: Date.now(),
     arcId: arc.id,
+    maxProbeAgeMs: MAX_PROBE_AGE_MS,
   });
+
+  // Exposed so a switch attempt can ask for an immediate reading. It is a latency
+  // optimisation ONLY -- the switch handler cannot make the UI usable by calling it,
+  // because only an observed, fresh Arc reading yields `ok`.
+  return { ...guard, reverify: () => void readChain() };
 }

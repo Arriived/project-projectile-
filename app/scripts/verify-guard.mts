@@ -1,81 +1,131 @@
 // Walks the fail-closed truth table for resolveArcGuard().
 //
-// WHY THIS EXISTS. WalletBar used wagmi's `useChainId()`, which returns the CONFIG's
-// chain rather than the WALLET's, and wagmi deliberately refuses to move config state to
-// an unconfigured chain (@wagmi/core createConfig.js: "If chain is not configured, then
-// don't switch over to it"). With a single-chain config that made `chainId === arc.id`
-// structurally always true and the wrong-network branch unreachable. Connecting a wallet
-// on Ethereum Mainnet showed a green "Arc Testnet" pill.
+// WHY THIS EXISTS -- two bugs, both fail-open, both found on a real wallet.
 //
-// The browser reproduction that caught it was a one-off with an injected provider. This
-// is the version that runs every time.
+// 1. WalletBar used wagmi's `useChainId()`, which returns the CONFIG's chain rather than
+//    the WALLET's, and wagmi refuses to move config state to an unconfigured chain
+//    (@wagmi/core createConfig.js: "If chain is not configured, then don't switch over to
+//    it"). With a single-chain config that made the wrong-network branch unreachable.
+//    A wallet on Ethereum Mainnet showed a green "Arc Testnet" pill.
+//
+// 2. The first fix probed once and then waited for `chainChanged`. Reproduced with an
+//    injected provider: change the chain WITHOUT emitting the event and the app made ZERO
+//    further reads -- green and transactable indefinitely on the wrong chain. The same
+//    defect is why clicking "switch" could turn the UI green without the switch
+//    completing: any path that concludes "on Arc" from something other than a
+//    present-tense reading is fail-open.
 //
 // Run: npm run verify:guard
 //
-// To prove it can go red: in lib/arcGuard.ts, change the `probedChainId === undefined`
-// branch to return `{ status: "ok", canTransact: true, ... }` -- i.e. treat "unconfirmed"
-// as usable, the exact fail-OPEN mistake -- and row 6 fails.
+// To prove it can go red, three independent mutations, each hitting a different row:
+//   a) in lib/arcGuard.ts make `probedChainId === undefined` return ok  -> row 6 fails
+//   b) delete the staleness check                                       -> rows 9, 10 fail
+//   c) delete the `accountChainId !== arcId` check                      -> row 7 fails
+// Each is also caught by the final invariant, which is the check that survives someone
+// updating row expectations to match broken behaviour.
 
-import { resolveArcGuard } from "../src/lib/arcGuard.ts";
+import { resolveArcGuard, MAX_PROBE_AGE_MS } from "../src/lib/arcGuard.ts";
 
 const ARC = 5042002;
 const MAINNET = 1;
+const NOW = 1_000_000_000;
+const FRESH = NOW - 1_000;
+const STALE = NOW - (MAX_PROBE_AGE_MS + 5_000);
 
-type Row = {
-  name: string;
-  input: Parameters<typeof resolveArcGuard>[0];
-  expectStatus: string;
-  expectCanTransact: boolean;
-};
+type Input = Parameters<typeof resolveArcGuard>[0];
+type Row = { name: string; input: Input; expectStatus: string; expectCanTransact: boolean };
+
+const base = { now: NOW, arcId: ARC };
 
 const rows: Row[] = [
   {
     name: "not connected",
-    input: { isConnected: false, accountChainId: undefined, probedChainId: undefined, arcId: ARC },
+    input: { ...base, isConnected: false, accountChainId: undefined, probedChainId: undefined, probedAt: undefined },
     expectStatus: "disconnected",
     expectCanTransact: false,
   },
   {
     name: "not connected, but a stale chain id lingers -> still disconnected",
-    input: { isConnected: false, accountChainId: ARC, probedChainId: ARC, arcId: ARC },
+    input: { ...base, isConnected: false, accountChainId: ARC, probedChainId: ARC, probedAt: FRESH },
     expectStatus: "disconnected",
     expectCanTransact: false,
   },
   {
-    name: "THE ORIGINAL BUG: connected on Ethereum Mainnet",
-    input: { isConnected: true, accountChainId: MAINNET, probedChainId: MAINNET, arcId: ARC },
+    name: "BUG 1: connected on Ethereum Mainnet",
+    input: { ...base, isConnected: true, accountChainId: MAINNET, probedChainId: MAINNET, probedAt: FRESH },
     expectStatus: "wrong",
     expectCanTransact: false,
   },
   {
     name: "connected, wagmi reports no chain at all -> fail closed",
-    input: { isConnected: true, accountChainId: undefined, probedChainId: undefined, arcId: ARC },
+    input: { ...base, isConnected: true, accountChainId: undefined, probedChainId: undefined, probedAt: undefined },
     expectStatus: "unknown",
     expectCanTransact: false,
   },
   {
     name: "connected, wagmi says Arc but the probe says mainnet -> the probe wins",
-    input: { isConnected: true, accountChainId: ARC, probedChainId: MAINNET, arcId: ARC },
+    input: { ...base, isConnected: true, accountChainId: ARC, probedChainId: MAINNET, probedAt: FRESH },
     expectStatus: "wrong",
     expectCanTransact: false,
   },
   {
     name: "connected, wagmi says Arc, probe refused to answer -> fail closed",
-    input: { isConnected: true, accountChainId: ARC, probedChainId: undefined, arcId: ARC },
+    input: { ...base, isConnected: true, accountChainId: ARC, probedChainId: undefined, probedAt: undefined },
     expectStatus: "unknown",
     expectCanTransact: false,
   },
   {
     name: "connected, wagmi says mainnet, probe says Arc -> still not usable",
-    input: { isConnected: true, accountChainId: MAINNET, probedChainId: ARC, arcId: ARC },
+    input: { ...base, isConnected: true, accountChainId: MAINNET, probedChainId: ARC, probedAt: FRESH },
     expectStatus: "wrong",
     expectCanTransact: false,
   },
   {
-    name: "BOTH sources positively agree on Arc -- the only transactable row",
-    input: { isConnected: true, accountChainId: ARC, probedChainId: ARC, arcId: ARC },
+    name: "BOTH sources agree on Arc and the reading is FRESH -- the only transactable row",
+    input: { ...base, isConnected: true, accountChainId: ARC, probedChainId: ARC, probedAt: FRESH },
     expectStatus: "ok",
     expectCanTransact: true,
+  },
+
+  // ── the two rows the real-wallet session demanded ────────────────────────────
+
+  {
+    // BUG 2a. The user clicks "Switch to Arc", the wallet reports success, but the switch
+    // never completed. Nothing may conclude "Arc" from the ATTEMPT -- only from a reading.
+    // Here the attempt has happened and the freshest reading still says mainnet.
+    name: "SWITCH ATTEMPTED BUT NOT COMPLETED: attempt reported ok, probe still says mainnet",
+    input: { ...base, isConnected: true, accountChainId: ARC, probedChainId: MAINNET, probedAt: FRESH },
+    expectStatus: "wrong",
+    expectCanTransact: false,
+  },
+  {
+    // BUG 2b. The check passed, then the wallet moved and emitted no event. The last
+    // reading agrees with Arc but is old. Agreement is not enough; it must be CURRENT.
+    name: "CHAIN CHANGED AFTER A SUCCESSFUL CHECK: last reading said Arc but has gone stale",
+    input: { ...base, isConnected: true, accountChainId: ARC, probedChainId: ARC, probedAt: STALE },
+    expectStatus: "unknown",
+    expectCanTransact: false,
+  },
+  {
+    // The boundary, so the staleness bound is a real number rather than a vibe.
+    name: "reading exactly at the age limit is still usable",
+    input: { ...base, isConnected: true, accountChainId: ARC, probedChainId: ARC, probedAt: NOW - MAX_PROBE_AGE_MS },
+    expectStatus: "ok",
+    expectCanTransact: true,
+  },
+  {
+    name: "one millisecond past the limit is not",
+    input: { ...base, isConnected: true, accountChainId: ARC, probedChainId: ARC, probedAt: NOW - MAX_PROBE_AGE_MS - 1 },
+    expectStatus: "unknown",
+    expectCanTransact: false,
+  },
+  {
+    // Staleness must not launder a DISAGREEMENT into a mere "unknown": a stale reading
+    // of mainnet is still positive evidence of mainnet, and must keep offering the switch.
+    name: "stale AND disagreeing -> wrong, not unknown (disagreement outranks staleness)",
+    input: { ...base, isConnected: true, accountChainId: ARC, probedChainId: MAINNET, probedAt: STALE },
+    expectStatus: "wrong",
+    expectCanTransact: false,
   },
 ];
 
@@ -90,18 +140,27 @@ for (const row of rows) {
   );
 }
 
-// The invariant that matters more than any single row: exactly one input shape may be
-// transactable. If a future edit widens that, this fails even if every row above was
-// updated to match the new behaviour.
-const transactable = rows.filter((r) => resolveArcGuard(r.input).canTransact);
-const onlyRowIsBothAgree =
-  transactable.length === 1 &&
-  transactable[0].input.accountChainId === ARC &&
-  transactable[0].input.probedChainId === ARC;
-if (!onlyRowIsBothAgree) failures++;
+// The invariant that outranks any single row: a transactable verdict requires a probe
+// that is present, equal to Arc, AND fresh. If a future edit widens that, this fails even
+// if every row above was updated to match the new behaviour.
+const bad = rows
+  .map((r) => ({ r, g: resolveArcGuard(r.input) }))
+  .filter(
+    ({ r, g }) =>
+      g.canTransact &&
+      !(
+        r.input.isConnected &&
+        r.input.accountChainId === ARC &&
+        r.input.probedChainId === ARC &&
+        r.input.probedAt !== undefined &&
+        NOW - r.input.probedAt <= MAX_PROBE_AGE_MS
+      )
+  );
+const invariantHolds = bad.length === 0;
+if (!invariantHolds) failures++;
 console.log(
-  `  ${onlyRowIsBothAgree ? "PASS" : "FAIL"}  exactly one row is transactable, and it is the both-agree row` +
-    `  — ${transactable.length} transactable`
+  `  ${invariantHolds ? "PASS" : "FAIL"}  canTransact implies a present, matching, FRESH probe` +
+    `  — ${bad.length} violation(s)`
 );
 
 console.log(`\n${rows.length + 1 - failures}/${rows.length + 1} checks passed`);
