@@ -20,3 +20,8 @@ guard-coverage.jsonl
 
 # The mutation lease. Never commit it -- its presence is what blocks a commit.
 .mutation-lease
+
+# Vite build output for the React app (app/). node_modules and .env.local are
+# already covered by the patterns above, which match at any depth.
+app/dist/
+app/tsconfig.tsbuildinfo

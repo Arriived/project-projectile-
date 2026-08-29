@@ -857,6 +857,19 @@ command** or the hook is inert. Verified to actually block: with a lease present
 - **Never claim it is bulletproof.** State what was tested, what was found, and what would still worry you with real money on it.
 - Arc's `eth_estimateGas` returns **no margin** — always send with headroom. This will hit the frontend.
 - Arc RPC requires `batchMaxCount: 1` in every raw ethers.js provider config.
+  **⚠ WAS TRUE, NOW UNVERIFIED — keep the setting, distrust the reason.** Measured
+  29 August 2026: a hand-rolled 2-request JSON-RPC batch to `https://rpc.testnet.arc.io`
+  returned **HTTP 200 with both results** (`eth_chainId` → `0x4cef52`, `eth_blockNumber`),
+  so the blanket claim does not hold today at that size on that host.
+  **This is not permission to turn batching on.** What was actually measured is one batch,
+  of two, on one endpoint, while idle. Not tested: larger batches, ethers' own framing and
+  batch sizing, the other RPC hosts, or **any of it under load** — and rate limiting on
+  this endpoint is documented as real and severe (§8: the backfill stalled 150s at a time).
+  The original rule was recorded without its evidence, which is why it cannot simply be
+  deleted: **if it was added because batching failed under conditions nobody wrote down,
+  those conditions still exist.** viem's `http()` transport defaults batching to **off**,
+  so the safe posture is free — take it, and leave this entry standing until someone
+  reproduces the original failure or proves it gone under load.
 - USDC is 6 decimals in contract amounts.
 - Fees are read per-token from `curves()`, never assumed global.
 - Never put raw private keys in browser storage.
