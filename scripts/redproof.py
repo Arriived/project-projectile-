@@ -141,6 +141,20 @@ def mut_remove_symbol_lock(s):
     return s.replace(b, "        // MUTATED: symbol lock write removed")
 
 
+R17_ERR_ANCHOR = '    error ZeroAmount();'
+R17_PAUSE_ANCHOR = '    function pause() external onlyOwner {'
+R17_OVERRIDE = '    /// MUTATED: R17 candidate fix.\n    function renounceOwnership() public pure override {\n        revert OwnershipCannotBeRenounced();\n    }\n\n'
+
+
+def mut_r17_block_renounce(s):
+    """R17 candidate fix: override renounceOwnership() to revert. Measurement -- how
+    many bytes does closing the one-transaction permanent-freeze footgun cost?"""
+    a = _anchor(s, R17_ERR_ANCHOR)
+    s = s.replace(a, a + "\n    error OwnershipCannotBeRenounced(); // MUTATED")
+    b = _anchor(s, R17_PAUSE_ANCHOR)
+    return s.replace(b, R17_OVERRIDE + b)
+
+
 def mut_multicurve_claim_prank(s):
     a = _anchor(s, "        vm.prank(creator);")
     return s.replace(a, "        // MUTATED: prank removed, restoring the dead-claim bug")
@@ -218,6 +232,12 @@ MUTATIONS = {
         "suite": None,
         "fn": mut_remove_symbol_lock,
         "doc": "cuts the symbol lock out; gas/bytes measurement, lock tests go red",
+    },
+    "r17-block-renounce": {
+        "file": SRC,
+        "suite": None,
+        "fn": mut_r17_block_renounce,
+        "doc": "R17 candidate fix: renounceOwnership() reverts. Byte-cost measurement",
     },
     "multicurve-claim-prank": {
         "file": MULTI_HANDLER,
