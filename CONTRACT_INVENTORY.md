@@ -91,7 +91,6 @@ mention. That list is what to read after any contract change.
 | `createToken(string name, string symbol, string metadataURI, bytes32 expectedEconomicsHash, bool poolBoostEnabled) -> (address)` | nonpayable |
 | `creatorLaunchBuy(address token, uint256 usdcIn, uint256 minTokensOut)` | nonpayable |
 | `graduate(address token)` | nonpayable |
-| `renounceOwnership()` | nonpayable |
 | `sell(address token, uint256 tokensIn, uint256 minUsdcOut)` | nonpayable |
 | `transferOwnership(address newOwner)` | nonpayable |
 | `updateMetadataURI(address token, string newURI)` | nonpayable |
@@ -110,6 +109,7 @@ mention. That list is what to read after any contract change.
 | `paused() -> (bool)` |
 | `quoteBuy(address token, uint256 usdcIn) -> (tuple)` |
 | `quoteSell(address token, uint256 tokensIn) -> (tuple)` |
+| `renounceOwnership()` |
 | `snipeTaxTable(uint32 version) -> (uint16[])` |
 | `usdc() -> (address)` |
 
@@ -117,79 +117,80 @@ mention. That list is what to read after any contract change.
 
 `BPS_DENOMINATOR`, `BURN_ADDRESS`, `CURVE_TOKEN_SUPPLY`, `INITIAL_VIRTUAL_TOKEN_RESERVES`, `INITIAL_VIRTUAL_USDC_RESERVES`, `LP_TOKEN_RESERVE`, `MAX_FEE_BPS`, `MAX_TOTAL_FEE_BPS`, `ROUTER_TIMELOCK`, `TOTAL_TOKEN_SUPPLY`, `activeSnipeTaxTableVersion`, `caseSensitiveSymbols`, `creationFeeUsdc`, `creatorFeesAccrued`, `creatorLaunchWindow`, `defaultBuyFeeBps`, `defaultCreatorBuyFeeBps`, `defaultCreatorSellFeeBps`, `defaultGraduationThresholdUsdc`, `defaultSellFeeBps`, `defaultSnipeTaxTreasuryBps`, `lastLaunchTimestamp`, `launchCooldown`, `lpRecipient`, `maxCreatorLaunchBps`, `router`, `routerProposedAt`, `snipeTaxTableMaxBps`, `symbolLockDuration`, `symbolUnlocksAt`, `treasury`, `treasuryFeesAccrued`
 
-### Custom errors (35)
+### Custom errors (36)
 
 | error | thrown where |
 |---|---|
-| `BaseFeeCeilingExceeded()` | L311 |
-| `BpsExceedsDenominator()` | L279, L786 |
-| `ClampCostExceededOffer()` | L414 |
-| `ClampInputExceededOffer()` | L553 |
-| `CreatorAllocationUsed()` | L482 |
-| `CreatorBuyShareExceedsFee()` | L778 |
-| `CreatorSellShareExceedsFee()` | L779 |
-| `CurveMathError()` | L390, L532 |
-| `CurveNotActive(uint8 state)` | L478, L508, L559, L700, L708 |
-| `EconomicsChanged()` | L312 |
+| `BaseFeeCeilingExceeded()` | L312 |
+| `BpsExceedsDenominator()` | L280, L787 |
+| `ClampCostExceededOffer()` | L415 |
+| `ClampInputExceededOffer()` | L554 |
+| `CreatorAllocationUsed()` | L483 |
+| `CreatorBuyShareExceedsFee()` | L779 |
+| `CreatorSellShareExceedsFee()` | L780 |
+| `CurveMathError()` | L391, L533 |
+| `CurveNotActive(uint8 state)` | L479, L509, L560, L701, L709 |
+| `EconomicsChanged()` | L313 |
 | `EnforcedPause()` | declared, never thrown |
 | `ExpectedPause()` | declared, never thrown |
-| `FeeBelowCreatorShare()` | L768 |
-| `FeeExceedsCeiling()` | L766 |
-| `GraduationFailed()` | L694 |
-| `LaunchCooldownActive(uint256 readyAt)` | L313 |
-| `LaunchWindowClosed(uint256 closedAt)` | L477 |
-| `NotCreator()` | L420, L476 |
-| `NotReadyToGraduate(uint8 state)` | L692 |
-| `NothingToClaim()` | L630, L638 |
+| `FeeBelowCreatorShare()` | L769 |
+| `FeeExceedsCeiling()` | L767 |
+| `GraduationFailed()` | L695 |
+| `LaunchCooldownActive(uint256 readyAt)` | L314 |
+| `LaunchWindowClosed(uint256 closedAt)` | L478 |
+| `NotCreator()` | L421, L477 |
+| `NotReadyToGraduate(uint8 state)` | L693 |
+| `NothingToClaim()` | L631, L639 |
 | `OwnableInvalidOwner(address owner)` | declared, never thrown |
 | `OwnableUnauthorizedAccount(address account)` | declared, never thrown |
+| `OwnershipCannotBeRenounced()` | L834 |
 | `ReentrancyGuardReentrantCall()` | declared, never thrown |
-| `RouterNotProposed()` | L750 |
-| `RouterNotSet()` | L309, L693 |
-| `RouterTimelockPending(uint256 activatableAt)` | L751 |
+| `RouterNotProposed()` | L751 |
+| `RouterNotSet()` | L310, L694 |
+| `RouterTimelockPending(uint256 activatableAt)` | L752 |
 | `SafeERC20FailedOperation(address token)` | declared, never thrown |
-| `SlippageExceeded(uint256 received, uint256 minRequested)` | L491, L516, L566 |
-| `SnipeTaxCeilingExceeded()` | L252 |
-| `SymbolLocked(uint256 unlocksAt)` | L319 |
-| `TradingNotOpenYet()` | L509, L560 |
-| `UnknownToken()` | L267, L419, L475, L507, L558, L691, L699, L707, L714, L720 |
-| `UsdcTransferMismatch()` | L456 |
-| `ZeroAddress()` | L211, L742, L748, L758, L802, L828 |
-| `ZeroAmount()` | L479, L510, L561 |
+| `SlippageExceeded(uint256 received, uint256 minRequested)` | L492, L517, L567 |
+| `SnipeTaxCeilingExceeded()` | L253 |
+| `SymbolLocked(uint256 unlocksAt)` | L320 |
+| `TradingNotOpenYet()` | L510, L561 |
+| `UnknownToken()` | L268, L420, L476, L508, L559, L692, L700, L708, L715, L721 |
+| `UsdcTransferMismatch()` | L457 |
+| `ZeroAddress()` | L212, L743, L749, L759, L803, L829 |
+| `ZeroAmount()` | L480, L511, L562 |
 
 ### Events (30)
 
 | event | emitted at |
 |---|---|
-| `CaseSensitiveSymbolsSet(bool caseSensitive)` | L824 |
-| `CreationFeeSet(uint256 oldValue, uint256 newValue)` | L797 |
-| `CreatorFeeAccrued(address token, address creator, uint256 amount)` | L624 |
-| `CreatorFeesClaimed(address creator, uint256 amount)` | L641 |
-| `CreatorLaunchBuy(address token, address creator, uint256 usdcSpent, uint256 tokensReceived, uint256 bpsOfCurveSupply)` | L494 |
-| `CreatorLaunchWindowSet(uint32 creatorLaunchWindow)` | L793 |
-| `DefaultCreatorFeesSet(uint16 creatorBuyFeeBps, uint16 creatorSellFeeBps)` | L782 |
-| `DefaultFeesSet(uint16 oldBuyFeeBps, uint16 newBuyFeeBps, uint16 oldSellFeeBps, uint16 newSellFeeBps)` | L769 |
-| `DefaultGraduationThresholdSet(uint256 oldValue, uint256 newValue)` | L818 |
-| `DefaultSnipeTaxTreasuryBpsSet(uint16 treasuryBps)` | L281 |
-| `Graduated(address token, uint256 tokenLiquidity, uint256 usdcLiquidity, uint256 lpTokensBurned)` | L680 |
-| `GraduationAttemptFailed(address token)` | L465 |
-| `GraduationReady(address token)` | L464 |
-| `LaunchCooldownSet(uint256 oldValue, uint256 newValue)` | L808 |
-| `LpRecipientSet(address oldRecipient, address newRecipient)` | L803 |
-| `MaxCreatorLaunchBpsSet(uint16 maxCreatorLaunchBps)` | L788 |
-| `MetadataURIUpdated(address token, address creator, string oldURI, string newURI)` | L424 |
+| `CaseSensitiveSymbolsSet(bool caseSensitive)` | L825 |
+| `CreationFeeSet(uint256 oldValue, uint256 newValue)` | L798 |
+| `CreatorFeeAccrued(address token, address creator, uint256 amount)` | L625 |
+| `CreatorFeesClaimed(address creator, uint256 amount)` | L642 |
+| `CreatorLaunchBuy(address token, address creator, uint256 usdcSpent, uint256 tokensReceived, uint256 bpsOfCurveSupply)` | L495 |
+| `CreatorLaunchWindowSet(uint32 creatorLaunchWindow)` | L794 |
+| `DefaultCreatorFeesSet(uint16 creatorBuyFeeBps, uint16 creatorSellFeeBps)` | L783 |
+| `DefaultFeesSet(uint16 oldBuyFeeBps, uint16 newBuyFeeBps, uint16 oldSellFeeBps, uint16 newSellFeeBps)` | L770 |
+| `DefaultGraduationThresholdSet(uint256 oldValue, uint256 newValue)` | L819 |
+| `DefaultSnipeTaxTreasuryBpsSet(uint16 treasuryBps)` | L282 |
+| `Graduated(address token, uint256 tokenLiquidity, uint256 usdcLiquidity, uint256 lpTokensBurned)` | L681 |
+| `GraduationAttemptFailed(address token)` | L466 |
+| `GraduationReady(address token)` | L465 |
+| `LaunchCooldownSet(uint256 oldValue, uint256 newValue)` | L809 |
+| `LpRecipientSet(address oldRecipient, address newRecipient)` | L804 |
+| `MaxCreatorLaunchBpsSet(uint16 maxCreatorLaunchBps)` | L789 |
+| `MetadataURIUpdated(address token, address creator, string oldURI, string newURI)` | L425 |
 | `OwnershipTransferred(address previousOwner, address newOwner)` | **declared, never emitted** |
 | `Paused(address account)` | **declared, never emitted** |
-| `PoolBoostAccrued(address token, uint256 amount, uint256 total)` | L621 |
-| `RouterActivated(address router)` | L219, L754 |
-| `RouterProposed(address router, uint256 activatableAt)` | L217, L744 |
-| `RouterRevoked(address router, bool wasLive)` | L762 |
-| `SnipeTaxCollected(address token, address buyer, uint256 toTreasury, uint256 toCurve)` | L446 |
-| `SnipeTaxTablePublished(uint32 version, uint16[] table, uint16 maxBps)` | L258 |
-| `SymbolLockDurationSet(uint256 oldValue, uint256 newValue)` | L813 |
-| `TokenCreated(address token, address creator, string name, string symbol, string metadataURI)` | L364 |
-| `Trade(address token, address trader, bool isBuy, uint256 usdcAmount, uint256 tokenAmount)` | L459, L581 |
-| `TreasuryFeesClaimed(address treasury, uint256 amount)` | L633 |
+| `PoolBoostAccrued(address token, uint256 amount, uint256 total)` | L622 |
+| `RouterActivated(address router)` | L220, L755 |
+| `RouterProposed(address router, uint256 activatableAt)` | L218, L745 |
+| `RouterRevoked(address router, bool wasLive)` | L763 |
+| `SnipeTaxCollected(address token, address buyer, uint256 toTreasury, uint256 toCurve)` | L447 |
+| `SnipeTaxTablePublished(uint32 version, uint16[] table, uint16 maxBps)` | L259 |
+| `SymbolLockDurationSet(uint256 oldValue, uint256 newValue)` | L814 |
+| `TokenCreated(address token, address creator, string name, string symbol, string metadataURI)` | L365 |
+| `Trade(address token, address trader, bool isBuy, uint256 usdcAmount, uint256 tokenAmount)` | L460, L582 |
+| `TreasuryFeesClaimed(address treasury, uint256 amount)` | L634 |
 | `Unpaused(address account)` | **declared, never emitted** |
 
 ---
@@ -260,7 +261,7 @@ mention. That list is what to read after any contract change.
 
 ## CLAUDE.md coverage
 
-Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **84**.
+Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **85**.
 
 Not every one needs prose — a getter for a constant that is already described by
 its constant does not. But anything here that changes BEHAVIOUR and is unexplained
@@ -304,6 +305,7 @@ is the shape of the symbol-lock gap, and should be read as a candidate.
 - `LFX1.NothingToClaim`
 - `LFX1.OwnableInvalidOwner`
 - `LFX1.OwnableUnauthorizedAccount`
+- `LFX1.OwnershipCannotBeRenounced`
 - `LFX1.ReentrancyGuardReentrantCall`
 - `LFX1.RouterNotProposed`
 - `LFX1.RouterNotSet`
