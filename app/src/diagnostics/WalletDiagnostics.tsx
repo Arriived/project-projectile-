@@ -177,20 +177,80 @@ export function WalletDiagnostics() {
       );
     }
 
-    // What wagmi persisted, which is where a stripped connector would come from.
+    // ── Per-origin permissions ───────────────────────────────────────────────
+    // MetaMask supports per-site network selection: with "Selected networks for each
+    // site" on, eth_chainId returns the chain permitted to THIS ORIGIN, which can differ
+    // from the network shown in the extension's own UI. If that is what is happening,
+    // the app is reading the truth and the extension's global UI is the misleading part.
+    await ask(
+      "wallet_getPermissions",
+      async () => {
+        const p = (await connector?.getProvider()) as {
+          request: (a: { method: string }) => Promise<unknown>;
+        };
+        return p.request({ method: "wallet_getPermissions" });
+      },
+      "shows what this ORIGIN is permitted, including any per-site chain scoping"
+    );
+
+    // ── What wagmi persisted ─────────────────────────────────────────────────
+    let persistedChainId: number | undefined;
     try {
       const raw = window.localStorage.getItem("wagmi.store");
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as {
+            state?: { chainId?: number; connections?: { value?: [string, { chainId?: number }][] } };
+          };
+          persistedChainId =
+            parsed.state?.connections?.value?.[0]?.[1]?.chainId ?? parsed.state?.chainId;
+        } catch {
+          /* fall through to the raw dump */
+        }
+      }
       out.push({
-        label: "localStorage wagmi.store",
-        value: raw ? `${raw.slice(0, 300)}${raw.length > 300 ? "…" : ""}` : "(absent)",
+        label: "persisted chainId (localStorage wagmi.store)",
+        value: fmt(persistedChainId),
+        note: "this is what rehydrates into useAccount().chainId on a fresh load",
+      });
+      out.push({
+        label: "wagmi.store (raw)",
+        value: raw ?? "(absent)",
       });
     } catch {
-      out.push({ label: "localStorage wagmi.store", value: "(unreadable)" });
+      out.push({ label: "wagmi.store", value: "(unreadable)" });
     }
+
+    // ── The verdict that decides this ────────────────────────────────────────
+    // The guard's green state requires a LIVE probe returning Arc; a persisted chainId
+    // cannot produce it alone (proved against the pure resolver). So if the UI is green
+    // while the extension shows another network, the provider itself is reporting Arc.
+    const liveRow = out.find((r) => r.label === "eth_chainId via useAccount().connector");
+    const liveSaysArc = liveRow?.value.includes(String(arc.id));
+    out.push({
+      label: "VERDICT",
+      value: liveSaysArc
+        ? "The BOUND PROVIDER itself reports Arc. This is not stale app state — the wallet is answering Arc for this origin."
+        : "The bound provider does NOT report Arc; if the UI is green, that is an app bug.",
+      note: liveSaysArc
+        ? "Most likely MetaMask per-site network selection: this origin is permitted Arc while the extension's global UI shows another network. Check wallet_getPermissions above."
+        : "Report this — it contradicts the resolver, which cannot go green without a live Arc reading.",
+    });
 
     setProbes(out);
     setRunning(false);
   }, [address, accountChainId, configChainId, connector, config, announced, status]);
+
+  const clearPersisted = () => {
+    try {
+      for (const k of Object.keys(window.localStorage)) {
+        if (k.startsWith("wagmi")) window.localStorage.removeItem(k);
+      }
+      window.location.reload();
+    } catch {
+      setSwitchAttempt("could not clear localStorage");
+    }
+  };
 
   const trySwitch = async () => {
     setSwitchAttempt("attempting…");
@@ -260,6 +320,9 @@ export function WalletDiagnostics() {
           </button>
           <button className="btn btn-warn" onClick={trySwitch}>
             Try switch via live connector
+          </button>
+          <button className="btn btn-ghost" onClick={clearPersisted}>
+            Clear persisted wagmi state + reload
           </button>
         </div>
 
