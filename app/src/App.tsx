@@ -36,6 +36,17 @@ export function App() {
           </strong>{" "}
           Nothing can be signed until it is switched. The data below is read from{" "}
           {arc.name} directly and is unaffected.
+          {/* MetaMask scopes networks PER SITE. Its main network selector can read
+              "Ethereum" while this origin is permitted something else, and it is the
+              per-site one that governs what gets signed here. That mismatch cost a full
+              debugging round -- the wallet's own UI said Ethereum while the site was
+              genuinely permitted Arc -- so users hitting it deserve to be told where to
+              look rather than left to conclude the page is broken. */}
+          <span className="banner-aside">
+            Seeing a different network in your wallet? Check the network it lists for{" "}
+            <strong>this site</strong>, not the main selector — wallets can scope networks
+            per site, and the per-site one is what counts here.
+          </span>
         </div>
       )}
 

@@ -179,3 +179,11 @@ body {
   border-radius: 999px;
   background: var(--panel-2);
 }
+
+.banner-aside {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.banner-aside strong { color: var(--warn); }
