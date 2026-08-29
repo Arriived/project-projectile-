@@ -6,10 +6,10 @@
 
 | | |
 |---|---|
-| HEAD **when this was written** | `ba99565` (the deployed commit) |
-| bytecode | **24,030 / 24,576 — 546 free** |
-| tests | **242 Hardhat + 10 fork (FORK=1), 13 Foundry, 13 live Arc-testnet R15 checks** |
-| deployed address | **`0x6d79D90F60B30d527e2DDcBb7fe4f64309bAA15A`** — re-frozen, verified, see §7 |
+| HEAD **when this was written** | `38e3e9e` (the deployed commit) |
+| bytecode | **24,033 / 24,576 — 543 free** |
+| tests | **255 Hardhat + 10 fork (FORK=1), 13 Foundry, 14 live Arc-testnet R15 checks** |
+| deployed address | **`0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`** — re-frozen, verified, see §7 |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
 this file was last updated, not where you are. `git rev-parse --short HEAD` is ground
@@ -37,7 +37,7 @@ missing.
 started without a reason that is written down first. The re-freeze is done, R15 is
 executed, the mechanics are restored (§7A), and the inventory is generated rather than
 hand-maintained. `LFX1` is deployed, verified and recorded at
-**`0x6d79D90F60B30d527e2DDcBb7fe4f64309bAA15A`**; nothing on the contract roadmap is
+**`0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`**; nothing on the contract roadmap is
 outstanding. The critical path is now entirely non-contract: the frontend has not been
 started (§8), and `FRONTEND_BUILD_V2.md` holds the rules it must satisfy.
 
@@ -402,7 +402,7 @@ test that cannot go red. Each entry: **structure** (closed by construction), **p
 | R13 | **`creationFeeUsdc` is absent from `currentEconomicsHash()`** — the one fee the creator pays directly is the one pinning does not cover | **OPEN** | Owner can raise it between the creator seeing terms and their transaction landing; the pinned hash is unchanged so the guard cannot fire. Proven: creator pinned the old terms and paid a 1000x fee. **Exposure is bounded by the creator's approval** — an exact-amount approval is safe, `MaxUint256` is not. The frontend must not approve max for the creation fee. |
 | R14 | USDC or launched tokens sent directly to the factory are **permanently stranded** | **OPEN — unrecoverable** | Every payout path is bounded by accounting, never by balance, so nothing can pay a donation out. Also means §1.10's exact conservation is a **closed-system** property: a donation breaks the equality on-chain, though nothing in the handler performs one. Do not read it as "the factory can never hold unaccounted USDC". |
 | R15 | The one-balance configuration: gas and settlement are the SAME balance | **LARGELY CLOSED — executed on Arc testnet, 13/13** | `scripts/smoke-r15.js`, run against the live deployment. What it proved, on chain rather than arithmetically: a wallet that can afford a trade cannot afford the trade PLUS its gas; a holder left with 0.0016 USDC holds 471 trillion tokens and **cannot afford to sell them**; §1.6's truncation lemma holds on the real token with genuine sub-6dp dust present (726,808,615,422 wei); and `_settleBuy`'s balance-delta check measures **exactly** `actualUsdcIn` against real Arc USDC, in both the 6dp and 18dp views. **Residual:** the delta check ran against a factory carrying NO dust — the factory has no `receive()`, so only a SELFDESTRUCT push (R10) can give it any, and the dusty-factory case is still arithmetic-only. Circle-side controls stay unreachable (R1 pause, R2 user-side blocklist), and Arc mainnet USDC does not exist yet, so testnet-equals-mainnet is unverifiable rather than verified. |
-| R17 | **`renounceOwnership()` is inherited from `Ownable` and is live.** Calling it permanently freezes every setter — including `revokeRouter()`, which §1.5 names as the ONLY hard stop against a malicious router | **OPEN — undocumented until now** | Not mentioned anywhere in this file before the inventory audit found it. There is no code path that calls it, and no test asserts it is unreachable, so it rests entirely on the owner never sending that transaction. Overriding it to revert costs bytes and has not been priced. At minimum: **never call it**, and treat it as the highest-severity single-transaction mistake available to the owner key — worse than a hostile router, because it is irreversible. |
+| R17 | `renounceOwnership()` was inherited from `Ownable` and live — one transaction would have permanently frozen every setter, including `revokeRouter()`, the only hard stop against a malicious router | **CLOSED for the labelled path — the CLASS remains open** | Overridden to revert, **+3 bytes** (24,030 → 24,033), no gas impact on any hot path. Six tests, red-proved via `redproof.py r17-unblock-renounce`. Confirmed reverting on the live deployment. **DO NOT READ THIS AS "the owner cannot brick the contract."** R17 closes the labelled path, not the class: `transferOwnership` to a dead or mistyped address is the same permanent freeze one step removed, and is **not** protected — `Ownable` rejects only `address(0)`, so any other address is accepted. Two of the six tests exist solely to pin that residual, showing `revokeRouter` and `pause` both reverting `OwnableUnauthorizedAccount` afterwards. The unlabelled path is also the more likely mistake: `renounceOwnership()` at least announces itself, while a wrong address in a routine transfer looks like an ordinary transaction and produces an identical outcome — and it is the path the multisig migration will actually use. |
 | R16 | `setTreasury` emits no event | **OPEN — trivial** | Every other setter emits one. An owner redirecting the treasury is invisible to indexers and to monitoring. |
 
 ---
@@ -743,18 +743,18 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| HEAD **when this was written** | `ba99565` (the deployed commit) |
-| bytecode | **24,030 / 24,576 — 546 free** |
-| tests | **242 Hardhat + 10 fork (FORK=1), 13 Foundry, 13 live Arc-testnet R15 checks** |
-| last mutation score | 52/56 = 92.9% — **re-run on this state**, same four survivors, all classified (§5) |
+| HEAD **when this was written** | `38e3e9e` (the deployed commit) |
+| bytecode | **24,033 / 24,576 — 543 free** |
+| tests | **255 Hardhat + 10 fork (FORK=1), 13 Foundry, 14 live Arc-testnet R15 checks** |
+| last mutation score | 52/56 = 92.9% — **re-run on the deployed state (R17 included)**, same four survivors, all classified (§5) |
 
 ## Current deployment — re-frozen
 
 | | |
 |---|---|
-| **LFX1 (the factory)** | **`0x6d79D90F60B30d527e2DDcBb7fe4f64309bAA15A`** — block 59268937 |
-| MockRouter (PLACEHOLDER) | `0x1946B65411450c75c5CB5e039e549Bd37C0f9caA` |
-| GraduationHelper | `0xD17fcFd654219b55124816f8b96e010f9f3c1A3c` — **inert on testnet, see below** |
+| **LFX1 (the factory)** | **`0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`** — block 59366694 |
+| MockRouter (PLACEHOLDER) | `0xFa6CeBb5e50FaFFD1A3bF611392fE255f9ec0cD3` |
+| GraduationHelper | `0x1197BB8324F0338104a00000B043CD9193D5Cd7f` — **inert on testnet, see below** |
 | USDC | `0x3600000000000000000000000000000000000000` |
 | treasury / owner | `0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb` (EOA, deliberate — R8) |
 
@@ -769,8 +769,11 @@ because the other 19 are zeros that match the placeholder. `record-freeze.js` cl
 this rather than reporting a bare mismatch; a difference anywhere the artifact is NOT a
 zero placeholder would be a real discrepancy and must not be waved past.
 
-**SUPERSEDED, must not be published:** `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802` and
-`0x2f7270Fd84871385FBe65531d50D946A8d84aaF9`. The second was live for about an hour before
+**SUPERSEDED, must not be published:** `0xDF714C3bA8Ab3578652E9D066D862fc63AD3F802`,
+`0x2f7270Fd84871385FBe65531d50D946A8d84aaF9` and
+`0x6d79D90F60B30d527e2DDcBb7fe4f64309bAA15A`. Four factory addresses have now existed;
+this is the fifth and the reasons are worth keeping: the first predated the strict-mins
+fix, the second died to the licence header change, the third to the R17 override. The second was live for about an hour before
 the licence change altered the sources and therefore the bytecode. **Any source edit,
 including a comment, moves the address** — the compiler embeds an IPFS metadata hash of the
 sources. Decide licence and header text BEFORE deploying, not after.

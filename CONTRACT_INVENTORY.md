@@ -261,7 +261,7 @@ mention. That list is what to read after any contract change.
 
 ## CLAUDE.md coverage
 
-Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **85**.
+Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **84**.
 
 Not every one needs prose — a getter for a constant that is already described by
 its constant does not. But anything here that changes BEHAVIOUR and is unexplained
@@ -304,7 +304,6 @@ is the shape of the symbol-lock gap, and should be read as a candidate.
 - `LFX1.NotReadyToGraduate`
 - `LFX1.NothingToClaim`
 - `LFX1.OwnableInvalidOwner`
-- `LFX1.OwnableUnauthorizedAccount`
 - `LFX1.OwnershipCannotBeRenounced`
 - `LFX1.ReentrancyGuardReentrantCall`
 - `LFX1.RouterNotProposed`
