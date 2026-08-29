@@ -6,11 +6,11 @@
 
 | | |
 |---|---|
-| HEAD **when this was written** | `12bb6a6` |
+| HEAD **when this was written** | `b0ba1ea` |
 | contract | **FROZEN.** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`, verified, 24,033 / 24,576 — 543 free |
 | tests | **255 Hardhat + 10 fork (`FORK=1`), 13 Foundry, 14 live Arc-testnet R15 checks, 11 anon-key RLS checks** |
 | indexer | **LIVE and at head.** 000 + 001 + 002 applied; backfilled from block 59366694 |
-| database | RLS verified with the **anon** key: view returns **4 rows**, `indexer_state` **401**, writes are **no-ops** |
+| database | RLS verified with the **anon** key: view returns **4 rows**, `indexer_state` **401**, writes are **no-ops**. **Both barriers now confirmed live** — see below. |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
 this file was last updated, not where you are. `git rev-parse --short HEAD` is ground
@@ -42,7 +42,10 @@ navigation** are the product and neither has been written. `terminal.html` is an
 Axiom-style terminal (§7C); `create-token.html` is a single-purpose form. Salvage both,
 ship neither.
 
-`FRONTEND_BUILD_V2.md` holds the eight rules the new pages must satisfy.
+`FRONTEND_BUILD_V2.md` holds the nine rules the new pages must satisfy. Rule 9 is the
+newest and applies squarely to the token page: a launched token is **invisible** in
+MetaMask until it is added, and on Arc the only visible evidence of a successful buy is the
+user's gas-and-settlement balance going down.
 
 ## Three things that fail SILENTLY — read before touching any of them
 
@@ -66,12 +69,36 @@ ship neither.
 
 ## Pending, small, and worth doing first
 
-**Apply the `REVOKE` from `000_base_schema.sql` to the live database, then re-run
-`SUPABASE_ANON_KEY=... node indexer/scripts/verify-anon-access.js`.** Measured: `INSERT`
-returns 401 (no grant) but `DELETE` and `UPDATE` return 204 — anon **holds** those
-privileges and only the absence of an RLS policy stops them. The REVOKE is in the schema
-file but has not been run against the live project, so that protection currently rests on
-one barrier instead of two.
+~~Apply the `REVOKE` from `000_base_schema.sql` to the live database.~~ **DONE — and it
+was already done when this item was written.** Re-measured 29 August against the live
+project with the anon key: **all six write paths return `42501 permission denied`**, on
+both tables.
+
+| path | before (as this file recorded it) | measured now |
+|---|---|---|
+| `INSERT` tokens / trades | 401, no grant | `401` `42501` |
+| `UPDATE` tokens / trades | **204 — grant HELD** | `401` `42501` |
+| `DELETE` tokens / trades | **204 — grant HELD** | `401` `42501` |
+
+Postgres returns the hint `GRANT UPDATE ON public.trades TO anon` on refusal, which is
+positive confirmation the privilege is **absent** rather than merely unexercised. Both
+barriers are live: no grant, and no permissive RLS policy. `verify-anon-access.js` is
+11/11.
+
+**The status code is the whole signal here, and it is the one this file warns about.** A
+`204` means "the grant is held and RLS matched nothing"; a `401`/`42501` means "refused
+before RLS was consulted". Both leave the row count unchanged, so the row-count comparison
+that `verify-anon-access.js` correctly judges *safety* by cannot distinguish *which
+barrier* did the work. That is why the codes above were read out of the response **body**,
+not inferred from the status alone — the two questions need two different probes, and the
+lesson in §8 is about the first question, not this one.
+
+⚠ **How this item came to be wrong is the reusable part.** The REVOKE was applied to the
+live database and the note describing it as pending was written from the *earlier*
+measurement, in the same session, and never re-measured. Nothing was broken by it, but a
+future session would have spent its first move re-applying a change that was already in
+place — and, worse, might have read a green result as evidence its own action worked.
+**Re-measure before recording a state, not before deciding to act.**
 
 ⚠ **PENDING: re-run `scripts/smoke-r15.js` after 3 September** to confirm the state-based
 assertions survive Zero8.
@@ -1118,11 +1145,14 @@ reverted**. Quotes come from `quoteBuy`/`quoteSell` on the contract — §1.3.
     `204` for a DELETE that matched nothing, which is exactly what RLS produces. A first
     version of the check read that as "DELETE ALLOWED" and reported a breach that had not
     happened. Nothing was deleted.
-  - **anon holds DELETE and UPDATE grants; only the missing RLS policy stops them.**
-    Measured: INSERT returns 401 (no grant) but DELETE and UPDATE return 204. Supabase
-    grants broadly to anon by default and `GRANT SELECT` adds rather than replaces, so
-    `000_base_schema.sql` now REVOKEs writes explicitly — two independent barriers instead
-    of one.
+  - **anon USED to hold DELETE and UPDATE grants, with only the missing RLS policy stopping
+    them. That is closed: the REVOKE is applied to the live database.** Supabase grants
+    broadly to anon by default and `GRANT SELECT` adds rather than replaces, which is how
+    the grants survived — DELETE and UPDATE returned 204 (grant held, RLS matched nothing)
+    while INSERT returned 401. Re-measured 29 August: **all six write paths on both tables
+    return `401` / `42501 permission denied`**, so the protection now rests on two
+    independent barriers. See the table under RESUME HERE for the before/after and for why
+    the status code — not the row count — is the signal that separates them.
   - Rate limiting on the public RPC is real and visible: the backfill stalled for 150s at a
     time under `withRetry`'s backoff. A dedicated provider would fix it.
   - Env vars: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `FACTORY_RPC_URL`,
