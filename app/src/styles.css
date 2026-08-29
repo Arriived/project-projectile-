@@ -152,3 +152,30 @@ body {
   color: var(--warn);
 }
 .banner-warn strong { color: #ffd479; }
+
+.wallet-picker { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.btn-wallet {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.wallet-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  display: block;
+}
+
+.wallet-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-2);
+}

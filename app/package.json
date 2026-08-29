@@ -10,7 +10,8 @@
     "typecheck": "tsc -b --noEmit",
     "verify:chain": "node --experimental-strip-types scripts/verify-chain.mts",
     "verify:guard": "node --experimental-strip-types scripts/verify-guard.mts",
-    "verify": "npm run verify:chain && npm run verify:guard"
+    "verify": "npm run verify:chain && npm run verify:guard && npm run verify:wallets",
+    "verify:wallets": "node --experimental-strip-types scripts/verify-wallets.mts"
   },
   "dependencies": {
     "@metamask/connect-evm": "^2.1.1",

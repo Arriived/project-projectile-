@@ -1,4 +1,9 @@
-// Connect / disconnect / switch-chain.
+// Connect / disconnect / switch-chain, and WHICH wallet is connected.
+//
+// The wallet is named throughout, deliberately. With two extensions installed "connected"
+// is not enough information: the address and chain a user sees in one extension may not
+// be the ones this page is bound to, and that ambiguity is exactly what produced the
+// contested-provider bug (lib/wallets.ts).
 //
 // Chain state comes from the ChainProvider, which owns the single guard and the single
 // switch mutation. See lib/arcGuard.ts for the fail-open bugs that shaped the guard.
@@ -11,34 +16,64 @@
 //   - No rejected or abandoned prompt may leave the UI in a lying state
 //     (REACT_REBUILD phase 6).
 
-import { useAccount, useConnect, useDisconnect } from "wagmi";
+import { useAccount, useConnect, useConnectors, useDisconnect } from "wagmi";
 import { arc } from "../chain";
 import { useChain } from "../providers/ChainProvider";
+import { selectWallets, walletLabel, isGenericInjected } from "../lib/wallets";
 
 function short(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
 export function WalletBar() {
-  const { address } = useAccount();
+  const { address, connector } = useAccount();
   const { guard, switchToArc, switching, stuck, inAutoPrompt, switchError } = useChain();
-  const { connect, connectors, isPending: connecting, error: connectError } = useConnect();
+  const { connect, isPending: connecting, error: connectError, variables } = useConnect();
   const { disconnect } = useDisconnect();
 
-  const injectedConnector = connectors[0];
+  // useConnectors is the REACTIVE list: EIP-6963 wallets announce asynchronously after
+  // page load, so a snapshot taken once would miss whichever extension is slower.
+  const allConnectors = useConnectors();
+  const wallets = selectWallets(
+    allConnectors.map((c) => ({
+      uid: c.uid,
+      id: c.id,
+      name: c.name,
+      icon: c.icon,
+      rdns: (c as { rdns?: string | readonly string[] }).rdns,
+    }))
+  );
 
   if (guard.status === "disconnected") {
     return (
       <div className="wallet">
-        <button
-          className="btn"
-          disabled={connecting || !injectedConnector}
-          onClick={() => injectedConnector && connect({ connector: injectedConnector })}
-        >
-          {connecting ? "Check your wallet…" : "Connect wallet"}
-        </button>
+        <div className="wallet-picker">
+          {wallets.length === 0 && (
+            <span className="wallet-err">No wallet extension detected.</span>
+          )}
+          {wallets.map((w) => {
+            const live = allConnectors.find((c) => c.uid === w.uid);
+            const pending = connecting && variables?.connector === live;
+            return (
+              <button
+                key={w.uid}
+                className="btn btn-wallet"
+                disabled={connecting || !live}
+                onClick={() => live && connect({ connector: live })}
+                title={
+                  isGenericInjected(w)
+                    ? "No wallet announced itself; this connects to window.ethereum"
+                    : `Connects specifically to ${w.name}`
+                }
+              >
+                {w.icon && <img src={w.icon} alt="" className="wallet-icon" />}
+                {pending ? "Check your wallet…" : w.name}
+              </button>
+            );
+          })}
+        </div>
         {/* A rejected connection is a decision, not a fault. Say what happened and
-            leave the button live. */}
+            leave the buttons live. */}
         {connectError && (
           <span className="wallet-err" role="status">
             {connectError.name === "UserRejectedRequestError"
@@ -46,12 +81,18 @@ export function WalletBar() {
               : connectError.message.split("\n")[0]}
           </span>
         )}
-        {!injectedConnector && (
-          <span className="wallet-err">No injected wallet detected.</span>
-        )}
       </div>
     );
   }
+
+  const connectedWallet = connector
+    ? walletLabel({
+        uid: connector.uid,
+        id: connector.id,
+        name: connector.name,
+        rdns: (connector as { rdns?: string | readonly string[] }).rdns,
+      })
+    : "Unknown wallet";
 
   return (
     <div className="wallet">
@@ -60,7 +101,7 @@ export function WalletBar() {
           rather than an alarm they are already in the middle of fixing. */}
       {inAutoPrompt ? (
         <span className="wrong-net-label" role="status">
-          Switching to {arc.name} — confirm in your wallet…
+          Switching to {arc.name} — confirm in {connectedWallet}…
         </span>
       ) : (
         !guard.canTransact && (
@@ -88,6 +129,13 @@ export function WalletBar() {
           </div>
         )
       )}
+
+      {/* Naming the wallet is not decoration. It is how a user with two extensions knows
+          which one this page is actually talking to. */}
+      <span className="wallet-name" title="The wallet this page is bound to">
+        {connector?.icon && <img src={connector.icon} alt="" className="wallet-icon" />}
+        {connectedWallet}
+      </span>
 
       <span className={`net-pill ${guard.canTransact ? "ok" : "bad"}`}>
         {guard.canTransact
