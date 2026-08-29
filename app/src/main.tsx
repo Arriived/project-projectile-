@@ -7,6 +7,7 @@ import { config } from "./wagmi";
 import { App } from "./App";
 import { ChainProvider } from "./providers/ChainProvider";
 import { WalletDiagnostics } from "./diagnostics/WalletDiagnostics";
+import { BrowserRouter } from "react-router-dom";
 import "./styles.css";
 
 // One QueryClient for the app. wagmi is built on React Query, so wagmi's reads and our
@@ -43,9 +44,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         {diagnostics ? (
           <WalletDiagnostics />
         ) : (
-          <ChainProvider>
-            <App />
-          </ChainProvider>
+          <BrowserRouter>
+            <ChainProvider>
+              <App />
+            </ChainProvider>
+          </BrowserRouter>
         )}
       </QueryClientProvider>
     </WagmiProvider>

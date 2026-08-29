@@ -87,3 +87,37 @@ export function safeText(s: string | null | undefined, maxLen = 64): string {
   const collapsed = stripped.replace(/\s+/g, " ").trim();
   return collapsed.length > maxLen ? `${collapsed.slice(0, maxLen)}…` : collapsed;
 }
+
+/**
+ * Converts an indexer numeric field to BigInt, ACKNOWLEDGING the precision already lost.
+ *
+ * TRAP 21, and it reaches further than reserves. PostgREST serialises uint256 columns as
+ * JSON numbers, so a value crosses the wire having already been truncated: a real
+ * `token_amount` arrives as `1.5314653330234164e+23`, with its low digits gone. `BigInt()`
+ * accepts it without complaint because it is a whole number by the time JavaScript sees
+ * it -- there is nothing left for a guard to catch.
+ *
+ * For a trades FEED that is acceptable: it is a display figure and the error is ~1e-16
+ * relative. It is NOT acceptable anywhere a user acts on the number, which is why every
+ * quote, balance and reserve on this page is read from the chain instead.
+ *
+ * The name carries the warning, because no runtime check can.
+ */
+export function approxBigIntFromIndexer(v: string | number | bigint): bigint {
+  if (typeof v === "bigint") return v;
+  // A string has NOT lost precision -- PostgREST sends those for some column types, and
+  // when it does the value is exact.
+  if (typeof v === "string") {
+    try {
+      return BigInt(v);
+    } catch {
+      return 0n;
+    }
+  }
+  if (!Number.isFinite(v)) return 0n;
+  try {
+    return BigInt(Math.trunc(v));
+  } catch {
+    return 0n;
+  }
+}
