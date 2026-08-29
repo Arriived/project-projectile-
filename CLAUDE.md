@@ -973,6 +973,116 @@ coming out of that same balance, at every step.
 
 ---
 
+# 9. ARC PLATFORM REFERENCE
+
+**Arc's docs are ground truth. This section is a CACHE and it will go stale.** Every fact
+below carries its source page. Before relying on any of it, re-read the page — doing exactly
+that has caught errors every time this project has done it, and these values are explicitly
+testnet-only in places.
+
+**Verified 29 August 2026** against `docs.arc.io`, four pages read in full:
+`/arc/references/evm-differences`, `/arc/references/gas-and-fees`,
+`/integrate/defi/amm-and-pools`, `/integrate/infrastructure/indexing-events`. Anything not
+from those four pages is not verified and is not recorded here.
+
+**There is an MCP server at `https://docs.arc.io/mcp`** — HTTP transport, no
+authentication, exposing search and get-page over the docs. Connecting it removes the
+stale-cache risk this section introduces. See §6 of the tooling note below.
+
+## 9.1 EVM differences — `/arc/references/evm-differences`
+
+| behaviour | Arc |
+|---|---|
+| `PREVRANDAO` | *"Always returns `0`"*. *"No onchain randomness. Use an oracle or verifiable random function (VRF)."* |
+| `SELFDESTRUCT` | EIP-6780 plus native value rules; **emits a `Transfer` log on success**. Account fully deleted only if created in the same transaction. Reverts when the beneficiary is the contract itself with a balance, the zero address with a balance, blocklisted, or already self-destructed. |
+| `SELFDESTRUCT` and USDC | *"a contract's USDC is its native balance, held in the account, so `SELFDESTRUCT` transfers it to the beneficiary"* — unlike chains where ERC-20 USDC stays in the token contract. |
+| Call to a self-destructed account | **The largest semantic departure.** A non-zero-value call **reverts**. On Ethereum, sending value to an address that self-destructed earlier in the same transaction succeeds; on Arc it is *"treated as a transfer to a destructed account, a forbidden burn, and reverts"*. |
+| Transfers to `0x0` | *"A value-bearing transfer to `0x0` reverts with `"Zero address not allowed"`; a zero-value transfer to `0x0` succeeds."* |
+| Native value to a contract | *"Sending native value to a contract is not guaranteed to succeed."* A call forwarding native value can revert, which *"breaks a common DeFi assumption."* |
+| EIP-7702, `CREATE2`, EIP-2935 | *"all behave as on Ethereum."* |
+| EIP-4788 | Beacon root set to the parent execution block hash; **the beacon-roots contract is omitted, so reads return empty (`0x`)**. |
+| Blob transactions | *"Not supported; the mempool rejects type-3 transactions."* |
+
+**Known limitation, fix planned:** *"A transfer that would leave an account with a zero
+balance, a zero nonce, and no code currently reverts."* Reachable in practice only through a
+USDC meta-transaction that fully drains a brand-new account. We have no meta-transaction
+path, so it does not reach us — but a frontend that ever adds one must know.
+
+## 9.2 AMM porting — `/integrate/defi/amm-and-pools`
+
+**Step 4, the allowance warning:** *"ERC-20 allowances control transfers initiated through
+`transferFrom`. They do not gate direct native transfers."* And: *"Any sweep mechanism or
+authorization boundary that relies on ERC-20 allowance limits to protect the contract's
+native USDC balance is ineffective."*
+
+The docs prescribe two mitigations: mark functions `nonpayable`, or add an explicit
+`receive()` that reverts or records the incoming balance. **We do the first**, and having no
+`receive()` at all produces the same refusal as a reverting one — see §9.4.
+
+**No WETH-style wrapping.** *"Any WETH-style wrap/unwrap code paths are unnecessary and
+create double-accounting bugs by crediting balances twice."* We never wrap; USDC is used
+directly at `0x3600...0000`.
+
+## 9.3 Indexing — `/integrate/infrastructure/indexing-events`
+
+- **Ordering:** *"Always use `blockNumber` (and `logIndex` in a block) as your canonical
+  ordering key."* And explicitly: *"Do not use `block.timestamp` for ordering. Two
+  consecutive blocks (for example, block 100 and block 101) may both have
+  `timestamp = 1700000000`."*
+- **Finality:** *"Arc provides deterministic finality. Once a block appears, it is
+  permanent."* Remove *"reorg detection and rollback logic, confirmation-depth delays,
+  uncle/ommer block handling, and chain reorganization event listeners."* *"You do not need
+  to wait for N confirmations."*
+- **Restart:** *"If your indexer restarts, resume from the last processed block number. You
+  do not need to re-validate previously indexed blocks because they cannot be reverted."*
+- **Blocklist events**, from the USDC contract at `0x3600000000000000000000000000000000000000`:
+  `Blocklisted(address indexed account)` and `UnBlocklisted(address indexed account)`.
+- **The dual emitter.** Every native USDC movement emits an EIP-7708 `Transfer` from the
+  system address **`0xfffffffffffffffffffffffffffffffffffffffe`** at **18 decimals**; the
+  ERC-20 contract emits its own at **6 decimals**. One ERC-20 transfer produces a log from
+  **both**. Anything reading USDC transfers must **dedupe by emitter** or it double-counts
+  every movement at two different scales.
+- **Throughput:** *"Arc produces sub-second blocks. Your ingestion pipeline must handle
+  bursts of many blocks per second without falling behind."*
+
+## 9.4 What this means for OUR contracts — all confirmed, none changed
+
+The contract is frozen and deployed. Every line below was **checked against the source**,
+not assumed:
+
+| claim | status |
+|---|---|
+| No block-derived entropy anywhere | **Confirmed.** No `PREVRANDAO`, `block.difficulty`, `blockhash` or block-modulo in `contracts/`, `scripts/`, `indexer/` or `frontend/`. |
+| `LFX1` and `GraduationHelper` never call `SELFDESTRUCT` | **Confirmed.** No `selfdestruct` or `suicide` in any contract. |
+| Nothing sends native value to `0x0` | **Confirmed.** Our contracts send **no native value at all** — no `{value:}`, no `.transfer()`, no `.send()`, no `payable()`. Every `address(0)` occurrence is a *validation guard*, never a destination. |
+| `BURN_ADDRESS` is `0x...dEaD`, not `0x0` | **Confirmed**, `LFX1.sol:25`. Correct: a value-bearing transfer to `0x0` would revert. |
+| No allowance-based protection of our own native balance | **Confirmed.** All six approve sites are `forceApprove(router, ...)` — outbound grants so the router can pull at graduation. Nothing relies on an allowance to *protect* our balance; §1.6's balance-delta measurement does that, and it reads the balance rather than an allowance. |
+
+**The absence of `receive()` / `fallback()` is now a DELIBERATE property, not an accident.**
+`/integrate/defi/amm-and-pools` prescribes either `nonpayable` functions or a reverting
+`receive()`. We have no payable function, no `receive()` and no `fallback()`, so a plain
+native send to the factory reverts — the same outcome as a reverting `receive()`, with no
+code. **Do not add one.** The residual is unchanged and already recorded as R10: a
+`SELFDESTRUCT` push can still deposit native dust, because that path does not call the
+recipient.
+
+---
+
+# 10. MAINNET CHECKLIST — all currently unknown or testnet-only
+
+Nothing here is verified. Each is a thing that must be re-checked when Arc mainnet exists,
+and none of it should be hardcoded before then.
+
+| item | current state |
+|---|---|
+| **Mainnet chain ID** | **UNSOURCED.** Testnet is `5042002`. A secondary source said `5042` and Circle documents only the testnet value — do not put `5042` anywhere until confirmed. |
+| **Mainnet contract addresses** | USDC, CCTP `TokenMessengerV2`, `MessageTransmitterV2`, and anything else depended on. The docs say to always check the contract-addresses page rather than reusing a testnet value. |
+| **Fee parameters** | Floor (20 Gwei), ceiling (20,000 Gwei) and throughput are **explicitly testnet configuration** and *"may change before mainnet launch."* Read from the chain. |
+| **Uniswap V2 deployment** | The v2 router/factory addresses in §6 came from Uniswap's SDK **for a chain that did not exist yet**. Confirm code is actually deployed at those addresses on mainnet before graduation depends on them — `scripts/refreeze-preflight.js` already does this check and reports NO CODE on testnet. |
+| **Testnet-vs-mainnet USDC parity** | Unverifiable until mainnet exists. §2 records testnet USDC as the same KIND of token, not the same token. |
+
+---
+
 ## Stack
 
 Solidity 0.8.24 · Hardhat · Foundry · Slither · Node.js · Supabase (Postgres + RLS) ·

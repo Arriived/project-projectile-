@@ -184,3 +184,70 @@ after the user has already approved a spend.
 **`creationFeeUsdc` and `launchCooldown` are NOT among them** — which is rule 1's whole
 point for the fee, and why the launch cooldown can change under a pinned launch without
 tripping anything.
+
+
+---
+
+## 6. Gas: read the fee from the chain every time, floor at 20 Gwei, display in USDC
+
+Source: `docs.arc.io/arc/references/gas-and-fees`, verified 29 August 2026.
+
+**Rules.**
+
+- **`maxFeePerGas` must be at least 20 Gwei.** Verbatim: *"Set `maxFeePerGas` to at least
+  20 Gwei"*, and *"Transactions submitted below this floor may remain pending indefinitely
+  or fail outright."* This is not advisory — below the floor a transaction can hang forever
+  rather than fail fast, which is the worst outcome for a UI to explain.
+- **Size the gas reserve against a live reading, never the floor.** The maximum base fee is
+  **20,000 Gwei** — *"Hard ceiling that bounds worst-case cost"* — a **thousand times** the
+  floor. A reserve computed from the floor, or from a quiet-period sample, is wrong by up
+  to 1000x exactly when the network is busy. Call `eth_gasPrice` (*"Quick estimation for
+  simple transactions"*) or `eth_feeHistory` (*"Fine-grained estimation when you need
+  historical context"*) immediately before submitting, and add headroom on top.
+- **Display fees in USDC, never Gwei.** Verbatim: *"Because Arc denominates gas in USDC,
+  surface fee estimates to users in dollar terms rather than raw Gwei."* Gwei is meaningless
+  to a consumer on a chain where gas is dollar-denominated.
+- **Add a small priority tip.** *"A value of 0 Gwei is accepted, but a small tip (for
+  example, 1 Gwei) can improve inclusion time during high-utilization periods."*
+- **Never hardcode any of these numbers.** Verbatim: *"The parameters on this page reflect
+  the current Arc Testnet configuration. Values such as the minimum base fee, maximum base
+  fee, and throughput limits may change before mainnet launch."* Read them from the chain.
+
+This rule and **rule 4** are the same discipline from two directions: get the number from
+the chain, not from a constant and not from a string.
+
+**Interaction with rule 3, which is the part that bites.** The gas reserve must be sized
+from a live fee reading, because the ceiling is 1000x the floor. A reserve that looked
+generous at 20 Gwei is inadequate at 20,000, and rule 3's failure — a holder who cannot
+afford to sell — is exactly what happens when it is too small.
+
+---
+
+## 7. Check whether the connected wallet is blocklisted, and say so
+
+Source: `docs.arc.io/integrate/infrastructure/indexing-events`, verified 29 August 2026.
+
+**Rule.** On wallet connect, and before any trade, check whether the address is blocklisted
+by USDC. If it is, say so in plain language and disable trading. Do not let the user
+discover it by submitting a transaction that reverts with nothing useful.
+
+**How.** The USDC contract at `0x3600000000000000000000000000000000000000` exposes
+`isBlacklisted(address)` for a point-in-time check, and emits two indexable events:
+
+```
+Blocklisted(address indexed account)
+UnBlocklisted(address indexed account)
+```
+
+Index those to keep a live view rather than polling per wallet.
+
+**Why it matters more than it looks.** A blocklisted party cannot send or receive USDC, and
+on Arc USDC is also the gas token — so a blocklisted user cannot transact at all. Every
+path fails, and none of them explains why. Without this check the app looks broken rather
+than restricted.
+
+**It also partly mitigates R1**, which the register records as permanent and unmitigable:
+Circle can pause or blocklist and there is no fallback path. That remains true for the
+protocol. But at the *wallet* level the condition is now detectable in advance, so the
+user gets an explanation instead of a wall. Detection is not mitigation of the underlying
+risk — it is mitigation of the confusion, which is the part a frontend can actually own.
