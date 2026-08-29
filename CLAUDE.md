@@ -985,9 +985,19 @@ testnet-only in places.
 `/integrate/defi/amm-and-pools`, `/integrate/infrastructure/indexing-events`. Anything not
 from those four pages is not verified and is not recorded here.
 
-**There is an MCP server at `https://docs.arc.io/mcp`** — HTTP transport, no
-authentication, exposing search and get-page over the docs. Connecting it removes the
-stale-cache risk this section introduces. See §6 of the tooling note below.
+## ⚠ QUERY THE MCP SERVER FIRST. This section is the fallback, not the source.
+
+**`arc-docs` is connected** — `.mcp.json` at the repo root, project scope, HTTP transport
+at `https://docs.arc.io/mcp`, no authentication. It exposes search and page-retrieval over
+the live docs.
+
+**Prefer it over anything written below.** This section is a snapshot taken on 29 August
+2026; the server is the current text. Where they disagree, the server is right and this
+section is stale by construction. Use it before recording any new Arc fact, and use it to
+re-check an old one rather than trusting the table.
+
+Connecting it paid for itself on the first query, which surfaced four things this file had
+wrong or missing — see §9.5. That is the argument for reaching for it by default.
 
 ## 9.1 EVM differences — `/arc/references/evm-differences`
 
@@ -1065,6 +1075,27 @@ native send to the factory reverts — the same outcome as a reverting `receive(
 code. **Do not add one.** The residual is unchanged and already recorded as R10: a
 `SELFDESTRUCT` push can still deposit native dust, because that path does not call the
 recipient.
+
+## 9.5 Found by the MCP server on its first query, 29 August 2026
+
+Recorded because each one contradicts or extends something this file already said. None is
+acted on here; the contract is closed and the frontend is unwritten.
+
+| finding | source page | why it matters |
+|---|---|---|
+| **Mainnet addresses do not exist yet.** *"All addresses on this page are for Arc Testnet. Mainnet addresses are not yet available."* | `/arc/references/contract-addresses` | Settles §10's first two rows. There is no mainnet USDC or CCTP address to look up, so nothing can be pre-wired. |
+| **There is no published mainnet chain ID.** Deployment phases list Public Testnet as *Live* (`5042002`); **Private Mainnet and Public Mainnet are both "Upcoming"**. | `/arc/concepts/deployment-model` | **`5042` remains unsourced and must not be used.** The docs publish no mainnet ID at all, so the secondary source that produced `5042` had nothing to be right about. |
+| **The documented RPC host is `rpc.testnet.arc.io`.** We use `rpc.testnet.arc.network` in `hardhat.config.js` and both frontend files. | `/integrate/infrastructure`, `/arc-chain` | Ours demonstrably works — every deployment this session went through it. But it is not the documented host, so it may be a legacy alias with no guarantee. **Do not change it blind**; test the documented host before switching, and prefer it for anything new. |
+| **EVM target is the Osaka hard fork.** Block time *"~0.48 s (testnet)"*, finality *"Deterministic, sub-second"*, CCTP domain `26`. | `/arc-chain`, `/integrate/infrastructure` | We compile with `evm target: paris`, which is conservative and therefore safe — Osaka is a superset. Worth knowing that newer opcodes are available if a future contract wants them. The block time confirms the ~500ms assumption behind `allowBlocksWithSameTimestamp`. |
+
+**One more, for the frontend rather than the contract:** *"Arc Testnet (chain ID 5042002) is
+not registered in the WalletConnect chain registry. On first connection, WalletConnect
+issues a `wallet_addEthereumChain` call per user."* (`/integrate/connect-to-arc`.) So a
+WalletConnect user is prompted to add the chain before anything else happens — the existing
+`ensureArcNetwork` helper in both frontend files already does this for injected wallets, and
+the same handling is needed on the WalletConnect path.
+
+---
 
 ---
 
