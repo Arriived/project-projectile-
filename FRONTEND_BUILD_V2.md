@@ -87,25 +87,33 @@ now normal, expected behaviour, proven in `test/SymbolLock.test.js`.
 the contract stops a launch impersonating an existing token's symbol, and nothing delays
 it. The only defence a user gets is what the UI shows them.
 
-**And within those five minutes it is bypassable by case.** `caseSensitiveSymbols` defaults
-to `true` ([LFX1.sol:74](contracts/LFX1.sol:74)), so the hash is over the raw bytes: `CAT`
+**It was also bypassable by case even when it did fire, and that remains true of the
+mechanism.** `caseSensitiveSymbols` is `true` on the live deployment (read from the chain,
+default at [LFX1.sol:74](contracts/LFX1.sol:74)), so the hash is over the raw bytes: `CAT`
 and `cat` are different symbols and both launch immediately. Flipping it to `false` routes
 through `_toUpperAscii` and closes that, at the cost of more squatting surface — CLAUDE.md
-records why it starts lenient.
+records why it starts lenient. Worth knowing only because the duration is owner-settable and
+could be raised again; it changes nothing while the duration is 0.
 
 `isSymbolAvailable(string)` ([LFX1.sol:735](contracts/LFX1.sol:735)) answers the question
 the contract actually asks, and is the only thing worth calling for a live check. It returns
 "not currently locked", **not** "nobody has ever used this".
 
-**Do not build a "this ticker is taken" UX on top of it.** It cannot support one. The
-honest UI is: show the address, surface collisions with already-launched tokens from the
-indexer, and treat the 5-minute lock as anti-frontrunning for a single launch flow, which
-is all it is.
+**Do not build a "this ticker is taken" UX on top of it.** It cannot support one. The honest
+UI is: show the address and surface collisions with already-launched tokens from the indexer.
+There is no lock to fall back on — the duration is 0, so nothing on chain reserves a symbol
+even for one block.
 
-Separately, `launchCooldown` is **10 seconds per creator address**
-([LFX1.sol:67](contracts/LFX1.sol:67), keyed on `lastLaunchTimestamp[msg.sender]`) and is
-bypassable with a second address or a factory contract. It is not a spam control; the
-creation fee is.
+Separately, `launchCooldown` is **5 seconds per creator address** — read from the live
+deployment, *not* the `10` that is still the source default at
+[LFX1.sol:67](contracts/LFX1.sol:67); it was changed by setter along with the symbol lock, and
+`launchCooldown` is not covered by the economics hash so nothing pins it. Keyed on
+`lastLaunchTimestamp[msg.sender]` and bypassable with a second address or a factory contract.
+It is not a spam control; the creation fee is.
+
+**Read both values from the chain rather than from the source or from this file.** They are
+owner-settable at any time, they have already moved once, and the source default is now
+misleading for both.
 
 
 ---
@@ -518,19 +526,25 @@ Bridging **out** matters too — people who profit will want USDC off Arc. Arc a
 settles in about half a second at one confirmation. Don't leave this to a later release; a
 launchpad you can't withdraw from is a trust problem.
 
-### The build-step collision — settle this before writing code
+### ~~The build-step collision~~ — RESOLVED 29 August 2026, and not by any of the three options
 
-Bridge Kit and App Kit are npm packages (`@circle-fin/bridge-kit`, adapters for
-viem/ethers/Solana). Our frontend is deliberately plain HTML/CSS/JS with no build tooling,
-and `CLAUDE.md`'s stack line commits to that.
+**This question is closed. The frontend is being rebuilt in React + Vite + wagmi + viem**,
+and `CLAUDE.md`'s "no build step" constraint is revoked with the reasoning recorded there.
 
-Three options: bundle only the onramp module with a one-off esbuild step and keep the trading
-app buildless; find a CDN-hosted ESM build; or hand-roll CCTP V2 against the contracts and
-the attestation API with plain ethers.
+The original problem: Bridge Kit and App Kit are npm packages (`@circle-fin/bridge-kit`,
+adapters for viem/ethers/Solana), and the frontend was deliberately plain HTML/CSS/JS with
+no build tooling. Three options were on the table — bundle only the onramp module with a
+one-off esbuild step and keep the trading app buildless; find a CDN-hosted ESM build; or
+hand-roll CCTP V2 against the contracts and the attestation API with plain ethers.
 
-**I lean to the first** — one bundled module, checked in as a built artifact, the rest
-untouched. Hand-rolling CCTP throws away the 95% Circle already did. Tell me if you disagree,
-then do it.
+**The answer turned out to be that the premise expired.** With a bundler for the whole app,
+Bridge Kit is an ordinary dependency and there is no split to preserve, no checked-in built
+artifact, and no second toolchain. The recommendation at the time was option one, and it
+was the right call *under the constraint* — it just stopped being the question.
+
+Recorded rather than deleted because the reasoning still applies to the part that hasn't
+changed: **hand-rolling CCTP throws away the 95% Circle already did**, and that remains the
+argument against option three whatever the build setup.
 
 ## Getting to fewer signatures
 

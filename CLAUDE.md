@@ -1324,5 +1324,39 @@ and none of it should be hardcoded before then.
 ## Stack
 
 Solidity 0.8.24 · Hardhat · Foundry · Slither · Node.js · Supabase (Postgres + RLS) ·
-plain HTML/CSS/JS frontend, no build step · Arc Testnet (chainId 5042002) · Blockscout ·
+**React + Vite + wagmi + viem frontend** · Arc Testnet (chainId 5042002) · Blockscout ·
 Circle CCTP V2 — **required non-contract scope, see §8**
+
+### The "no build step" constraint is REVOKED — 29 August 2026. Do not reinstate it.
+
+This file previously specified a *"plain HTML/CSS/JS frontend, no build step"*, and
+`FRONTEND_BUILD.md` and its successor both treated that as a standing constraint. **It is
+revoked by the operator's decision, and the decision is not to be re-argued** — the same
+standing as §6's settled forward decisions.
+
+**Why it is recorded rather than just deleted.** A constraint that vanishes without a
+reason gets reinstated by the next session that notices the frontend "should" be
+dependency-free, and reinstating this one now means throwing away the rebuild. The old
+constraint was not arbitrary — buildless meant no toolchain to break, no lockfile drift, and
+a frontend anyone could read in a browser's view-source, which suited a project whose moat
+is verifiability. It was outgrown rather than found wrong:
+
+- **The CCTP onramp forces a build regardless.** Bridge Kit and App Kit are npm packages.
+  `FRONTEND_BUILD_V2.md` Part II framed this as an open question with three options; the
+  answer is now the whole app rather than one bundled module, which removes the
+  awkward split it was trying to preserve.
+- **The buildless engine had already duplicated and drifted.** `withRetry` existed in two
+  versions across `terminal.html` and `create-token.html`, and only one of them handled
+  rate limits — on an RPC this file records as stalling 150 seconds at a time. Duplication
+  was the only sharing mechanism available without a bundler, and it silently rotted.
+- **ethers does not decode custom errors on Arc**, so five sites reported "Unknown error"
+  for every revert and needed a generated selector map to compensate. viem is claimed to
+  handle this natively — verified in `REACT_REBUILD.md` Phase 0, not assumed.
+
+**What does NOT change.** The nine hard rules in `FRONTEND_BUILD_V2.md` are the
+specification for the rebuild and every one of them still applies — they are properties of
+the *contract*, not of the rendering technology. The contract stays frozen; nothing in the
+rebuild may cause a contract change. `scripts/verify-frontend-txshapes.js` must still pass,
+because it is the check that proves the rebuild lost nothing.
+
+`REACT_REBUILD.md` holds the spec, the phase plan, and the twenty-one known traps.
