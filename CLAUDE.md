@@ -6,16 +6,75 @@
 
 | | |
 |---|---|
-| HEAD **when this was written** | `38e3e9e` (the deployed commit) |
-| bytecode | **24,033 / 24,576 — 543 free** |
-| tests | **255 Hardhat + 10 fork (FORK=1), 13 Foundry, 14 live Arc-testnet R15 checks** |
-| deployed address | **`0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`** — re-frozen, verified, see §7 |
+| HEAD **when this was written** | `12bb6a6` |
+| contract | **FROZEN.** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`, verified, 24,033 / 24,576 — 543 free |
+| tests | **255 Hardhat + 10 fork (`FORK=1`), 13 Foundry, 14 live Arc-testnet R15 checks, 11 anon-key RLS checks** |
+| indexer | **LIVE and at head.** 000 + 001 + 002 applied; backfilled from block 59366694 |
+| database | RLS verified with the **anon** key: view returns **4 rows**, `indexer_state` **401**, writes are **no-ops** |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
 this file was last updated, not where you are. `git rev-parse --short HEAD` is ground
 truth; if the two differ, commits have landed since and anything below may have moved with
 them. This file once carried **three different HEADs at once** — this table said `2d92cfe`,
 §7 said `08be890`, and the repo was on `646e2ed`.
+
+## The exact next action
+
+**1. Click through buy, sell and create with a real wallet.** Nothing else is blocked on
+it, and it is the only part of the stack never exercised end to end — every browser
+available in-session lacks a wallet extension, so the signature path is unverified.
+`node frontend/serve.js`, open `http://localhost:8080`, MetaMask on Arc Testnet, and use
+it. Everything underneath is proven against `0xEDeed1F0...`: quotes, gas reserve,
+blocklist, custom-error decoding, and the transaction shapes themselves
+(`scripts/verify-frontend-txshapes.js`, 9/9).
+
+**2. Then build the token page and the token list AS NEW FILES.**
+
+⚠ **`terminal.html` and `create-token.html` are a working correctness ENGINE, not the
+product.** Everything hard and everything paid for in findings now lives in them — quotes
+from `quoteBuy`/`quoteSell`, price impact from a probe quote, the gas reserve, the fee
+floor, the blocklist check, selector-decoded errors, 5792 batching, `ensureArcNetwork`,
+`withRetry`. **Lift that engine into the new pages. Do not restart from a blank file, and
+do not finish these two.**
+
+**The Pons-style pages do not exist yet.** A token list and a **token page as the unit of
+navigation** are the product and neither has been written. `terminal.html` is an abandoned
+Axiom-style terminal (§7C); `create-token.html` is a single-purpose form. Salvage both,
+ship neither.
+
+`FRONTEND_BUILD_V2.md` holds the eight rules the new pages must satisfy.
+
+## Three things that fail SILENTLY — read before touching any of them
+
+1. **The indexer checkpoint is per-factory and is NOT reset by a redeploy.** It held
+   `53995966` from July against the original factory; left alone the indexer replays
+   millions of blocks of a dead contract and indexes nothing real, with no error.
+   **Reset `indexer_state.last_processed_block` on every redeploy** — to one BELOW the new
+   deploy block, so the deploy block itself is scanned.
+
+2. **`tokens_with_volume` is SECURITY INVOKER, so it returns ZERO ROWS — with no error —
+   if the caller lacks SELECT on `tokens` and `trades`.** The frontend shows an empty list
+   and nothing looks broken. That is the correct security posture (see the rationale in
+   `000_base_schema.sql`; do not revert it to DEFINER), but it must be verified with the
+   **anon** key. The service-role key bypasses RLS and cannot detect the failure.
+
+3. **A negative test that checks HTTP status cannot tell "refused" from "matched
+   nothing".** PostgREST returns `204` for a DELETE that matched zero rows — exactly what
+   RLS produces. A check written that way reported a breach that had not happened.
+   **Compare row counts before and after**, read with the service key so RLS cannot hide
+   the truth from the check itself. `indexer/scripts/verify-anon-access.js` does it right.
+
+## Pending, small, and worth doing first
+
+**Apply the `REVOKE` from `000_base_schema.sql` to the live database, then re-run
+`SUPABASE_ANON_KEY=... node indexer/scripts/verify-anon-access.js`.** Measured: `INSERT`
+returns 401 (no grant) but `DELETE` and `UPDATE` return 204 — anon **holds** those
+privileges and only the absence of an RLS policy stops them. The REVOKE is in the schema
+file but has not been run against the live project, so that protection currently rests on
+one barrier instead of two.
+
+⚠ **PENDING: re-run `scripts/smoke-r15.js` after 3 September** to confirm the state-based
+assertions survive Zero8.
 
 ## First run in a fresh clone — do this before anything else
 
@@ -31,18 +90,11 @@ mutation guard is silently inert — a fresh clone gets **no error, just no prot
 and a red-proof mutation can reach a commit unnoticed. Nothing will tell you it is
 missing.
 
-## The exact next action
+## The contract is CLOSED
 
-**THE FRONTEND. The contract is CLOSED.** No contract work remains, and none should be
-started without a reason that is written down first. The re-freeze is done, R15 is
-executed, the mechanics are restored (§7A), and the inventory is generated rather than
-hand-maintained. `LFX1` is deployed, verified and recorded at
-**`0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`**; nothing on the contract roadmap is
-outstanding. The critical path is now entirely non-contract: the frontend has not been
-started (§8), and `FRONTEND_BUILD_V2.md` holds the rules it must satisfy.
-
-The one contract-side gap worth naming is **R15**, and it is deferred rather than closed —
-see the register.
+No contract work remains and none should be started without a reason written down first.
+The re-freeze is done, R15 is executed, the mechanics are restored (§7A), and the inventory
+is generated rather than hand-maintained. Nothing on the contract roadmap is outstanding.
 
 **The fork is gated behind `FORK=1` and pinned to block 25,846,000.** Ordinary test runs
 are local and unforked. Do not re-pin without re-running the presence checks — see §4.
