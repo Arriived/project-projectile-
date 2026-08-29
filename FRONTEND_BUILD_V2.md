@@ -316,14 +316,26 @@ Chain params to prefill, from `/integrate/infrastructure` and `/arc-chain`:
 
 | field | value |
 |---|---|
-| chainId | `5042002` (`0x4CEDB2`) |
+| chainId | `5042002` = **`0x4CEF52`** |
 | RPC | `https://rpc.testnet.arc.io` (documented; `rpc.testnet.arc.network` also works) |
 | explorer | `https://testnet.arcscan.app` |
 | native currency | **USDC, 18 decimals** — not ETH. This is the gas token |
 
-The 18-decimal native currency is the part to get right: it is the same balance as the
+⚠ **This table previously said `0x4CEDB2`, which is wrong.** `0x4CEDB2` is **5041586** —
+416 chains away from Arc. Corrected 29 August 2026 against two independent sources:
+`eth_chainId` on the live RPC returns `0x4cef52`, and Arc's own EIP-3085 parameters at
+`/integrate/wallets/add-arc-to-a-wallet` give `chainId: "0x4CEF52"`.
+
+**It would have failed exactly where it hurts.** This value is the argument to
+`wallet_addEthereumChain`, which is the call every WalletConnect user hits on first connect
+— so the error sat in the one path this rule exists to describe, and would have added a
+chain that does not exist or been rejected outright. **Derive it, don't transcribe it:**
+`` `0x${(5042002).toString(16)}` ``. A hex literal in a doc is a value nothing checks.
+
+The 18-decimal native currency is the other part to get right: it is the same balance as the
 6-decimal ERC-20 view (rule 3), and a wallet configured with the wrong decimals will
-display gas costs off by a factor of a trillion.
+display gas costs off by a factor of a trillion. viem's shipped `arcTestnet` chain gets this
+right — verified, see `REACT_REBUILD.md` Phase 0.
 
 ---
 
