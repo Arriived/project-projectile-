@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { config } from "./wagmi";
 import { App } from "./App";
 import { ChainProvider } from "./providers/ChainProvider";
+import { WalletDiagnostics } from "./diagnostics/WalletDiagnostics";
 import "./styles.css";
 
 // One QueryClient for the app. wagmi is built on React Query, so wagmi's reads and our
@@ -25,13 +26,27 @@ const queryClient = new QueryClient({
   },
 });
 
+// ?diag swaps the whole app for the diagnostic page, chosen ONCE at startup.
+//
+// It is mounted as a sibling of <App />, not inside it, and deliberately outside
+// <ChainProvider>: the provider polls the wallet and raises the automatic switch prompt,
+// and a diagnostic that reports on wallet state must not be running that machinery while
+// it measures. Nesting it inside App also produced a genuine hook-order crash, because
+// the two trees have different hook shapes.
+const diagnostics =
+  typeof window !== "undefined" && new URLSearchParams(window.location.search).has("diag");
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
-        <ChainProvider>
-          <App />
-        </ChainProvider>
+        {diagnostics ? (
+          <WalletDiagnostics />
+        ) : (
+          <ChainProvider>
+            <App />
+          </ChainProvider>
+        )}
       </QueryClientProvider>
     </WagmiProvider>
   </React.StrictMode>

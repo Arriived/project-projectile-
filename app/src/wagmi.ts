@@ -8,7 +8,7 @@
 // unlabelled mid-flow popup the rule exists to prevent.
 
 import { createConfig, http } from "wagmi";
-import { injected } from "wagmi/connectors";
+import { injected, metaMask } from "wagmi/connectors";
 import { arc } from "./chain";
 
 export const config = createConfig({
@@ -17,6 +17,20 @@ export const config = createConfig({
     // `shimDisconnect` keeps an explicit disconnect from being undone by the page
     // reloading and the wallet reporting itself still authorised.
     injected({ shimDisconnect: true }),
+
+    // Added for DIAGNOSIS, not yet chosen as the default. Real MetaMask reported
+    // `"Injected" does not support programmatic chain switching`, which is wagmi's
+    // SwitchChainNotSupportedError -- raised when the connector held in state has no
+    // switchChain method. The generic injected() connector defines one, so the suspicion
+    // is that state holds a stripped persistence shell rather than a live connector
+    // (createConfig persists connections as { id, name, type, uid }, methods removed).
+    //
+    // metaMask() talks to MetaMask through its own SDK and declares capabilities
+    // explicitly. Whether that actually helps is an empirical question, so both are
+    // listed and /?diag can connect through either and compare. Ordering matters: the
+    // app's WalletBar uses connectors[0], so injected() stays first and default
+    // behaviour is unchanged until the diagnosis says otherwise.
+    metaMask(),
   ],
   transports: {
     // JSON-RPC batching is left OFF, which is viem's default for http().

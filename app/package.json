@@ -13,6 +13,7 @@
     "verify": "npm run verify:chain && npm run verify:guard"
   },
   "dependencies": {
+    "@metamask/connect-evm": "^2.1.1",
     "@tanstack/react-query": "^5.62.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
