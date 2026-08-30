@@ -3,7 +3,53 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Ballista — Arc Testnet</title>
+
+    <!-- GOOGLE SEARCH CONSOLE VERIFICATION — carried across VERBATIM from the landing
+         page. Do not regenerate, do not "tidy". Losing it de-verifies the property and
+         the domain quietly stops being reportable.
+
+         NOTE: a FILE-based verification also exists (google3af9e8ceff8d4db2.html,
+         contents "google-site-verification: google3af9e8ceff8d4db2.html"). It is an
+         independent verification and must stay reachable at its exact path -- an SPA
+         catch-all rewrite will swallow it. See public/ and the hosting notes. -->
+    <meta name="google-site-verification" content="HVHUslal_Sfo1ZOukJbaS-7P19C-uI_cqni4ooF5GME" />
+
+    <!-- SEO. Retargeted from the landing page to the app, which now holds the apex.
+         The description no longer claims a Uniswap VERSION: mainnet ships V2 with LP
+         burned to 0x...dEaD, and V4 is post-launch via the router timelock. -->
+    <title>Ballista — Arc Token Launchpad</title>
+    <meta
+      name="description"
+      content="Ballista is an Arc-native token launchpad. Launch tokens on a bonding curve, trade emerging markets, and graduate successful launches into Uniswap liquidity with the LP burned."
+    />
+    <link rel="canonical" href="https://ballista.trading/" />
+
+    <!-- OPEN GRAPH -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://ballista.trading/" />
+    <meta property="og:title" content="Ballista — Arc Token Launchpad" />
+    <meta property="og:description" content="The attention market for token launches on Arc." />
+    <meta property="og:image" content="https://ballista.trading/ballista-logo.png" />
+
+    <!-- X -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Ballista — Arc Token Launchpad" />
+    <meta name="twitter:description" content="The attention market for token launches on Arc." />
+    <meta name="twitter:image" content="https://ballista.trading/ballista-logo.png" />
+
+    <!-- FAVICONS — the same set the landing page served. The image files themselves must
+         be present in app/public/; see public/README.md. -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!-- Matches --bg. The landing page had #f5f5f2 here against a --bg of #f3f3f0, so the
+         browser chrome and the page were fractionally different colours. Aligned. -->
+    <meta name="theme-color" content="#f3f3f0" />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   </head>
   <body>
     <div id="root"></div>

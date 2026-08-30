@@ -23,48 +23,90 @@ export const en = {
       "The token page is built and live at /t/:address. The list page is Phase 3 and is not built yet — open a token by address to see the page.",
   },
 
-  // /about — the landing page's content, moved into the app.
+  // /about — the landing page's content, ported from LANDING_PAGE_LIVE.html.
   //
-  // NOTE: the original ballista.trading prose was not available on this machine, so this
-  // is placeholder copy carrying the STRUCTURE and the three required corrections. The
-  // real marketing copy replaces the values, not the keys.
-  //
-  // NO UNISWAP VERSION appears in any of these strings. Mainnet ships V2 with LP burned;
-  // V4 is post-launch via the router timelock. scripts/verify-claims.mts fails the build
-  // on a versioned mention.
+  // Copy is the original's, with THREE CORRECTIONS. The Uniswap VERSION is removed from
+  // every one of the five places it appeared: the meta description (index.html), the hero
+  // copy, the section 04 body, the fourth graduation step, and the footer chips. Mainnet
+  // ships the V2 router with LP burned to 0x...dEaD; V4 is post-launch via the 24h router
+  // timelock (CLAUDE.md §6). scripts/verify-claims.mts fails the build on a versioned
+  // mention, so this cannot silently come back.
   about: {
-    eyebrow: "Arc mainnet · 16 September 2026",
-    headline: "A launchpad you can check.",
-    lede:
-      "Bonding-curve launches on Arc, settled in USDC, graduating to a Uniswap pool with the LP burned. The contract is deployed, verified and frozen — read it before you trust it.",
+    navLaunch: "Launch",
+    navAttention: "Attention",
+    navGraduate: "Graduate",
+
+    heroIndex: "ARC / 001",
+    heroLocation: "ARC MAINNET",
+    heroLocation2: "COMING SOON",
+    heroTitle: "BALLISTA",
+    heroStatement: "THE ATTENTION MARKET",
+    heroStatementMuted: "FOR ARC.",
+    // Was "graduate into Uniswap v4 liquidity".
+    heroCopy:
+      "Launch tokens on Arc. Capture attention. Trade the market. Successful launches graduate into Uniswap liquidity.",
+    enter: "Enter Ballista",
+
+    countdownLabel: "MAINNET LAUNCH",
+    countdownDate: "16 / 09 / 2026",
+    // The original said "23:00" with no zone, and the timer parsed it as LOCAL time -- so
+    // the same page counted to a different moment for every visitor. Circle has published
+    // a DATE and no time, so an hour was invented precision. Pinned to 00:00 UTC and the
+    // zone is stated rather than implied.
+    countdownZone: "00:00 UTC",
+    countdownNote: "Circle has published a date for Arc mainnet, not a time. This counts to midnight UTC.",
+    // The original rendered 00:00:00:00 forever once it reached zero.
+    launched: "Arc mainnet is live.",
+    launchedCta: "Open the launchpad",
     days: "days",
     hours: "hrs",
     minutes: "min",
     seconds: "sec",
-    countdownNote: "Counting to 00:00 UTC on 16 September 2026. Circle has published a date, not a time.",
-    launched: "Arc mainnet is live.",
-    launchedCta: "Open the launchpad",
 
-    howTitle: "How a launch works",
-    step1: "Anyone creates a token for a fixed fee. Supply is fixed at creation and there is no mint function.",
-    step2: "It trades on a bonding curve. Price is set by the curve, not by an order book, and every quote comes from the contract.",
-    step3: "A snipe tax decays every second after launch, so the opening seconds are expensive for bots and ordinary for everyone else.",
-    step4:
-      "At the graduation threshold the curve closes and seeds a Uniswap pool. The LP tokens are burned to a dead address at that moment.",
+    s1Eyebrow: "THE LAUNCHPAD",
+    s1Title: "Launch.",
+    s1Body:
+      "Create a token on Arc with a simple launch mechanism designed to turn attention into an open market.",
+    s1Step1: "Create",
+    s1Step1Detail: "Token",
+    s1Step2: "Launch",
+    s1Step2Detail: "Bonding curve",
+    s1Step3: "Compete",
+    s1Step3Detail: "Attention",
 
-    verifyTitle: "Verify, don't trust",
-    verifyBody:
-      "Every claim on this page is checkable on chain. The factory is verified on the explorer; the fees, the graduation threshold and the LP recipient are all readable per token.",
-    contract: "Factory",
-    network: "Network",
-    chainId: "chain {id}",
-    gasToken: "Gas token",
-    gasTokenValue: "USDC — the same balance you trade with",
+    s2Eyebrow: "THE ATTENTION MARKET",
+    s2Title: "Get noticed.",
+    s2Body:
+      "Every launch competes for attention. The market decides what rises, what falls, and what earns liquidity.",
+    s2LiveLaunches: "Live launches",
+    s2Attention: "Attention",
+    s2Demo: "DEMONSTRATION DATA",
+    s2Rising: "RISING",
+    s2Active: "ACTIVE",
+    s2Early: "EARLY",
 
-    risksTitle: "What could go wrong",
-    risksBody:
-      "USDC is both the gas token and the settlement asset, so spending your whole balance leaves you unable to sell. Circle can pause or blocklist USDC, and there is no fallback path if they do. The curve is thin at launch: a large buy moves the price a long way, and the page shows that figure before you commit.",
+    s3Eyebrow: "THE MARKET",
+    s3Title: "Trade.",
+    s3Body:
+      "Attention becomes price. Buy into emerging launches and sell as the market changes. One launchpad. One market.",
 
+    s4Eyebrow: "THE END OF THE CURVE",
+    s4Title: "Graduate.",
+    // Was "liquidity moves into a Uniswap v4 pool".
+    s4Body:
+      "When a launch reaches its graduation threshold, liquidity moves into a Uniswap pool and the LP tokens are burned.",
+    s4Step1: "Launch",
+    s4Step2: "Attention",
+    s4Step3: "Threshold",
+    // Was "Uniswap v4".
+    s4Step4: "Uniswap",
+
+    futureEyebrow: "WHAT COMES NEXT",
+    futureTitle: "THE LAUNCHPAD BECOMES SOCIAL.",
+    futureBody:
+      "Ballista starts as an attention market for Arc. As the market grows, the interface evolves into a social layer built around launching, discovering and trading tokens.",
+
+    // Was "ARC · USDC · UNISWAP V4".
     footerChips: "ARC · USDC · UNISWAP",
   },
 
