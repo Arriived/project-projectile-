@@ -3,9 +3,10 @@
 // The token page is at /t/:address and is DEEP-LINKABLE. A launchpad whose token pages
 // are not shareable URLs is broken -- sharing a token is the primary way anyone arrives.
 
-import { Routes, Route, Link, Navigate } from "react-router-dom";
+import { Routes, Route, Link, Navigate, useLocation } from "react-router-dom";
 import { WalletBar } from "./components/WalletBar";
 import { TokenPage } from "./routes/TokenPage";
+import { About } from "./routes/About";
 import { useChain } from "./providers/ChainProvider";
 import { arc } from "./chain";
 import { useT } from "./i18n";
@@ -13,6 +14,7 @@ import { useT } from "./i18n";
 export function App() {
   const { t } = useT();
   const { guard, inAutoPrompt } = useChain();
+  const { pathname } = useLocation();
 
   // Suppressed while the automatic prompt is open: the user is mid-fix with a wallet
   // popup in front of them, and alarming them about the state that popup exists to
@@ -25,8 +27,16 @@ export function App() {
         <Link to="/" className="brand">
           Ballista <span className="brand-sub">{arc.name}</span>
         </Link>
+        {/* Thin nav: Explore and About only. No Forum -- comments are per-token and
+            later, never a global one. No Analytics -- a real surface, but not before
+            mainnet. */}
         <nav className="nav">
-          <Link to="/">{t("common.explore")}</Link>
+          <Link to="/" className={pathname === "/" ? "on" : undefined}>
+            {t("common.explore")}
+          </Link>
+          <Link to="/about" className={pathname === "/about" ? "on" : undefined}>
+            {t("common.about")}
+          </Link>
         </nav>
         <WalletBar />
       </header>
@@ -49,6 +59,7 @@ export function App() {
 
       <Routes>
         <Route path="/t/:address" element={<TokenPage />} />
+        <Route path="/about" element={<About />} />
         {/* Phase 3. Until it exists, / redirects nowhere useful, so it says so. */}
         <Route
           path="/"
