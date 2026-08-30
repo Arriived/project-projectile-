@@ -24,13 +24,20 @@ import {
   selectWallets,
   walletLabel,
   isGenericInjected,
+  isWalletConnect,
+  isDiscovered,
   GENERIC_INJECTED_ID,
+  WALLETCONNECT_ID,
   type WalletChoice,
 } from "../src/lib/wallets.ts";
 
 const generic: WalletChoice = { uid: "u0", id: GENERIC_INJECTED_ID, name: "Injected" };
 const metamask: WalletChoice = { uid: "u1", id: "io.metamask", name: "MetaMask", rdns: "io.metamask" };
 const phantom: WalletChoice = { uid: "u2", id: "app.phantom", name: "Phantom", rdns: "app.phantom" };
+// WalletConnect: NOT an extension, NOT EIP-6963, so no rdns. That absence is the whole
+// point of W10 below -- it looks like the generic connector to any rule keyed on rdns,
+// and like a named wallet to any rule keyed on the id.
+const wc: WalletChoice = { uid: "u3", id: WALLETCONNECT_ID, name: "WalletConnect" };
 
 let failures = 0;
 const check = (label: string, pass: boolean, detail = "") => {
@@ -108,9 +115,52 @@ const check = (label: string, pass: boolean, detail = "") => {
   );
 }
 
+// ── WalletConnect ───────────────────────────────────────────────────────────────
+//
+// WHY THESE ROWS EXIST. Wiring WalletConnect did not fail any check above -- all ten
+// passed against the old rule and against the new one. That is the problem: the old rule
+// was `filter(c => c.id !== "injected")`, keep the generic one only if that came back
+// empty, which is correct only while every connector is EITHER the generic one OR a
+// discovered wallet. WalletConnect is neither.
+//
+// W10 is the row that would have caught it, and nothing in the suite covered that shape.
+{
+  // No extension installed at all, WalletConnect configured. The generic connector is the
+  // ONLY path for an old injected-only wallet, and WalletConnect says nothing whatsoever
+  // about whether window.ethereum is contested -- so it must not suppress it.
+  const offered = selectWallets([generic, wc]);
+  check(
+    "W10 WalletConnect does NOT suppress the generic fallback (nothing was discovered)",
+    offered.some(isGenericInjected) && offered.some(isWalletConnect),
+    `offered: ${offered.map((w) => w.name).join(", ")}`
+  );
+
+  // One extension plus WalletConnect: discovery happened, so the generic one goes.
+  const withWallet = selectWallets([generic, wc, metamask]);
+  check(
+    "W11 a discovered wallet still suppresses the generic one, WalletConnect kept",
+    !withWallet.some(isGenericInjected) &&
+      withWallet.some(isWalletConnect) &&
+      withWallet.some((w) => w.name === "MetaMask"),
+    `offered: ${withWallet.map((w) => w.name).join(", ")}`
+  );
+
+  check(
+    "W12 WalletConnect is not mistaken for the generic injected connector",
+    !isGenericInjected(wc) && isWalletConnect(wc)
+  );
+  // rdns is the discovery signal. WalletConnect has none and must not be read as
+  // discovered, or it would suppress the generic connector through the new rule instead
+  // of the old one -- the same bug wearing a different hat.
+  check(
+    "W13 WalletConnect is not counted as EIP-6963 discovery (no rdns)",
+    !isDiscovered(wc) && isDiscovered(metamask) && !isDiscovered(generic)
+  );
+}
+
 // The invariant that outranks the rows: the generic connector may only ever be offered
-// when it is the ONLY thing available. If a future edit widens that, this fails even if
-// the rows above were updated to match.
+// when NOTHING was discovered. If a future edit widens that, this fails even if the rows
+// above were updated to match.
 {
   const cases: WalletChoice[][] = [
     [generic, metamask, phantom],
@@ -119,18 +169,27 @@ const check = (label: string, pass: boolean, detail = "") => {
     [generic],
     [metamask, phantom],
     [],
+    // The shapes WalletConnect introduces.
+    [generic, wc],
+    [generic, wc, metamask],
+    [wc],
+    [wc, metamask],
   ];
   const violations = cases.filter((input) => {
     const offered = selectWallets(input);
-    return offered.some(isGenericInjected) && offered.length > 1;
+    const keptGeneric = offered.some(isGenericInjected);
+    // Two ways to be wrong, and they point in opposite directions:
+    //   - kept the generic one even though a wallet announced itself, or
+    //   - dropped it even though nothing did.
+    return keptGeneric !== (input.some(isGenericInjected) && !input.some(isDiscovered));
   });
   check(
-    "INVARIANT  the generic connector is never offered alongside a named wallet",
+    "INVARIANT  the generic connector is offered EXACTLY when nothing was discovered",
     violations.length === 0,
     `${violations.length} violation(s)`
   );
 }
 
-const total = 10;
+const total = 14;
 console.log(`\n${total - failures}/${total} checks passed`);
 if (failures) process.exit(1);

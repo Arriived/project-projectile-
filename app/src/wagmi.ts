@@ -19,14 +19,29 @@
 // lib/wallets.ts drops the generic connector from the UI whenever any discovered wallet
 // exists -- see there for why it is kept in the config at all.
 //
-// WalletConnect is still deferred: rule 8 / trap 17 record that Arc is not in the
-// WalletConnect chain registry, so every mobile user hits a `wallet_addEthereumChain`
-// prompt on first connect, and that needs handling in the connect step rather than
-// appearing mid-trade. It also needs a projectId we do not have.
+// ── WALLETCONNECT ─────────────────────────────────────────────────────────────
+//
+// NOW WIRED. This block previously said it "needs a projectId we do not have"; the
+// operator supplied one, and it is read from `VITE_WALLETCONNECT_PROJECT_ID` rather than
+// inlined, so a fork does not spend this project's quota.
+//
+// It is built ONLY when that variable is set. A fresh clone therefore gets no
+// WalletConnect button at all, which is the right failure: a button that cannot connect
+// is worse than an absent one.
+//
+// ⚠ TRAP 17 / RULE 8 STILL APPLIES AND IS NOT CLOSED BY WIRING IT. Arc Testnet (5042002)
+// is NOT in the WalletConnect chain registry, so a WalletConnect wallet issues a
+// `wallet_addEthereumChain` prompt on first connect. `chain.ts` carries the full metadata
+// that call needs -- name, 18-decimal USDC as nativeCurrency, rpcUrls and the ArcScan
+// explorer -- so the prompt can succeed. What is NOT verified is what a real mobile
+// wallet does with it: no WalletConnect session has ever been established against this
+// app. The chain guard is fail-closed, so the failure mode is a blocked UI rather than a
+// wrong-chain transaction, but do not describe this path as tested.
 
 import { createConfig, http } from "wagmi";
-import { injected } from "wagmi/connectors";
+import { injected, walletConnect } from "wagmi/connectors";
 import { arc } from "./chain";
+import { WALLETCONNECT_PROJECT_ID } from "./config";
 
 export const config = createConfig({
   chains: [arc],
@@ -45,6 +60,29 @@ export const config = createConfig({
     // `shimDisconnect` keeps an explicit disconnect from being undone by the page
     // reloading and the wallet reporting itself still authorised.
     injected({ shimDisconnect: true }),
+
+    // WalletConnect, only when a projectId is configured. `lib/wallets.ts` offers this
+    // alongside whatever else exists and -- importantly -- it does NOT suppress the
+    // generic injected fallback, because it says nothing about whether
+    // `window.ethereum` is contested. That distinction is W10 in verify:wallets.
+    ...(WALLETCONNECT_PROJECT_ID
+      ? [
+          walletConnect({
+            projectId: WALLETCONNECT_PROJECT_ID,
+            // The QR / deep-link modal. Without it there is no way for a user to pair.
+            showQrModal: true,
+            metadata: {
+              name: "Ballista",
+              description: "Bonding-curve token launches native to Arc.",
+              // Resolved at runtime rather than hardcoded: there is no production origin
+              // yet (§11.10 -- no hosting), and a wrong origin here is what makes a
+              // WalletConnect session display the wrong site to the user.
+              url: typeof window !== "undefined" ? window.location.origin : "",
+              icons: [],
+            },
+          }),
+        ]
+      : []),
   ],
 
   transports: {

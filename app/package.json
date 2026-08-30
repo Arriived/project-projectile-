@@ -21,6 +21,7 @@
   "dependencies": {
     "@metamask/connect-evm": "^2.1.1",
     "@tanstack/react-query": "^5.62.0",
+    "@walletconnect/ethereum-provider": "^2.24.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.18.3",

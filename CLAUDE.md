@@ -9,7 +9,7 @@
 | repo HEAD **when this was written** | `90813c5`, on branch **`ballista-migration`**, tree clean |
 | deployed commit | `38e3e9e` — **not** the same thing, and it should not be. The contract is frozen; everything since is frontend. §7 carries this one. |
 | contract | **FROZEN.** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`, verified, 24,033 / 24,576 — 543 free. Re-confirmed on chain: `eth_getCode` returns 24,033 bytes. |
-| tests | **255 Hardhat passing + 10 pending** (the pending ones are the `FORK=1` suite), **13 Foundry**, **139 frontend** across seven suites, **11 anon-key RLS checks**. All re-run this session. |
+| tests | **255 Hardhat passing + 10 pending** (the pending ones are the `FORK=1` suite), **13 Foundry**, **143 frontend** across seven suites, **11 anon-key RLS checks**. All re-run this session. |
 | tests NOT re-run | the **10 fork** checks (need a mainnet fork RPC) and the **14 live Arc-testnet R15** checks (need a funded key). Both passed when last run; neither was re-executed here. |
 | indexer | ⚠ **STALLED, NOT AT HEAD.** Checkpoint `59455052`, chain head `59663174` — **208,122 blocks behind, ~27.7 hours.** The process is not running. Migrations 000 + 001 + 002 are applied and the data it holds is correct; it is simply not advancing. |
 | database | RLS re-verified with the **anon** key this session: **11/11**. View returns **4 rows**, `trades` **6 rows**, `indexer_state` **401 / 42501**, all four write paths no-ops. Both barriers confirmed live. |
@@ -133,7 +133,7 @@ git config core.hooksPath .githooks  # REQUIRED: see below
 npm run build                        # compile + regenerate the indexer ABI
 
 cd app && npm install                # the React frontend is a SEPARATE package (§11)
-npm run verify                       # 139 checks across seven suites; all should pass
+npm run verify                       # 143 checks across seven suites; all should pass
 npm run dev                          # http://localhost:5173
 ```
 
@@ -774,7 +774,7 @@ an observed burn.
   **nothing covers ingestion.** No test drives the indexer against a chain and checks what
   lands in the database. That gap is unchanged.
 - **Frontend** — ⚠ *corrected: it is BUILT (§11).* But "not even a stub" still describes the
-  right thing about it, one level down: **139 checks cover the pure libraries, and NOTHING
+  right thing about it, one level down: **143 checks cover the pure libraries, and NOTHING
   covers the rendered app.** There is no component test, no browser test, and no test that
   drives a wallet. The signature path has never executed. Read this row as "the UI itself is
   untested", which is exactly what it was warning about.
@@ -1420,18 +1420,32 @@ Read from `app/node_modules`, not from the `^` ranges in `package.json`:
 | @tanstack/react-query | `^5.62.0` | 5.62.x |
 | vite | `^6.0.0` | **6.4.3** |
 | typescript | `^5.7.0` | 5.7.x |
+| @walletconnect/ethereum-provider | `^2.24.0` | **2.24.0** — a PEER dep of `@wagmi/connectors` 8.2.0, not installed by it. `walletConnect({projectId})` import-fails at click time without it. |
+
+**Bundle, measured before and after wiring WalletConnect:**
+
+| | entry raw | entry gzip | total dist |
+|---|---|---|---|
+| before | 691.94 kB | **210.13 kB** | ~713 kB, 3 chunks |
+| after | 708.30 kB | **216.08 kB** | 2.5 MB, 62 chunks |
+
+**+5.95 kB gzip eagerly.** The WalletConnect machinery itself (`core` 606 kB, `w3m-modal`
+169 kB) is code-split and loads only when someone clicks the button — confirmed in the dev
+server's network log. Worth noting against §11.6: this is *cheaper on first load* than the
+17.1 kB gzip i18n library that was rejected on size grounds, so the two decisions are
+consistent rather than contradictory.
 
 Routes: `/` (list), `/t/:address` (token page), `/about` (the ported landing page), `*` →
 redirect to `/`. **`/create` is linked but NOT built** — Phase 4 is gated on the operator.
 
-**139 frontend checks across seven suites**, all passing, all red-proved, run by
+**143 frontend checks across seven suites**, all passing, all red-proved, run by
 `npm run verify` in `app/`:
 
 | suite | checks | covers |
 |---|---|---|
 | `verify:chain` | 11 | chain object, fee floor, derived hex id |
 | `verify:guard` | 22 | the fail-closed chain guard |
-| `verify:wallets` | 10 | EIP-6963 selection |
+| `verify:wallets` | 14 | EIP-6963 selection, and WalletConnect not suppressing the fallback |
 | `verify:trade` | 36 | quotes, slippage, gas, curve gating |
 | `verify:list` | 30 | sort, collisions, search, pagination |
 | `verify:i18n` | OK | locale parity (pass/fail, not counted) |
@@ -1482,6 +1496,29 @@ banner now explains that case rather than asserting a fault.
 
 `lib/arcGuard.ts` is pure and fail-closed: `ok` requires **both** sources to agree **and**
 the probe to be fresh. Anything else is `unknown` and `canTransact` is false.
+
+### A fifth round, found by wiring WalletConnect — 30 August 2026
+
+⚠ **`selectWallets` was keyed on the wrong signal, and all ten existing checks passed
+either way.** It read `connectors.filter(c => c.id !== "injected")` and kept the generic
+connector only when that came back empty — correct **only** while every connector is
+either the generic one or an EIP-6963 discovery. WalletConnect is neither.
+
+Under that rule, a user with **no extension installed** and WalletConnect configured got
+`[generic, walletConnect]` → `[walletConnect]`: the last-resort fallback stripped by a
+connector that says nothing whatsoever about whether `window.ethereum` is contested. An
+old injected-only wallet would have had no way in.
+
+The suppression is caused by **discovery**, so it is now conditioned on discovery —
+`rdns` present, which is exactly when a wallet announced itself and therefore exactly when
+`window.ethereum` might be contested. WalletConnect is orthogonal: always offered when
+configured, never suppressing anything.
+
+**The reusable part:** adding WalletConnect broke nothing and failed nothing. The suite
+went 10/10 before the fix and 10/10 after, because no row described a connector that was
+neither generic nor discovered. Four rows now do (W10–W13), and W10 is red-proved — with
+the old rule restored it reports `offered: WalletConnect` and fails. **A suite that cannot
+distinguish two rules is not evidence for either.**
 
 ## 11.4 Price impact — ONE trade, THREE numbers, and they are not interchangeable
 
@@ -1647,7 +1684,7 @@ figures should be monochrome so the one coloured thing means something.**
 | **The signature path is UNEXERCISED** | No real wallet has signed a buy, sell or create through the React app. The single largest gap. |
 | **Supabase 401s are bounded but UNIDENTIFIED** | The app degrades correctly on a 401 and the RLS posture is verified 11/11, but the *cause* of intermittent 401s was never root-caused. Bounded, not understood. |
 | **zh-Hans is 7 of 239 keys; `locales.ts` still ships `en` only** | The decision (en + zh-Hans ship, ko cut) is made; the code has not been changed to match. §11.6. |
-| **WalletConnect** | The operator has obtained a `projectId`. It is **not wired**, and `app/src/wagmi.ts:25` still says "needs a projectId we do not have" — that comment is stale and must be fixed in the same change that wires it. |
+| **WalletConnect** | ✅ **WIRED, 30 August 2026.** `projectId` from `VITE_WALLETCONNECT_PROJECT_ID` (public by design, gitignored anyway so a fork does not spend the quota); the connector is built **only** when it is set. **Verified live in-browser:** the modal mounts, its chunks lazy-load, and a valid `wc:` pairing URI carrying `relay-protocol` is generated — which only happens after the relay ACCEPTS the projectId. ⚠ **Still unverified: no real mobile wallet has ever completed a session.** Trap 17 is NOT closed by wiring it — Arc 5042002 is absent from the WalletConnect registry, so first connect issues `wallet_addEthereumChain`; `chain.ts` carries the metadata that call needs, but what a real wallet does with it is untested. |
 | **Arc mainnet chainId** | **Still unsourced.** `5042` came from a secondary source; Circle documents only `5042002`. §10. |
 | **Uniswap V2 on Arc** | Verified this session: `eth_getCode` on **testnet** returns **NO CODE** for both the mainnet router `0x1f7d…efa` and factory `0x89e5…eba`. This is expected (they are mainnet addresses) and is exactly why `GraduationHelper` is inert. **Re-run the same check on mainnet before graduation depends on them.** |
 | **No hosting, no runbook, no rollback, no user docs** | None of these exist. Not started, not scheduled. |

@@ -42,3 +42,19 @@ const viteEnv: Record<string, string | undefined> =
 
 export const SUPABASE_URL = viteEnv.VITE_SUPABASE_URL;
 export const SUPABASE_ANON_KEY = viteEnv.VITE_SUPABASE_ANON_KEY;
+
+/**
+ * WalletConnect project id.
+ *
+ * PUBLIC BY DESIGN, like the anon key above -- it ships in the client bundle because
+ * WalletConnect's relay needs it from the browser. It is an origin-scoped rate-limit and
+ * analytics handle, not a credential: it grants no access to funds, signs nothing, and
+ * cannot be used to impersonate the app anywhere that checks origin. Treat it as public
+ * and keep it out of the repo anyway (it lives in `.env.local`, gitignored) so the
+ * project's own quota is not trivially reusable by a fork.
+ *
+ * Optional on purpose. When it is absent the WalletConnect connector is simply not built
+ * (see wagmi.ts), which is correct for a fresh clone: an offered button that cannot
+ * connect is worse than no button.
+ */
+export const WALLETCONNECT_PROJECT_ID = viteEnv.VITE_WALLETCONNECT_PROJECT_ID;
