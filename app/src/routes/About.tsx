@@ -220,19 +220,25 @@ export function About() {
             <span>{t("about.s2LiveLaunches")}</span>
             <span>{t("about.s2Attention")}</span>
           </div>
+          {/* The status column (RISING / ACTIVE / EARLY) is REMOVED. Those were three
+              states that exist nowhere in the contract and nowhere on the Phase 3 card --
+              invented status labels, which is precisely the genus of thing this project
+              criticises elsewhere. The bars alone imply nothing false.
+
+              The whole board comes out once the list page is real; it is a placeholder
+              for a live surface, and /about will link to / instead. */}
           {[
-            ["01", "$ALPHA", 92, t("about.s2Rising")],
-            ["02", "$NOVA", 74, t("about.s2Active")],
-            ["03", "$VOID", 51, t("about.s2Active")],
-            ["04", "$ARCX", 29, t("about.s2Early")],
-          ].map(([n, tok, w, status]) => (
+            ["01", "$ALPHA", 92],
+            ["02", "$NOVA", 74],
+            ["03", "$VOID", 51],
+            ["04", "$ARCX", 29],
+          ].map(([n, tok, w]) => (
             <div className="lp-market-item" key={String(n)}>
               <span className="lp-rank">{n}</span>
               <span className="lp-token">{tok}</span>
               <div className="lp-bar">
                 <span style={{ width: `${w}%` }} />
               </div>
-              <span className="lp-market-status">{status}</span>
             </div>
           ))}
         </div>

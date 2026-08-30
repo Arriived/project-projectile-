@@ -7,6 +7,7 @@ import { Routes, Route, Link, Navigate, useLocation } from "react-router-dom";
 import { WalletBar } from "./components/WalletBar";
 import { TokenPage } from "./routes/TokenPage";
 import { About } from "./routes/About";
+import { TokenList } from "./routes/TokenList";
 import { useChain } from "./providers/ChainProvider";
 import { arc } from "./chain";
 import { useT } from "./i18n";
@@ -60,17 +61,7 @@ export function App() {
       <Routes>
         <Route path="/t/:address" element={<TokenPage />} />
         <Route path="/about" element={<About />} />
-        {/* Phase 3. Until it exists, / redirects nowhere useful, so it says so. */}
-        <Route
-          path="/"
-          element={
-            <main className="main">
-              <p className="phase-note">
-                <strong>{t("dev.phase2Title")}</strong> {t("dev.phase2Body")}
-              </p>
-            </main>
-          }
-        />
+        <Route path="/" element={<TokenList />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>

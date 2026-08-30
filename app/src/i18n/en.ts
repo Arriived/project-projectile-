@@ -32,10 +32,6 @@ export const en = {
   // timelock (CLAUDE.md §6). scripts/verify-claims.mts fails the build on a versioned
   // mention, so this cannot silently come back.
   about: {
-    navLaunch: "Launch",
-    navAttention: "Attention",
-    navGraduate: "Graduate",
-
     heroIndex: "ARC / 001",
     heroLocation: "ARC MAINNET",
     heroLocation2: "COMING SOON",
@@ -81,9 +77,6 @@ export const en = {
     s2LiveLaunches: "Live launches",
     s2Attention: "Attention",
     s2Demo: "DEMONSTRATION DATA",
-    s2Rising: "RISING",
-    s2Active: "ACTIVE",
-    s2Early: "EARLY",
 
     s3Eyebrow: "THE MARKET",
     s3Title: "Trade.",
@@ -108,6 +101,46 @@ export const en = {
 
     // Was "ARC · USDC · UNISWAP V4".
     footerChips: "ARC · USDC · UNISWAP",
+  },
+
+  list: {
+    searchPlaceholder: "Search by name, symbol or address",
+    create: "Create",
+    graduatedHeading: "Graduated",
+    graduatedBlurb:
+      "These finished their bonding curve and moved to a Uniswap pool with the LP burned. They are the evidence the mechanism completes.",
+    graduatedEmpty: "None yet. When a curve reaches its threshold it appears here permanently.",
+    exploreHeading: "Explore",
+    exploreBlurb: "Live on the bonding curve. Price is set by the curve, and every quote comes from the contract.",
+    launched: "{count} launched",
+    sortRecentBuys: "Recent buys",
+    sortNewest: "Newest",
+    sortOldest: "Oldest",
+    sortMarketCap: "Market cap",
+    sortVolume: "Volume",
+    windowAll: "All",
+    window24h: "24h",
+    window7d: "7d",
+    windowUnavailable:
+      "The indexer only aggregates a 1-hour volume window today. Showing that under a {window} label would claim more than the data supports.",
+    volumeIs1h: "volume is a 1-hour window",
+    marketCap: "Market cap",
+    fdv: "FDV",
+    noTokens: "No tokens have been launched yet.",
+    noTokensCta: "Launch the first one",
+    noMatches: "Nothing matches “{query}”.",
+    clearSearch: "Clear search",
+    duplicateSymbol: "Duplicate symbol",
+    duplicateSymbolNote:
+      "Another live token uses this symbol. Nothing on chain prevents that — check the address.",
+    page: "Page {n}",
+    prev: "Previous",
+    next: "Next",
+    approxNote: "~ figures come from the indexer and are approximate. The token page reads the chain.",
+    degradedTitle: "The indexer is unreachable — reading from {chain} directly.",
+    degradedFields: "Unavailable in this mode: {fields}.",
+    degradedRange: "Only launches from the last {blocks} blocks are shown, so this list is partial.",
+    loading: "Loading tokens…",
   },
 
   common: {
