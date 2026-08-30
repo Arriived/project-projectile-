@@ -576,3 +576,38 @@ a:hover { opacity: 0.7; }
 
 .pager { display: flex; gap: 6px; margin-top: 18px; flex-wrap: wrap; align-items: center; }
 .pager .btn.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+
+/* The `~` on indexer-sourced figures. Carries its own tooltip (TokenCard), which is why
+   the explanatory line at the foot of the list could be removed. Styled as a footnote,
+   not a link: it should be noticeable enough to hover and quiet enough to ignore. */
+.approx {
+  text-decoration: none;
+  border-bottom: 1px dotted var(--line);
+  cursor: help;
+  color: var(--muted);
+}
+
+/* ── Modal ────────────────────────────────────────────────────────────────────
+   Used by the wallet picker. Centred, capped, and scrollable inside itself so a
+   long wallet list on a short phone screen scrolls the dialog rather than the
+   page behind it. */
+.modal-backdrop {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(17, 17, 17, 0.38);
+  display: flex; align-items: center; justify-content: center;
+  padding: 16px;
+}
+.modal {
+  background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+  width: 100%; max-width: 380px; max-height: calc(100vh - 32px);
+  overflow-y: auto; padding: var(--pad);
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.modal-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; margin: 0; }
+.modal-foot { margin: 14px 0 0; font-size: 12px; }
+.wallet-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.wallet-list .btn-wallet {
+  width: 100%; justify-content: flex-start; gap: 10px;
+  /* 44px is the tap target that survives a thumb. Part C. */
+  min-height: 44px;
+}

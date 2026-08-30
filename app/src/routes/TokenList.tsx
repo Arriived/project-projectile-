@@ -117,7 +117,6 @@ export function TokenList() {
             {t("list.graduatedHeading")} <span className="list-count">{graduated.length}</span>
           </h2>
         </div>
-        <p className="list-blurb">{t("list.graduatedBlurb")}</p>
 
         {graduated.length === 0 ? (
           <p className="hint list-empty">{t("list.graduatedEmpty")}</p>
@@ -144,7 +143,6 @@ export function TokenList() {
             {t("list.exploreHeading")} <span className="list-count">{live.length}</span>
           </h2>
         </div>
-        <p className="list-blurb">{t("list.exploreBlurb")}</p>
 
         <div className="list-controls">
           <div className="seg">
@@ -216,8 +214,6 @@ export function TokenList() {
             <Pager page={livePage} pages={pageCount(live.length, LIVE_PAGE_SIZE)} onPage={setLivePage} />
           </>
         )}
-
-        {!degraded && <p className="hint list-note">{t("list.approxNote")}</p>}
       </section>
     </main>
   );

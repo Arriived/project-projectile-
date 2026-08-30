@@ -20,6 +20,26 @@ import { TokenImage } from "../token/TokenImage";
 import { shortAddress, safeText } from "../../lib/format";
 import { approxMarketCapUsdc6, approxProgressBps, type ListToken } from "../../lib/tokenList";
 
+/**
+ * The `~` that prefixes every indexer-sourced figure, carrying its own explanation.
+ *
+ * This replaced a line of body copy at the foot of the list ("~ figures come from the
+ * indexer and are approximate..."). The disclosure still has to exist -- trap 21 is real
+ * and these numbers are genuinely rounded before the browser sees them -- but it is a
+ * footnote, not a paragraph a trader reads past on every visit. Whoever wants it hovers.
+ *
+ * `title` rather than a custom tooltip so it works without JS and is reachable by
+ * keyboard focus; `abbr` is the element that actually means "expandable short form".
+ */
+function Approx() {
+  const { t } = useT();
+  return (
+    <abbr className="approx" title={t("list.approxTooltip")}>
+      ~
+    </abbr>
+  );
+}
+
 export function TokenCard({
   token,
   curveSupply,
@@ -68,17 +88,20 @@ export function TokenCard({
         ) : token.graduated ? (
           <div className="tcard-figs">
             <span>
-              {t("list.marketCap")} ~{fmt.usdcCompact(mcap)}
+              {t("list.marketCap")} <Approx />
+              {fmt.usdcCompact(mcap)}
             </span>
             <span className="hint">
-              {t("list.fdv")} ~{fmt.usdcCompact(mcap)}
+              {t("list.fdv")} <Approx />
+              {fmt.usdcCompact(mcap)}
             </span>
           </div>
         ) : (
           <>
             <div className="tcard-figs">
               <span>
-                {t("list.marketCap")} ~{fmt.usdcCompact(mcap)}
+                {t("list.marketCap")} <Approx />
+                {fmt.usdcCompact(mcap)}
               </span>
             </div>
             <div className="tcard-progress">

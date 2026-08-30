@@ -107,11 +107,8 @@ export const en = {
     searchPlaceholder: "Search by name, symbol or address",
     create: "Create",
     graduatedHeading: "Graduated",
-    graduatedBlurb:
-      "These finished their bonding curve and moved to a Uniswap pool with the LP burned. They are the evidence the mechanism completes.",
-    graduatedEmpty: "None yet. When a curve reaches its threshold it appears here permanently.",
+    graduatedEmpty: "None yet — the first curve to reach its threshold appears here.",
     exploreHeading: "Explore",
-    exploreBlurb: "Live on the bonding curve. Price is set by the curve, and every quote comes from the contract.",
     launched: "{count} launched",
     sortRecentBuys: "Recent buys",
     sortNewest: "Newest",
@@ -125,6 +122,8 @@ export const en = {
       "The indexer only aggregates a 1-hour volume window today. Showing that under a {window} label would claim more than the data supports.",
     volumeIs1h: "volume is a 1-hour window",
     marketCap: "Market cap",
+    approxTooltip:
+      "Approximate. This figure comes from the indexer, which rounds large numbers before the browser sees them. The token page reads the chain directly.",
     fdv: "FDV",
     noTokens: "No tokens have been launched yet.",
     noTokensCta: "Launch the first one",
@@ -136,7 +135,6 @@ export const en = {
     page: "Page {n}",
     prev: "Previous",
     next: "Next",
-    approxNote: "~ figures come from the indexer and are approximate. The token page reads the chain.",
     degradedTitle: "The indexer is unreachable — reading from {chain} directly.",
     degradedFields: "Unavailable in this mode: {fields}.",
     degradedRange: "Only launches from the last {blocks} blocks are shown, so this list is partial.",
@@ -166,6 +164,10 @@ export const en = {
     boundTo: "The wallet this page is bound to",
     connectsTo: "Connects specifically to {name}",
     genericWarning: "No wallet announced itself; this connects to window.ethereum",
+    connect: "Connect",
+    pickerTitle: "Connect a wallet",
+    pickerClose: "Close",
+    pickerHint: "Browsing needs no wallet. You only need one to trade.",
   },
 
   chain: {

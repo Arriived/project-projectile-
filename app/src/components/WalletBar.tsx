@@ -16,14 +16,98 @@
 //   - No rejected or abandoned prompt may leave the UI in a lying state
 //     (REACT_REBUILD phase 6).
 
+import { useEffect, useState } from "react";
 import { useAccount, useConnect, useConnectors, useDisconnect } from "wagmi";
+import type { Connector } from "wagmi";
 import { arc } from "../chain";
 import { useChain } from "../providers/ChainProvider";
-import { selectWallets, walletLabel, isGenericInjected } from "../lib/wallets";
+import { selectWallets, walletLabel, isGenericInjected, type WalletChoice } from "../lib/wallets";
 import { useT } from "../i18n";
 
 function short(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
+/**
+ * The wallet list, in a dialog rather than inline in the header.
+ *
+ * ⚠ THIS COMPONENT DOES NOT DECIDE WHAT IS OFFERED. It renders whatever `selectWallets`
+ * returned. That separation is deliberate: the selection rule is the one that took four
+ * rounds against a real wallet to get right, it is red-proved in verify:wallets, and it
+ * must not acquire a second implementation here. If this list looks wrong, the bug is in
+ * lib/wallets.ts, not in this file.
+ */
+function WalletPicker({
+  wallets,
+  allConnectors,
+  connecting,
+  pendingConnector,
+  onPick,
+  onClose,
+}: {
+  wallets: WalletChoice[];
+  allConnectors: readonly Connector[];
+  connecting: boolean;
+  pendingConnector: Connector | undefined;
+  onPick: (c: Connector) => void;
+  onClose: () => void;
+}) {
+  const { t } = useT();
+
+  // Escape closes. A modal that can only be dismissed by hitting a small × is a trap on
+  // a phone, which is where this picker matters most (Part C).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal wallet-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("wallet.pickerTitle")}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-head">
+          <h2 className="modal-title">{t("wallet.pickerTitle")}</h2>
+          <button className="btn btn-ghost btn-tiny" onClick={onClose} aria-label={t("wallet.pickerClose")}>
+            ✕
+          </button>
+        </div>
+
+        <div className="wallet-list">
+          {wallets.length === 0 && <p className="hint">{t("wallet.noWalletDetected")}</p>}
+          {wallets.map((w) => {
+            const live = allConnectors.find((c) => c.uid === w.uid);
+            const pending = connecting && pendingConnector === live;
+            return (
+              <button
+                key={w.uid}
+                className="btn btn-wallet"
+                disabled={connecting || !live}
+                onClick={() => live && onPick(live)}
+                title={
+                  isGenericInjected(w)
+                    ? t("wallet.genericWarning")
+                    : t("wallet.connectsTo", { name: w.name })
+                }
+              >
+                {w.icon && <img src={w.icon} alt="" className="wallet-icon" />}
+                <span>{pending ? t("common.checkYourWallet") : w.name}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Browsing needs no wallet. Saying so in the one place a user is most likely to
+            think otherwise. */}
+        <p className="hint modal-foot">{t("wallet.pickerHint")}</p>
+      </div>
+    </div>
+  );
 }
 
 export function WalletBar() {
@@ -32,6 +116,14 @@ export function WalletBar() {
   const { guard, switchToArc, switching, stuck, inAutoPrompt, switchError } = useChain();
   const { connect, isPending: connecting, error: connectError, variables } = useConnect();
   const { disconnect } = useDisconnect();
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  // Close on success. Without this the dialog stays over a now-connected header until the
+  // user dismisses it, which reads as the connection not having worked -- the same class
+  // of lying UI state the chain guard was fixed for.
+  useEffect(() => {
+    if (guard.status !== "disconnected") setPickerOpen(false);
+  }, [guard.status]);
 
   // useConnectors is the REACTIVE list: EIP-6963 wallets announce asynchronously after
   // page load, so a snapshot taken once would miss whichever extension is slower.
@@ -49,33 +141,41 @@ export function WalletBar() {
   if (guard.status === "disconnected") {
     return (
       <div className="wallet">
-        <div className="wallet-picker">
-          {wallets.length === 0 && (
-            <span className="wallet-err">{t("wallet.noWalletDetected")}</span>
-          )}
-          {wallets.map((w) => {
-            const live = allConnectors.find((c) => c.uid === w.uid);
-            const pending = connecting && variables?.connector === live;
-            return (
-              <button
-                key={w.uid}
-                className="btn btn-wallet"
-                disabled={connecting || !live}
-                onClick={() => live && connect({ connector: live })}
-                title={
-                  isGenericInjected(w)
-                    ? t("wallet.genericWarning")
-                    : t("wallet.connectsTo", { name: w.name })
-                }
-              >
-                {w.icon && <img src={w.icon} alt="" className="wallet-icon" />}
-                {pending ? t("common.checkYourWallet") : w.name}
-              </button>
-            );
-          })}
-        </div>
+        {/* ONE button, opening a picker.
+
+            Every discovered wallet used to render inline, which on a machine with two
+            extensions put four buttons in the header -- Injected, WalletConnect, MetaMask,
+            Phantom -- and made the count of installed extensions the width of the nav.
+            That does not survive 390px (Part C) and it was never a deliberate design.
+
+            THE SELECTION LOGIC IS UNCHANGED. `selectWallets` still decides what is
+            offered, still keys suppression of the generic connector on `rdns`, and W10
+            still holds: with nothing announced via EIP-6963 the generic connector is the
+            only way in and must remain offered. This moved WHERE the list renders, not
+            WHAT is in it. */}
+        <button
+          className="btn btn-primary"
+          onClick={() => setPickerOpen(true)}
+          disabled={connecting}
+        >
+          {connecting ? t("common.checkYourWallet") : t("wallet.connect")}
+        </button>
+
+        {pickerOpen && (
+          <WalletPicker
+            wallets={wallets}
+            allConnectors={allConnectors}
+            connecting={connecting}
+            pendingConnector={
+              typeof variables?.connector === "function" ? undefined : variables?.connector
+            }
+            onPick={(c) => connect({ connector: c })}
+            onClose={() => setPickerOpen(false)}
+          />
+        )}
+
         {/* A rejected connection is a decision, not a fault. Say what happened and
-            leave the buttons live. */}
+            leave the button live. */}
         {connectError && (
           <span className="wallet-err" role="status">
             {connectError.name === "UserRejectedRequestError"

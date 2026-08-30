@@ -122,7 +122,10 @@ export function formatBps(locale: Locale, bps: number): string {
 export function formatAge(locale: Locale, when: string | number | bigint): string {
   const then = typeof when === "string" ? new Date(when).getTime() : Number(when) * 1000;
   const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  const rtf = new Intl.RelativeTimeFormat(INTL_TAG[locale], { numeric: "auto", style: "narrow" });
+  // numeric: "always", NOT "auto". They differ in exactly one case that matters here:
+  // "auto" renders -1 day as "yesterday" instead of "1d ago", which is how a launchpad
+  // ends up showing a token age as prose. Every other step already read correctly.
+  const rtf = new Intl.RelativeTimeFormat(INTL_TAG[locale], { numeric: "always", style: "narrow" });
   if (secs < 60) return rtf.format(-secs, "second");
   if (secs < 3600) return rtf.format(-Math.floor(secs / 60), "minute");
   if (secs < 86400) return rtf.format(-Math.floor(secs / 3600), "hour");
