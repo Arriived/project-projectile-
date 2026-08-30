@@ -6,11 +6,14 @@
 
 | | |
 |---|---|
-| HEAD **when this was written** | `b0ba1ea` |
-| contract | **FROZEN.** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`, verified, 24,033 / 24,576 — 543 free |
-| tests | **255 Hardhat + 10 fork (`FORK=1`), 13 Foundry, 14 live Arc-testnet R15 checks, 11 anon-key RLS checks** |
-| indexer | **LIVE and at head.** 000 + 001 + 002 applied; backfilled from block 59366694 |
-| database | RLS verified with the **anon** key: view returns **4 rows**, `indexer_state` **401**, writes are **no-ops**. **Both barriers now confirmed live** — see below. |
+| repo HEAD **when this was written** | `90813c5`, on branch **`ballista-migration`**, tree clean |
+| deployed commit | `38e3e9e` — **not** the same thing, and it should not be. The contract is frozen; everything since is frontend. §7 carries this one. |
+| contract | **FROZEN.** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`, verified, 24,033 / 24,576 — 543 free. Re-confirmed on chain: `eth_getCode` returns 24,033 bytes. |
+| tests | **255 Hardhat passing + 10 pending** (the pending ones are the `FORK=1` suite), **13 Foundry**, **139 frontend** across seven suites, **11 anon-key RLS checks**. All re-run this session. |
+| tests NOT re-run | the **10 fork** checks (need a mainnet fork RPC) and the **14 live Arc-testnet R15** checks (need a funded key). Both passed when last run; neither was re-executed here. |
+| indexer | ⚠ **STALLED, NOT AT HEAD.** Checkpoint `59455052`, chain head `59663174` — **208,122 blocks behind, ~27.7 hours.** The process is not running. Migrations 000 + 001 + 002 are applied and the data it holds is correct; it is simply not advancing. |
+| database | RLS re-verified with the **anon** key this session: **11/11**. View returns **4 rows**, `trades` **6 rows**, `indexer_state` **401 / 42501**, all four write paths no-ops. Both barriers confirmed live. |
+| frontend | **BUILT.** React + Vite + wagmi + viem, in `app/`. List page, token page and `/about` ship; the create flow (Phase 4) does not. See §11. |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
 this file was last updated, not where you are. `git rev-parse --short HEAD` is ground
@@ -20,32 +23,44 @@ them. This file once carried **three different HEADs at once** — this table sa
 
 ## The exact next action
 
-**1. Click through buy, sell and create with a real wallet.** Nothing else is blocked on
-it, and it is the only part of the stack never exercised end to end — every browser
-available in-session lacks a wallet extension, so the signature path is unverified.
-`node frontend/serve.js`, open `http://localhost:8080`, MetaMask on Arc Testnet, and use
-it. Everything underneath is proven against `0xEDeed1F0...`: quotes, gas reserve,
-blocklist, custom-error decoding, and the transaction shapes themselves
-(`scripts/verify-frontend-txshapes.js`, 9/9).
+⚠ **The previous version of this section is DONE and has been rewritten.** It said "build
+the token page and the token list AS NEW FILES" against the buildless frontend. Both pages
+exist, in React, in `app/` — see §11. The salvage instruction it carried was followed: the
+correctness engine was lifted, and the JS curve math was **not** (§7C).
 
-**2. Then build the token page and the token list AS NEW FILES.**
+**1. Restart the indexer and let it catch up.** It is 208,122 blocks behind and not
+running. `cd indexer && node src/index.js` with the env in §8. Nothing else here needs it,
+but the list page reads from it, and every hour it stays down is an hour of launches the
+product cannot see. **Do NOT reset the checkpoint** — the factory has not changed, so the
+checkpoint is valid and resetting it would replay ~88k blocks for nothing. (Reset it only
+on a redeploy; that hazard is §RESUME/1 below and it is the opposite of this case.)
 
-⚠ **`terminal.html` and `create-token.html` are a working correctness ENGINE, not the
-product.** Everything hard and everything paid for in findings now lives in them — quotes
-from `quoteBuy`/`quoteSell`, price impact from a probe quote, the gas reserve, the fee
-floor, the blocklist check, selector-decoded errors, 5792 batching, `ensureArcNetwork`,
-`withRetry`. **Lift that engine into the new pages. Do not restart from a blank file, and
-do not finish these two.**
+**2. Click through buy, sell and create with a real wallet.** Still the only part of the
+stack never exercised end to end, and still for the same reason: every browser available
+in-session lacks a wallet extension, so the **signature path is unverified**. This is now
+`cd app && npm run dev` at `http://localhost:5173`, not `frontend/serve.js`.
 
-**The Pons-style pages do not exist yet.** A token list and a **token page as the unit of
-navigation** are the product and neither has been written. `terminal.html` is an abandoned
-Axiom-style terminal (§7C); `create-token.html` is a single-purpose form. Salvage both,
-ship neither.
+What *is* proven underneath it, against `0xEDeed1F0...`: quotes from `quoteBuy`/`quoteSell`,
+the gas reserve and limit from real receipts, the blocklist check, custom-error decoding
+(viem, natively — no selector map), and the transaction shapes
+(`scripts/verify-frontend-txshapes.js`, 9/9). What is **not** proven is that a real wallet
+signs and lands them. The chain guard itself took four rounds against a real wallet after
+passing against an injected fake every time — that is the standing warning for this step.
 
-`FRONTEND_BUILD_V2.md` holds the nine rules the new pages must satisfy. Rule 9 is the
-newest and applies squarely to the token page: a launched token is **invisible** in
-MetaMask until it is added, and on Arc the only visible evidence of a successful buy is the
-user's gas-and-settlement balance going down.
+**3. Migration 003, approved and not yet written.** The list page derives "recent buys"
+from a second query against `trades` because the view cannot serve it, and disables the
+24h/7d windows because the data does not exist. Both are honest today and both are
+worse than the migration. Columns agreed: `last_buy_block`, `last_buy_at`,
+`volume_24h_usdc`, `volume_7d_usdc`, `volume_all_usdc`, `total_supply` (or a computed
+`market_cap_usdc`), `symbol_collision_count`. Confirmed absent from the live view this
+session by reading its columns with the anon key.
+
+**Phase 4 — the create flow — is explicitly gated on the operator's word.** Do not start it
+unprompted. When it is started, R13 is a hard requirement on it: the creation fee must be
+approved for an **exact amount**, never `MaxUint256`.
+
+`FRONTEND_BUILD_V2.md` holds the nine rules. They are properties of the contract, not of
+the rendering technology, and all nine survived the React rebuild unchanged.
 
 ## Three things that fail SILENTLY — read before touching any of them
 
@@ -85,6 +100,12 @@ positive confirmation the privilege is **absent** rather than merely unexercised
 barriers are live: no grant, and no permissive RLS policy. `verify-anon-access.js` is
 11/11.
 
+✅ **Re-run 30 August 2026: still 11/11.** Reads 4 tokens / 6 trades, `indexer_state` 401,
+all four write paths no-ops. Env for it lives in `app/.env.local` (`VITE_`-prefixed) plus
+`indexer/.env` for the service key — the script wants unprefixed `SUPABASE_URL` /
+`SUPABASE_ANON_KEY`, so export them before running or it exits with a usage message rather
+than a failure.
+
 **The status code is the whole signal here, and it is the one this file warns about.** A
 `204` means "the grant is held and RLS matched nothing"; a `401`/`42501` means "refused
 before RLS was consulted". Both leave the row count unchanged, so the row-count comparison
@@ -110,7 +131,17 @@ npm install
 git submodule update --init          # forge-std
 git config core.hooksPath .githooks  # REQUIRED: see below
 npm run build                        # compile + regenerate the indexer ABI
+
+cd app && npm install                # the React frontend is a SEPARATE package (§11)
+npm run verify                       # 139 checks across seven suites; all should pass
+npm run dev                          # http://localhost:5173
 ```
+
+**`app/` has its own `package.json` and its own `node_modules`.** The root install does not
+reach it, and `npm run verify` at the root does not run the frontend suites. `app/.env.local`
+holds `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`; without them the list page falls back
+to reading the chain directly and says so, which is correct behaviour rather than a broken
+setup (§11.8).
 
 **`git config core.hooksPath .githooks` is not optional.** Without it the pre-commit
 mutation guard is silently inert — a fresh clone gets **no error, just no protection**,
@@ -737,9 +768,16 @@ an observed burn.
 
 ### Not even a stub
 
-- **Indexer** — migrations 001 and 002 unapplied, `SUPABASE_URL` does not resolve. The
-  generated-ABI test covers generation; nothing covers ingestion.
-- **Frontend** — not started (§8).
+- **Indexer** — ⚠ *corrected: migrations 001 and 002 ARE applied and `SUPABASE_URL` resolves
+  (verified with the anon key this session, §8). What this row was really pointing at
+  remains true and is the part to keep:* the generated-ABI test covers generation, and
+  **nothing covers ingestion.** No test drives the indexer against a chain and checks what
+  lands in the database. That gap is unchanged.
+- **Frontend** — ⚠ *corrected: it is BUILT (§11).* But "not even a stub" still describes the
+  right thing about it, one level down: **139 checks cover the pure libraries, and NOTHING
+  covers the rendered app.** There is no component test, no browser test, and no test that
+  drives a wallet. The signature path has never executed. Read this row as "the UI itself is
+  untested", which is exactly what it was warning about.
 
 **There is no clamped-buy refund path.** The clamp never pulls the excess: `_quoteBuy`
 computes `actualUsdcIn` for exactly the tokens available and `safeTransferFrom` pulls only
@@ -755,8 +793,13 @@ that. Closed by structure, not by a fix.
 test, and without it `quoteBuy` on a non-existent token returns `tokensOut = 0` with
 `actualUsdcIn` set to the full amount and **does not revert**.
 
-**Last clean run: 52/56 = 92.9%, re-run on the post-session state** (56 sites, full 242-test
-suite per site, ~2h). **Identical to the previous score, with the same four survivors.** That
+**Last clean run: 52/56 = 92.9%, re-run on the post-session state** (56 sites, full test
+suite per site, ~2h). *(That "242-test suite" figure was the count at the time; the suite is
+**255 passing + 10 pending** today. The sweep has NOT been re-run since — nothing on the
+contract has changed, so it should not need to be, but the score belongs to the older
+suite.)* **Re-read from `guard-coverage.jsonl` on 30 August 2026 rather than recalled: 56
+lines, 52 `DETECTED`, 4 `UNDETECTED`.** Identical to the previous score, with the same four
+survivors. That
 was not the expectation — R12 and R13 landed after the last sweep, so movement looked likely
 — and the absence of movement is the finding: R12's fix adds a storage write rather than a
 guard, R13 was documented rather than fixed, and the new tests exercise behaviours whose
@@ -891,10 +934,10 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| HEAD **when this was written** | `38e3e9e` (the deployed commit) |
-| bytecode | **24,033 / 24,576 — 543 free** |
-| tests | **255 Hardhat + 10 fork (FORK=1), 13 Foundry, 14 live Arc-testnet R15 checks** |
-| last mutation score | 52/56 = 92.9% — **re-run on the deployed state (R17 included)**, same four survivors, all classified (§5) |
+| deployed commit | `38e3e9e` — **the commit the frozen bytecode was built from, NOT the repo HEAD.** Repo HEAD is `90813c5`; the gap is entirely frontend work and the contract has not moved. Keep these two labelled differently, because this file has carried three conflicting HEADs before. |
+| bytecode | **24,033 / 24,576 — 543 free.** Verified on chain this session: `eth_getCode` on the factory returns 24,033 bytes. |
+| tests | **255 Hardhat passing + 10 pending** (pending = the `FORK=1` suite, skipped without it), **13 Foundry** (`forge test`, 3 suites, 205s). Re-run this session. The **14 live R15** checks and the **10 fork** checks were **not** re-run — they need a funded key and a fork RPC respectively. |
+| last mutation score | **52/56 = 92.9%**, re-read from `guard-coverage.jsonl` this session rather than recalled: 56 sites, 52 `DETECTED`, 4 `UNDETECTED`. Same four survivors, all classified (§5). |
 
 ## Current deployment — re-frozen
 
@@ -1109,6 +1152,13 @@ navigation**.
 Salvage from it freely and delete the rest. No future session should treat it as the
 product.
 
+✅ **THE SALVAGE IS DONE.** The engine was lifted into `app/` (§11) and the JS curve math was
+**not** — quotes come from `quoteBuy`/`quoteSell` on the contract. Two things changed shape
+in the move and are worth knowing: `ensureArcNetwork` became the fail-closed guard in
+`lib/arcGuard.ts` (§11.3), and `withRetry` — which existed in **two drifted copies** across
+the two HTML files, only one of which handled rate limits — is now TanStack Query's retry
+policy, in one place. The table below is kept as the record of what was taken.
+
 | salvage | discard |
 |---|---|
 | wallet connect, `ensureArcNetwork` | the terminal shell itself |
@@ -1127,9 +1177,25 @@ reverted**. Quotes come from `quoteBuy`/`quoteSell` on the contract — §1.3.
 
 # 8. NON-CONTRACT STATE
 
-- **Frontend: not started. This is the critical path.** Price impact must be a headline number — a $500 buy at launch takes ~21% of supply with ~19% slippage. `minTokensOut` must never default to zero. Show "creator bought X% at launch" on every token page — the 2.5% cap limits only the *privileged* path and does not cap total creator holdings, so disclosure is the actual protection. A quote taken during the snipe window is stale within **one second** and can understate the received amount by ~9x (favourable to the buyer, so `minTokensOut` never trips — but a frozen quote is simply wrong).
-- **Indexer: WORKING.** Migrations applied, backfilled from the deploy block and caught up to
-  head (12 blocks behind, ~6s of chain time). Verified end to end: 4 tokens indexed, all
+- **Frontend: BUILT, in React, in `app/`. NO LONGER THE CRITICAL PATH — §11 is the record.**
+  *(This entry used to read "not started". It is corrected rather than deleted because the
+  three requirements it carried are still binding and are the reason the pages look the way
+  they do.)* Price impact **is** a headline number — a $500 buy at launch takes ~21% of
+  curve supply and moves the price ~18.55%; the definition is pinned in §11.4 because three
+  different numbers describe that one trade. `minTokensOut` never defaults to zero. "Creator
+  bought X% at launch" renders on every token page — the 2.5% cap limits only the
+  *privileged* path and does not cap total creator holdings, so disclosure is the actual
+  protection. A quote taken during the snipe window is stale within **one second**, so the
+  trade panel **re-quotes immediately before signing** rather than acting on a displayed
+  number.
+- **Indexer: ⚠ STALLED. The code works; the process is not running.** Migrations 000 + 001 +
+  002 applied, backfilled from the deploy block. **Measured this session: checkpoint
+  `59455052` against chain head `59663174` — 208,122 blocks behind, ~27.7 hours of chain
+  time.** *(This entry previously said "WORKING … caught up to head, 12 blocks behind". That
+  was true when written and is the exact failure mode this file warns about: a state
+  recorded once and never re-measured. The 12-block figure is kept here as the reading it
+  was, not as the reading it is.)* Restarting it is enough — **do not reset the checkpoint**,
+  because the factory has not changed. Verified end to end when last live: 4 tokens indexed, all
   from the current factory, with both migrations' columns populated (`state=trading`,
   `creator_launch_bps`), and trade rows matching on-chain amounts exactly — a SELL recorded
   `usdc=188113`, the precise net `quoteSell` returned.
@@ -1328,9 +1394,278 @@ and none of it should be hardcoded before then.
 | **Mainnet chain ID** | **UNSOURCED.** Testnet is `5042002`. A secondary source said `5042` and Circle documents only the testnet value — do not put `5042` anywhere until confirmed. |
 | **Mainnet contract addresses** | USDC, CCTP `TokenMessengerV2`, `MessageTransmitterV2`, and anything else depended on. The docs say to always check the contract-addresses page rather than reusing a testnet value. |
 | **Fee parameters** | Floor (20 Gwei), ceiling (20,000 Gwei) and throughput are **explicitly testnet configuration** and *"may change before mainnet launch."* Read from the chain. |
-| **Uniswap V2 deployment** | The v2 router/factory addresses in §6 came from Uniswap's SDK **for a chain that did not exist yet**. Confirm code is actually deployed at those addresses on mainnet before graduation depends on them — `scripts/refreeze-preflight.js` already does this check and reports NO CODE on testnet. |
+| **Uniswap V2 deployment** | The v2 router/factory addresses in §6 came from Uniswap's SDK **for a chain that did not exist yet**. Confirm code is actually deployed at those addresses on mainnet before graduation depends on them — `scripts/refreeze-preflight.js` already does this check. **Re-verified on testnet, 30 August 2026:** `eth_getCode` returns `0x` (NO CODE) for both router `0x1f7d7550…` and factory `0x89e5db8b…`, while the LFX1 factory returns 24,033 bytes and USDC returns 1,798 — so the probe itself is known-good and the absence is real, not a broken call. Expected on testnet; the same one-line check is the gate on mainnet. |
 | **Everything resolves ON THE DAY** | Confirmed by the MCP server: *"Mainnet addresses are not yet available"*, and both mainnet phases are listed as **Upcoming** with no chain ID published. Nothing can be pre-wired. **So anything that can fetch-and-verify at runtime should be built that way NOW, not hardcoded and swapped later** — chain ID from the provider, contract addresses from config fetched at boot, fee parameters from `eth_gasPrice`/`eth_feeHistory`, and a startup assertion that what was fetched matches what was expected. A frontend that hardcodes testnet values needs a rebuild on 16 September; one that resolves them needs a config change. |
 | **Testnet-vs-mainnet USDC parity** | Unverifiable until mainnet exists. §2 records testnet USDC as the same KIND of token, not the same token. |
+
+---
+
+# 11. THE FRONTEND — React, built, in `app/`
+
+**The no-build-step constraint is revoked (see `## Stack`). This section is the record of
+what replaced it.** `REACT_REBUILD.md` holds the spec and the twenty-one traps;
+`FRONTEND_BUILD_V2.md` holds the nine hard rules, all of which survived the rebuild
+unchanged because they are properties of the *contract*, not of the rendering technology.
+
+## 11.1 Stack, versions as installed
+
+Read from `app/node_modules`, not from the `^` ranges in `package.json`:
+
+| package | range | installed |
+|---|---|---|
+| react / react-dom | `^19.0.0` | **19.2.8** |
+| wagmi | `^3.7.7` | **3.7.7** |
+| viem | `^2.56.0` | **2.56.0** |
+| react-router-dom | `^7.18.3` | 7.18.3 |
+| @tanstack/react-query | `^5.62.0` | 5.62.x |
+| vite | `^6.0.0` | **6.4.3** |
+| typescript | `^5.7.0` | 5.7.x |
+
+Routes: `/` (list), `/t/:address` (token page), `/about` (the ported landing page), `*` →
+redirect to `/`. **`/create` is linked but NOT built** — Phase 4 is gated on the operator.
+
+**139 frontend checks across seven suites**, all passing, all red-proved, run by
+`npm run verify` in `app/`:
+
+| suite | checks | covers |
+|---|---|---|
+| `verify:chain` | 11 | chain object, fee floor, derived hex id |
+| `verify:guard` | 22 | the fail-closed chain guard |
+| `verify:wallets` | 10 | EIP-6963 selection |
+| `verify:trade` | 36 | quotes, slippage, gas, curve gating |
+| `verify:list` | 30 | sort, collisions, search, pagination |
+| `verify:i18n` | OK | locale parity (pass/fail, not counted) |
+| `verify:claims` | OK | public claims vs the deployed contract |
+
+## 11.2 Phase commits
+
+| commit | what |
+|---|---|
+| `3244698` | Phase 0/1 — scaffold, Arc chain, wallet connect, proven read |
+| `adb649e` | two fail-open chain-guard bugs: poll the wallet, never trust a switch attempt |
+| `1fd1233` | prompt the switch automatically on connect, once, never retry after rejection |
+| `3afbc5d` | diagnostics page for the real wallet — no fix, a hypothesis with evidence |
+| `67a1440` | **EIP-6963 binding; stop using the contested generic `injected()` connector** |
+| `45d0fae` | settle whether green came from stale app state or the wallet itself |
+| `b994f15` | explain per-site network scoping in the wrong-network banner |
+| `3248410` | measure real gas — reserve 249,546 units sized on the EXIT |
+| `751b3c6` | Phase 2 core — trade logic as pure, red-proved libs before any UI touched it |
+| `cc462c3` | Phase 2 — the token page, live against the frozen factory |
+| `5c33f89` | i18n — in-house layer on `Intl`, parity enforced at build |
+| `1a6b422` | Phase 3 Part A — seven fixes |
+| `59928fd` / `10be2bf` | Part B — app identity and `/about` |
+| `90813c5` | Part C — the list page at `/` |
+
+## 11.3 The chain guard took FOUR rounds, and why is the reusable part
+
+⚠ **Three consecutive fixes passed against an injected fake and failed against real
+MetaMask.** Anyone touching wallet or network code should read this before shipping.
+
+1. **`useChainId()` reads the wagmi CONFIG, not the wallet.** The wrong-network branch was
+   structurally unreachable — wagmi refuses to move config state to an unconfigured chain,
+   so the value could never be wrong. Fixed with `useAccount().chainId` plus an
+   independent `eth_chainId` probe.
+2. **Read once, trusted forever.** A provider that changed chain without emitting
+   `chainChanged` produced **zero** further reads. Fixed with 3s polling and a **12s
+   freshness bound** — a stale answer is `unknown`, not `ok`.
+3. **`switchChain` can hang forever** when the wallet resolves without switching, leaving
+   the button permanently disabled. Bounded at 20s.
+4. **The real cause of the last round was `window.ethereum` contention** — Phantom and
+   MetaMask fighting over one property. The operator diagnosed it; my "stripped persistence
+   shell" hypothesis was wrong. Fixed by **EIP-6963 discovery**, binding to a named
+   wallet. `selectWallets` drops the generic injected connector whenever any 6963 wallet is
+   discovered.
+
+**And the last symptom was not a bug at all.** MetaMask's per-site network scoping meant
+the site's permitted network was Arc while the wallet's global network was Ethereum. The
+banner now explains that case rather than asserting a fault.
+
+`lib/arcGuard.ts` is pure and fail-closed: `ok` requires **both** sources to agree **and**
+the probe to be fresh. Anything else is `unknown` and `canTransact` is false.
+
+## 11.4 Price impact — ONE trade, THREE numbers, and they are not interchangeable
+
+The probe method (§1.3) yields one ratio; the formula chooses which side to report. For the
+same $500 buy, measured live:
+
+| figure | value | what it is |
+|---|---|---|
+| token shortfall | **15.65%** | `1 − (trade rate / probe rate)` |
+| **PRICE MOVE** | **18.55%** | `(probe rate / trade rate) − 1` — **what the UI shows** |
+| share of curve supply | **~20.9%** | §1.3's figure. **Not an impact number at all.** |
+
+The first two are exact reciprocals, not two measurements. `impactPct` in `lib/quotes.ts`
+divides by `effective`, **not** `marginal` — that single denominator is the whole
+difference. PRICE MOVE was chosen because its misreading is the safe one: read as "I get
+18.55% fewer tokens" it OVERSTATES the cost, and for a warning, erring high is correct.
+
+⚠ **Do not "reconcile" 20.9% with either of the others.** It answers a different question.
+
+## 11.5 Gas — the limit and the reserve are DIFFERENT NUMBERS, deliberately
+
+Both from real receipts (`app/scripts/measure-gas.mts`), not chosen. The old frontend sent a
+hardcoded 600,000 limit against a buy that consumed 194,372.
+
+**Limit = `estimate × 3.0`** (`GAS_LIMIT_MULTIPLIER_X10 = 30n`). Raised from 1.5 because 1.5
+was thinner than it reads: `estimateGas` returned **143,576** against **194,372** actually
+consumed — the estimate came in **26% BELOW reality**, so the ratio to cover is already
+1.354 and x1.5 leaves ~11% real headroom, not 50%. No measured buy triggered a
+**graduation**, which does strictly more work than anything in the sample. The asymmetry is
+total: unused gas is refunded, so an oversized limit costs a slightly higher balance bar;
+an undersized one fails the most important transaction in the product.
+
+**Reserve = 249,546 units**, sized on the **EXIT**, not on the limit. Worst observed sell
+**119,254** + first-time approve **47,110** = 166,364, plus 50%. It is the exit because
+that is R15's actual failure — a holder with 471 trillion tokens and 0.0016 USDC who could
+not afford to sell. And the exit is **two** transactions for a first-time seller:
+`sell()` takes tokens via `safeTransferFrom` (`LFX1.sol:577`), so an approve must land
+first. A reserve covering only the sell strands exactly the user it exists to protect.
+
+**Held in GAS UNITS, never in USDC**, so it tracks the fee. What it costs the user in
+withheld trading balance:
+
+| base fee | reserve (249,546 u) | one-trade limit (583,116 u) |
+|---|---|---|
+| 20 Gwei (Arc's floor) | **0.004991 USDC** | 0.011662 USDC |
+| 200 Gwei | 0.049909 USDC | 0.116623 USDC |
+| 20,000 Gwei (Arc's ceiling) | **4.990920 USDC** | 11.662320 USDC |
+
+A figure fixed in USDC would be wrong by **1000x** exactly when the network is busy.
+
+`GAS_LIMIT_UNITS_FOR_PRECHECK` uses the *same* x3.0 multiplier as the sent limit, so the
+affordability check cannot pass a trade the wallet then refuses to sign.
+
+## 11.6 i18n — in-house on `Intl`, and the locale decision
+
+**Built in-house, ~1 kB.** Measured against the alternative before deciding: adding a
+library cost **+51.5 kB raw / +17.1 kB gzip** (200.25 → 217.34 kB gzip). The two things
+that price buys — ICU MessageFormat and namespace lazy-loading — are worth 17 kB on a large
+app and are not worth it here.
+
+**LOCALE DECISION: English and Simplified Chinese ship. Korean is CUT.**
+
+⚠ **The code does not yet reflect that decision, and this is the honest state, not a claim
+of completion.** `app/src/i18n/locales.ts` currently reads
+`SHIPPED_LOCALES = ["en"]`, `PLANNED_LOCALES = ["zh-Hans", "ko"]`. And `en.ts` holds **239
+keys** while `zh-Hans.ts` and `ko.ts` hold **7 each** — they are scaffolds proving the
+plumbing, not translations. Shipping zh-Hans means translating 232 keys and moving it into
+`SHIPPED_LOCALES`; cutting Korean means deleting `ko.ts` and its entry.
+
+**Parity is enforced at build, not by review.** `scripts/gen-revert-copy.js` delegates to
+`app/scripts/verify-i18n.mts` via `spawnSync` and **refuses to generate** if any configured
+locale is missing copy for any revert error. A locale in `SHIPPED_LOCALES` with a missing
+key fails the build.
+
+**Layout is tested, not hoped for.** `?pseudo=long` renders the longest string actually
+present across all locale files per key; `?pseudo=expand` pads English to ~1.4x with
+visible filler, standing in for Korean's typical expansion. Chinese renders shorter and
+Korean longer, so both directions have a mode.
+
+**Number formatting is locale-aware and the divergence is real.** Plain grouping is
+identical across en/zh/ko; **compact** notation is where they split — zh groups by 万/亿,
+ko by 천/만/억/조. `i18n/format.ts` exposes exact and compact variants separately.
+**No `Intl` currency style** — USDC is not an ISO currency and forcing it through one
+produces a wrong symbol.
+
+## 11.7 The claims checker — a build gate, because a careful read is not repeatable
+
+The landing page claimed **"Uniswap v4" in five places**. Mainnet ships the **V2** router
+with LP burned to `0x...dEaD` (§6, settled). On a project whose stated moat is
+verifiability, a public specific claim the deployed contract contradicts is worse than a
+bug: a competitor falsifies it in one page load, and fixing it does not undo having said
+it. Five instances were found by reading carefully once; a sixth would be found the same
+way, or not at all. `npm run verify:claims` finds it every build.
+
+⚠ **The checker had two bugs of its own, and both are the instructive part.** `/Uniswap\s*v/i`
+matched the string **"NO UNISWAP VERSION"** in its own explanatory copy; and a positive
+check read the file's *source*, so a **comment** satisfied it after all the real copy had
+been deleted — the red-proof passed when it should have failed. A checker that cannot go
+red is the same failure as a test that cannot.
+
+⚠ **"LP burned" vs "LP locked" is a claim that CHANGES on a settled future event.** Today
+`lpRecipient` defaults to `BURN_ADDRESS` and "LP Auto-Burned" is true. If V4 lands with a
+locker, §1.8 applies: tokens launched *before* the flip keep burning, tokens launched
+*after* do not, and the two claims are **not interchangeable**. The checker must be updated
+in the same change as the flip, not after it.
+
+`components/token/TrustPanel.tsx` already reads `curve.lpRecipient` — the **per-curve
+snapshot for the viewed token** — and renders "burned" or "sent to <address>" from it,
+never from a global setting. That is A1, and it is the frontend honouring §1.8 rather than
+restating it.
+
+## 11.8 The list page — what the indexer can actually serve
+
+Measured against the live view with the anon key before any of it was written. The view has
+**no** `last_buy_at`, `volume_24h_usdc`, `volume_7d_usdc` or `total_supply` — re-confirmed
+this session by reading its columns.
+
+- **Default sort is `recentBuys`, set explicitly.** Not Newest: Newest ranks by creation, so
+  the feed fills with tokens nobody has traded. Recent buys ranks by activity, so **spam is
+  invisible rather than merely expensive to produce.** Served by a second query against
+  `trades`, ordered by `block_number` — never by timestamp (Arc's sub-second blocks share
+  timestamps, §9.3).
+- **24h and 7d are DISABLED with a reason**, not silently served with 1h data. Serving 1h
+  under a 24h label is the interface asserting what the data cannot support.
+- **Graduated sits ABOVE Explore, and stays visible at zero.** Graduated tokens are evidence
+  the mechanism completes. An empty "Graduated 0" with its explanation is launch-day state
+  and must not look broken.
+- **The address is on every card and is not optional.** `symbolLockDuration` is 0 and name
+  uniqueness was never enforced, so two tokens can carry the same name and ticker in the
+  same block.
+- **Duplicate symbols are flagged case-INSENSITIVELY, across the whole live set, on BOTH
+  tokens.** `caseSensitiveSymbols` is true on chain, so CAT and cat are different to the
+  contract and identical to a reader — the impersonation is visual. A page-scoped scan
+  cannot see a collision on page 4, which would *clear* tokens that are in fact
+  impersonated: worse than not checking. Which of two identical tickers is "the real one"
+  is not ours to assert.
+- **Every figure on a card is `~` and named `approx*`** (trap 21: PostgREST serialises
+  uint256 as a JSON **number**, truncated before JavaScript sees it). Nothing acted on comes
+  from the indexer — clicking a card opens the token page, which reads the chain.
+- **The chain fallback is BOUNDED to 36,000 blocks (~4.8h)** and says so in the UI.
+  Replaying from the deploy block would hang the page on exactly the day the indexer is
+  down, because Arc's public RPC rejects wide `eth_getLogs` ranges and then rate-limits the
+  chunked retry. In fallback the unavailable fields are **named**, never rendered as
+  zeroes — a zero market cap is a claim; "unavailable" is the truth.
+
+## 11.9 Visual identity
+
+Tokens live in `app/src/styles.css` (578 lines) and are the whole palette:
+
+```
+--bg #f3f3f0   --text #111111  --muted #777777  --line #d6d6d1  --soft #e9e9e5
+--warn #8a5a00 --pos #1f6b3a   --neg #a32b2b
+--mono "DM Mono"   --sans "Inter"   --radius 10px   --pad 18px
+```
+
+Warning / positive / negative are the only hues and are used sparingly — **a page of
+figures should be monochrome so the one coloured thing means something.**
+
+## 11.10 Open, and honestly open
+
+| item | state |
+|---|---|
+| **The signature path is UNEXERCISED** | No real wallet has signed a buy, sell or create through the React app. The single largest gap. |
+| **Supabase 401s are bounded but UNIDENTIFIED** | The app degrades correctly on a 401 and the RLS posture is verified 11/11, but the *cause* of intermittent 401s was never root-caused. Bounded, not understood. |
+| **zh-Hans is 7 of 239 keys; `locales.ts` still ships `en` only** | The decision (en + zh-Hans ship, ko cut) is made; the code has not been changed to match. §11.6. |
+| **WalletConnect** | The operator has obtained a `projectId`. It is **not wired**, and `app/src/wagmi.ts:25` still says "needs a projectId we do not have" — that comment is stale and must be fixed in the same change that wires it. |
+| **Arc mainnet chainId** | **Still unsourced.** `5042` came from a secondary source; Circle documents only `5042002`. §10. |
+| **Uniswap V2 on Arc** | Verified this session: `eth_getCode` on **testnet** returns **NO CODE** for both the mainnet router `0x1f7d…efa` and factory `0x89e5…eba`. This is expected (they are mainnet addresses) and is exactly why `GraduationHelper` is inert. **Re-run the same check on mainnet before graduation depends on them.** |
+| **No hosting, no runbook, no rollback, no user docs** | None of these exist. Not started, not scheduled. |
+| **Migration 003** | Approved, not written. See "The exact next action". |
+
+## 11.11 Settled — do not re-argue
+
+Same standing as §6.
+
+- **The build step stays.** See `## Stack` for why the buildless constraint was revoked.
+- **Quotes come from `quoteBuy`/`quoteSell` on the contract.** The JS curve math is gone and
+  must never return (§1.3, §7C).
+- **The default sort is `recentBuys`.**
+- **Price impact is PRICE MOVE (18.55%), not token shortfall.**
+- **The gas limit and the gas reserve are separate numbers.** The reserve is sized on the
+  exit and is never derived from the limit.
+- **i18n stays in-house on `Intl`.** The 17 kB gzip a library costs is not worth it here.
+- **Bind wallets via EIP-6963.** Never go back to the generic `injected()` connector.
 
 ---
 
