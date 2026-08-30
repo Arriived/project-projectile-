@@ -31,15 +31,15 @@ export function PriceAndProgress({ data }: { data: TokenData }) {
       <div className="stat-row">
         <div className="stat">
           <div className="stat-label">{t("price.marketCap")}</div>
-          <div className="stat-value">{mcap === undefined ? "…" : fmt.usd(mcap)}</div>
+          <div className="stat-value">{mcap === undefined ? "…" : `${fmt.usdcCompact(mcap)} USDC`}</div>
         </div>
         <div className="stat">
           <div className="stat-label">{t("price.inTheCurve")}</div>
-          <div className="stat-value">{fmt.usd(curve.realUsdcReserves)}</div>
+          <div className="stat-value">{`${fmt.usdcCompact(curve.realUsdcReserves)} USDC`}</div>
         </div>
         <div className="stat">
           <div className="stat-label">{t("price.threshold")}</div>
-          <div className="stat-value">{fmt.usd(curve.graduationThresholdUsdc)}</div>
+          <div className="stat-value">{`${fmt.usdcCompact(curve.graduationThresholdUsdc)} USDC`}</div>
         </div>
       </div>
 
@@ -67,7 +67,7 @@ export function PriceAndProgress({ data }: { data: TokenData }) {
       )}
 
       {curve.poolBoostEnabled && curve.poolBoost > 0n && (
-        <p className="hint">{t("price.poolBoost", { amount: fmt.usdc(curve.poolBoost) })}</p>
+        <p className="hint">{t("price.poolBoost", { amount: fmt.usdcExact(curve.poolBoost) })}</p>
       )}
     </section>
   );

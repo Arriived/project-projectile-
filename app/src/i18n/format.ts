@@ -1,34 +1,36 @@
-// Locale-aware number, currency and date formatting.
+// Locale-aware number formatting.
 //
-// ── WHY THIS IS NOT "TRANSLATED STRINGS PLUS toFixed()" ───────────────────────
+// ── TWO AXES, DELIBERATELY SEPARATE ───────────────────────────────────────────
 //
-// Measured with Node's full-ICU, not recalled:
+// 1. COMPACT vs EXACT (A7). Compact notation is for display estimates only. A number the
+//    user ACTS ON -- the slippage floor, the amount they typed, the settled amount, the
+//    gas reserve -- must be exact, because a rounded version of a floor is a number the
+//    contract will not honour. `168.27M` is a fine market cap and a lie as a minimum
+//    received. Every function below says which it is in its NAME; there is no shared
+//    entry point where the caller can forget.
 //
-//   plain grouping   en 123,456,789  |  zh 123,456,789  |  ko 123,456,789
-//   COMPACT          en 1.23K        |  zh 1234         |  ko 1.23천
-//                    en 123.46M      |  zh 1.23亿       |  ko 1.23억
-//                    en 1.23T        |  zh 1.23万亿     |  ko 1.23조
+// 2. NO CURRENCY STYLE (A6). Every figure on this site is USDC, not dollars. Intl's
+//    `style: "currency", currency: "USD"` renders `$2.48K` in English and `US$2480` in
+//    zh-Hans -- and neither is accurate, because the contract holds USDC and on Arc it is
+//    also the gas token. So: plain locale-aware number formatting, and the caller appends
+//    an explicit USDC label. The unit is not a currency symbol's job here.
 //
-// Two things fall out of that. Plain thousands grouping is the SAME in all three, so the
-// common belief that Chinese groups by 万 in ordinary numbers is wrong -- it is compact
-// notation where the myriad system appears. And compact notation differs so much that a
-// hand-rolled K/M/B/T ladder (which this file replaces) is simply wrong in zh and ko:
-// zh has no unit at all below 万, so 1234 renders as "1234" where English says "1.23K".
+// ── WHY Intl AT ALL ───────────────────────────────────────────────────────────
 //
-// Intl handles all of it. Nothing here re-implements grouping.
+// Measured with full ICU. Plain thousands grouping is IDENTICAL in all three locales
+// (123,456,789 everywhere), so the myriad system is a COMPACT-notation phenomenon:
 //
-// Amounts are passed as BIGINT base units with their decimals, never as pre-formatted
-// strings, so each locale renders from the raw value.
+//   en 1.23K / 123.46M / 1.23T   zh 1234 / 1.23亿 / 1.23万亿   ko 1.23천 / 1.23억 / 1.23조
+//
+// zh has no unit below 万, so 1234 stays "1234" where English says "1.23K". A hand-rolled
+// K/M/B/T ladder is therefore wrong in two of the three configured locales.
 
 import { formatUnits } from "viem";
 import { INTL_TAG, type Locale } from "./locales.ts";
-// Explicit .ts extensions: Vite resolves either form, but Node's ESM resolver does not,
-// and these modules are imported directly by scripts/ under --experimental-strip-types.
-// Keeping them node-resolvable is what makes the formatting layer testable without a
-// bundler -- the same lesson that split lib/arcGuard.ts out of its React hook.
+// Explicit .ts extensions: Vite resolves either form, Node's ESM resolver does not, and
+// these modules are imported directly by scripts/ under --experimental-strip-types.
 import { LAUNCH_TOKEN_DECIMALS, USDC_ERC20_DECIMALS } from "../chain.ts";
 
-// Intl formatters are expensive to construct and are reused per (locale, options) pair.
 const cache = new Map<string, Intl.NumberFormat>();
 function nf(locale: Locale, opts: Intl.NumberFormatOptions): Intl.NumberFormat {
   const key = `${locale}|${JSON.stringify(opts)}`;
@@ -40,61 +42,65 @@ function nf(locale: Locale, opts: Intl.NumberFormatOptions): Intl.NumberFormat {
   return f;
 }
 
-/**
- * Number -> string. `bigint` base units are converted through viem's formatUnits first so
- * the decimal placement is exact, then handed to Intl as a Number for presentation only.
- *
- * The Number conversion loses precision above 2^53, which is fine HERE because this is
- * the display layer: every value the user acts on is kept as bigint right up to the point
- * it is rendered. That boundary is deliberate and is the reason this function takes base
- * units rather than a pre-divided float.
- */
-function toNumber(base: bigint, decimals: number): number {
-  return Number(formatUnits(base, decimals));
-}
+/** Threshold below which compact notation is pointless. */
+const COMPACT_FLOOR = 1000;
 
-export function formatUsdc(locale: Locale, usdc6: bigint, dp = 2): string {
+// ── EXACT: for numbers the user acts on ────────────────────────────────────────
+
+/**
+ * USDC, exact, never compacted. 6 decimals.
+ *
+ * `dp` defaults to 2 for readability, but a caller showing a floor or a reserve should
+ * pass enough digits to represent it honestly -- rounding a minimum-received DOWN is safe,
+ * rounding it UP would display a floor the contract will not meet.
+ */
+export function formatUsdcExact(locale: Locale, usdc6: bigint, dp = 2): string {
   return nf(locale, { minimumFractionDigits: dp, maximumFractionDigits: dp }).format(
-    toNumber(usdc6, USDC_ERC20_DECIMALS)
+    Number(formatUnits(usdc6, USDC_ERC20_DECIMALS))
   );
 }
 
 /**
- * A headline USD figure. Compact above 1000 so a market cap fits on one line -- and
- * compact is exactly where the locale difference lives, so this must go through Intl.
+ * A launch token, exact, never compacted. 18 decimals -- never 6 (trap 4).
+ *
+ * Launch balances are enormous (a real holder in R15 held 471 trillion), so full
+ * precision to 18dp would be unreadable AND misleading about what matters. Grouped to a
+ * whole number with up to 4 decimals: exact in the sense that matters -- no order of
+ * magnitude is hidden behind a "M" or a "亿".
  */
-export function formatUsd(locale: Locale, usdc6: bigint): string {
-  const n = toNumber(usdc6, USDC_ERC20_DECIMALS);
-  if (n === 0) return nf(locale, { style: "currency", currency: "USD" }).format(0);
-  // Sub-cent values need real digits, not "$0.00" -- launch prices are ~0.0000025 USDC.
-  if (Math.abs(n) < 0.01) {
-    return nf(locale, {
-      style: "currency",
-      currency: "USD",
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 8,
-    }).format(n);
-  }
-  if (Math.abs(n) < 1000) {
-    return nf(locale, { style: "currency", currency: "USD" }).format(n);
-  }
-  return nf(locale, {
-    style: "currency",
-    currency: "USD",
-    notation: "compact",
-    maximumFractionDigits: 2,
-  }).format(n);
+export function formatTokenExact(locale: Locale, token18: bigint): string {
+  return nf(locale, { maximumFractionDigits: 4 }).format(
+    Number(formatUnits(token18, LAUNCH_TOKEN_DECIMALS))
+  );
 }
 
-/** A launch-token balance. 18 decimals -- never 6 (trap 4). */
-export function formatToken(locale: Locale, token18: bigint): string {
-  const n = toNumber(token18, LAUNCH_TOKEN_DECIMALS);
-  if (n === 0) return nf(locale, {}).format(0);
-  if (Math.abs(n) < 1000) return nf(locale, { maximumFractionDigits: 4 }).format(n);
+// ── COMPACT: display estimates only ────────────────────────────────────────────
+
+/** USDC as a headline display figure. Compact above 1000. NOT for anything acted on. */
+export function formatUsdcCompact(locale: Locale, usdc6: bigint): string {
+  const n = Number(formatUnits(usdc6, USDC_ERC20_DECIMALS));
+  if (n === 0) return nf(locale, { maximumFractionDigits: 2 }).format(0);
+  // Sub-cent values need real digits: a launch price is ~0.0000025 USDC and "0.00" is a
+  // lie about a token that costs something.
+  if (Math.abs(n) < 0.01) {
+    return nf(locale, { minimumFractionDigits: 2, maximumFractionDigits: 8 }).format(n);
+  }
+  if (Math.abs(n) < COMPACT_FLOOR) {
+    return nf(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+  }
   return nf(locale, { notation: "compact", maximumFractionDigits: 2 }).format(n);
 }
 
-/** A percentage. `pct` is already a percentage (15.65 means 15.65%). */
+/** A launch token as a display figure. Compact above 1000. NOT for anything acted on. */
+export function formatTokenCompact(locale: Locale, token18: bigint): string {
+  const n = Number(formatUnits(token18, LAUNCH_TOKEN_DECIMALS));
+  if (n === 0) return nf(locale, {}).format(0);
+  if (Math.abs(n) < COMPACT_FLOOR) return nf(locale, { maximumFractionDigits: 4 }).format(n);
+  return nf(locale, { notation: "compact", maximumFractionDigits: 2 }).format(n);
+}
+
+// ── percentages and time ───────────────────────────────────────────────────────
+
 export function formatPct(locale: Locale, pct: number, dp = 2): string {
   return nf(locale, {
     style: "percent",
@@ -103,7 +109,6 @@ export function formatPct(locale: Locale, pct: number, dp = 2): string {
   }).format(pct / 100);
 }
 
-/** Basis points as a percentage. 100 bps -> 1%. */
 export function formatBps(locale: Locale, bps: number): string {
   return formatPct(locale, bps / 100, bps % 100 === 0 ? 0 : 2);
 }
@@ -112,8 +117,7 @@ export function formatBps(locale: Locale, bps: number): string {
  * Relative age, for DISPLAY only.
  *
  * Ordering anywhere in this app uses blockNumber then logIndex, never timestamps
- * (trap 13): Arc's sub-second blocks share timestamps, so timestamp ordering silently
- * produces out-of-order trades.
+ * (trap 13): Arc's sub-second blocks share timestamps.
  */
 export function formatAge(locale: Locale, when: string | number | bigint): string {
   const then = typeof when === "string" ? new Date(when).getTime() : Number(when) * 1000;

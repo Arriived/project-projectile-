@@ -90,18 +90,47 @@ export function minOutForOfferedAmount(
 }
 
 /**
- * TRAP 3. Price impact from a PROBE QUOTE, never from `currentPrice()`.
+ * TRAP 3 + A2. Price impact from a PROBE QUOTE, never from `currentPrice()`.
+ *
+ * ── WHICH DEFINITION, AND WHY ─────────────────────────────────────────────────
+ *
+ * The probe method yields ONE ratio (marginal rate / effective rate) and the formula
+ * chooses which side of it to report. For the same $500 buy, measured live:
+ *
+ *   token shortfall  1 - (trade rate / probe rate) = 15.65%
+ *   PRICE MOVE       (probe rate / trade rate) - 1 = 18.55%
+ *
+ * They are exact reciprocals, not two measurements. (A third number, 20.9%, circulates in
+ * CLAUDE.md §1.3 -- that is the SHARE OF CURVE SUPPLY the trade consumes, not an impact
+ * figure at all, and must not be confused with either.)
+ *
+ * This returns PRICE MOVE. Three reasons, in order of weight:
+ *
+ *  1. The safer misreading. If a user reads 15.65% as "the price moved 15.65%" they
+ *     UNDERSTATE their cost. If they read 18.55% as "I get 18.55% fewer tokens" they
+ *     OVERSTATE it. For a warning, erring high is the correct direction.
+ *  2. It matches the ~19% CLAUDE.md §8 already records, so the docs and the UI agree.
+ *     Doc/UI drift on a headline number is a failure this project has repeatedly paid for.
+ *  3. "Impact" conventionally names how far the price moved, not how many fewer units
+ *     arrived.
+ *
+ * The number is labelled on screen with what it measures, because either figure is
+ * defensible and neither is self-describing.
+ *
+ * ── WHY NOT currentPrice() ────────────────────────────────────────────────────
  *
  * `currentPrice()` returns `virtualUsdcReserves * 1e18 / virtualTokenReserves`, which at
  * launch scale evaluates to the integer **2**. Any impact derived from it rounds to
- * 0.00%, so the headline number the page is required to show would silently read zero on
- * a curve where a $500 buy moves the price ~20%. Measured, not reasoned about.
+ * 0.00%, so the headline number this page is required to show would silently read zero on
+ * a curve where a $500 buy moves the price ~19%. Measured, not reasoned about.
  *
  * The sanctioned method compares the rate this trade gets against the rate a negligible
  * trade gets, both from `quoteBuy`, in tokens-per-USDC where the magnitudes are large
  * enough to keep precision.
  *
- * @returns percent, or null when it cannot be computed honestly
+ * @returns percent, or null when it cannot be computed honestly. NEVER 0 for a
+ *          degenerate input -- 0 would render "0.00% impact" on a curve that moves ~19%,
+ *          which is the exact currentPrice() failure this method replaces.
  */
 export function impactPct(
   quotedOut: bigint,
@@ -113,9 +142,11 @@ export function impactPct(
   if (probeOut === 0n || probeIn === 0n) return null;
   const marginal = (probeOut * 1_000_000n) / probeIn;
   const effective = (quotedOut * 1_000_000n) / quotedIn;
-  if (marginal === 0n) return null;
+  if (marginal === 0n || effective === 0n) return null;
   if (effective >= marginal) return 0;
-  return Number(((marginal - effective) * 10_000n) / marginal) / 100;
+  // PRICE MOVE: (marginal / effective) - 1. Divided by `effective`, not `marginal` --
+  // that single denominator is the entire difference between 18.55% and 15.65%.
+  return Number(((marginal - effective) * 10_000n) / effective) / 100;
 }
 
 /** 0.01 USDC — small enough to read as the marginal rate, large enough to keep precision. */

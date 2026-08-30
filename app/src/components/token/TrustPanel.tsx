@@ -13,6 +13,21 @@ import { shortAddress } from "../../lib/format";
 import { useT } from "../../i18n";
 import { EXPLORER_URL } from "../../config";
 
+/**
+ * A1. `lpRecipient` is a PER-CURVE SNAPSHOT taken at creation, not a global setting.
+ *
+ * There is a global owner setter (setLpRecipient) and an immutable per-curve snapshot.
+ * One setter call splits the token population permanently: curves created before it burn,
+ * curves after it do not, and neither can be migrated (CLAUDE.md §1.8). So a hardcoded
+ * "LP Auto-Burned" would be a claim the contract may not honour for some tokens, with
+ * nothing on screen distinguishing them.
+ *
+ * This reads curve.lpRecipient -- the snapshot for the VIEWED token -- and renders from
+ * what it finds. Burned when it is the dead address; otherwise the actual recipient
+ * address, unlabelled. No "Locked" label is invented for an address that cannot be
+ * classified: "locked" is a claim about a contract we have not inspected, and the honest
+ * move is to show the address and let the reader judge.
+ */
 const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 
 export function TrustPanel({ data }: { data: TokenData }) {
@@ -72,7 +87,7 @@ export function TrustPanel({ data }: { data: TokenData }) {
             <>
               <strong>{t("trust.lpBurned")}</strong>{" "}
               <span className="hint">
-                {t("trust.lpBurnedNote", { address: shortAddress(BURN_ADDRESS) })}
+                {t("trust.lpBurnedNote", { address: shortAddress(curve.lpRecipient) })}
               </span>
             </>
           ) : (

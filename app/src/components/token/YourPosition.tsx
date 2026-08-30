@@ -45,17 +45,17 @@ export function YourPosition({ token, data }: { token: Address; data: TokenData 
       <div className="position-row">
         <div>
           <div className="position-balance">
-            {bal === undefined ? "…" : fmt.token(bal)} <span className="position-sym">{symbol}</span>
+            {bal === undefined ? "…" : fmt.tokenExact(bal)} <span className="position-sym">{symbol}</span>
           </div>
           <div className="hint">
             {balances.usdc6 === undefined
               ? ""
-              : t("position.inWallet", { amount: fmt.usdc(balances.usdc6) })}
+              : t("position.inWallet", { amount: fmt.usdcExact(balances.usdc6) })}
             {balances.availableToTrade6 !== undefined && (
               <>
                 {" · "}
                 {t("position.availableToTrade", {
-                  amount: fmt.usdc(balances.availableToTrade6),
+                  amount: fmt.usdcExact(balances.availableToTrade6),
                 })}
                 <span className="hint"> ({t("position.gasReserveWithheld")})</span>
               </>

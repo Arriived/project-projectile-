@@ -32,10 +32,12 @@ export function TradesFeed({ token, data }: { token: Address; data: TokenData })
   const { t, fmt } = useT();
   const symbol = safeText(data.symbol, 16) || "tokens";
 
+  const configured = !!SUPABASE_URL && !!SUPABASE_ANON_KEY;
+
   const { data: trades, isError, isLoading } = useQuery({
     queryKey: ["trades", token],
     refetchInterval: 10_000,
-    enabled: !!SUPABASE_URL && !!SUPABASE_ANON_KEY,
+    enabled: configured,
     queryFn: async (): Promise<TradeRow[]> => {
       // block_number descending is the canonical ordering key. The indexer does not
       // currently expose log_index; where two trades share a block the order between
@@ -59,11 +61,18 @@ export function TradesFeed({ token, data }: { token: Address; data: TokenData })
       {/* TRAP 19: the indexer is a speed layer, not a trust layer. When it is
           unreachable the page says so and stays readable -- everything above this
           section is read from the chain and is unaffected. */}
-      {isError && (
+      {/* A5. Two distinct failures, said differently. "Unreachable" means the indexer
+          exists and did not answer; "not configured" means this build has no indexer
+          credentials at all. The first version rendered an EMPTY section for the second
+          case -- silent, and indistinguishable from "no trades yet". */}
+      {!configured && (
+        <p className="hint">{t("trades.indexerNotConfigured", { chain: arc.name })}</p>
+      )}
+      {configured && isError && (
         <p className="hint">{t("trades.indexerDown", { chain: arc.name })}</p>
       )}
 
-      {isLoading && !trades && <p className="hint">{t("trades.loading")}</p>}
+      {configured && isLoading && !trades && <p className="hint">{t("trades.loading")}</p>}
 
       {trades && trades.length === 0 && <p className="hint">{t("trades.none")}</p>}
 
@@ -74,12 +83,12 @@ export function TradesFeed({ token, data }: { token: Address; data: TokenData })
               <tr key={row.tx_hash}>
                 <td className={row.is_buy ? "buy" : "sell"}>{row.is_buy ? t("trade.buy") : t("trade.sell")}</td>
                 <td className="mono small">{shortAddress(row.trader_address)}</td>
-                <td>{fmt.usdc(approxBigIntFromIndexer(row.usdc_amount))} USDC</td>
+                <td>{fmt.usdcCompact(approxBigIntFromIndexer(row.usdc_amount))} USDC</td>
                 <td className="hint">
                   {/* approx*: token_amount arrives from PostgREST as a JSON number and
                       has ALREADY lost its low digits (trap 21). Fine for a feed, never
                       for anything acted on. */}
-                  ~{fmt.token(approxBigIntFromIndexer(row.token_amount))} {symbol}
+                  ~{fmt.tokenCompact(approxBigIntFromIndexer(row.token_amount))} {symbol}
                 </td>
                 <td className="hint">{fmt.age(row.created_at)}</td>
                 <td>

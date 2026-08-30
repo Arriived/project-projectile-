@@ -119,10 +119,23 @@ type Ctx = {
   t: (key: MessageKey, vars?: Record<string, string | number>) => string;
   /** Plural selection via Intl.PluralRules -- correct for en (2 forms), zh and ko (1). */
   plural: (n: number, forms: Partial<Record<Intl.LDMLPluralRule, string>>) => string;
+  /**
+   * Formatters, split EXACT vs COMPACT by name (A7).
+   *
+   * Exact is for anything the user acts on -- a slippage floor, an amount typed, a
+   * settled amount, the gas reserve. Compact is for display estimates only. There is
+   * deliberately no neutral `fmt.usdc()` that a caller could reach for without choosing:
+   * the choice is the safety property, so the name has to force it.
+   *
+   * None of these append a unit. Every figure here is USDC, not dollars (A6), so the
+   * caller writes the label -- Intl's currency style renders "$2.48K" / "US$2480", and
+   * neither is what this contract holds.
+   */
   fmt: {
-    usdc: (usdc6: bigint, dp?: number) => string;
-    usd: (usdc6: bigint) => string;
-    token: (token18: bigint) => string;
+    usdcExact: (usdc6: bigint, dp?: number) => string;
+    usdcCompact: (usdc6: bigint) => string;
+    tokenExact: (token18: bigint) => string;
+    tokenCompact: (token18: bigint) => string;
     pct: (pct: number, dp?: number) => string;
     bps: (bps: number) => string;
     age: (when: string | number | bigint) => string;
@@ -186,9 +199,10 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       t,
       plural,
       fmt: {
-        usdc: (v, dp) => fmt.formatUsdc(locale, v, dp),
-        usd: (v) => fmt.formatUsd(locale, v),
-        token: (v) => fmt.formatToken(locale, v),
+        usdcExact: (v, dp) => fmt.formatUsdcExact(locale, v, dp),
+        usdcCompact: (v) => fmt.formatUsdcCompact(locale, v),
+        tokenExact: (v) => fmt.formatTokenExact(locale, v),
+        tokenCompact: (v) => fmt.formatTokenCompact(locale, v),
         pct: (v, dp) => fmt.formatPct(locale, v, dp),
         bps: (v) => fmt.formatBps(locale, v),
         age: (v) => fmt.formatAge(locale, v),

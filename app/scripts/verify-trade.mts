@@ -14,7 +14,14 @@
 //      (NOT T9c -- T9c is caught by an earlier branch and survives that mutation,
 //       which is exactly how T9h came to exist)
 
-import { GAS_RESERVE_UNITS, gasLimitFor, availableToTrade6, checkAffordability } from "../src/lib/gas.ts";
+import {
+  GAS_RESERVE_UNITS,
+  GAS_LIMIT_UNITS_FOR_PRECHECK,
+  gasLimitFor,
+  availableToTrade6,
+  checkAffordability,
+  reserveCostWei,
+} from "../src/lib/gas.ts";
 import { sellNetOut, minOutFromQuote, minOutForOfferedAmount, impactPct, quoteDivergencePct } from "../src/lib/quotes.ts";
 import { tradeGate, graduationProgressBps, CurveState } from "../src/lib/curve.ts";
 import { snipeSchedule } from "../src/lib/snipe.ts";
@@ -95,12 +102,40 @@ console.log("── gas reserve and affordability ──");
 }
 
 console.log("\n── gas limit ──");
-check("TL1  limit is 1.5x the estimate", gasLimitFor(200_000n) === 300_000n, gasLimitFor(200_000n).toString());
+// A3. The multiplier must clear the MEASURED estimator error, not just look generous.
+// eth_estimateGas returned 143,576 against 194,372 actually consumed -- a 1.354 ratio --
+// so x1.5 left ~11% real headroom, not 50%. And no measured buy triggered graduation,
+// which does strictly more work than anything in the sample.
+check("TL1  limit is 3x the estimate", gasLimitFor(200_000n) === 600_000n, gasLimitFor(200_000n).toString());
+check(
+  "TL1b the limit clears the measured 143,576 -> 194,372 estimator shortfall with room",
+  gasLimitFor(143_576n) > 194_372n * 2n,
+  `${gasLimitFor(143_576n)} vs 194,372 consumed (${(Number(gasLimitFor(143_576n)) / 194372).toFixed(2)}x)`
+);
+check(
+  "TL1c the affordability pre-check prices the SAME multiplier as the sent limit",
+  GAS_LIMIT_UNITS_FOR_PRECHECK === (194_372n * 30n) / 10n,
+  `${GAS_LIMIT_UNITS_FOR_PRECHECK} units`
+);
 check(
   "TL2  limit is independent of the reserve (not derived from it)",
   gasLimitFor(119_254n) !== GAS_RESERVE_UNITS,
   `limit ${gasLimitFor(119_254n)} vs reserve ${GAS_RESERVE_UNITS}`
 );
+// A3: the reserve must be UNITS priced at a live fee, never a stored USDC figure. If it
+// were stored in USDC it would be wrong by 1000x at Arc's ceiling. Proven by pricing the
+// same units at three fees and requiring three different answers.
+{
+  const GW = 1_000_000_000n;
+  const at20 = reserveCostWei(20n * GW);
+  const at41 = reserveCostWei(41n * GW);
+  const atCeil = reserveCostWei(20_000n * GW);
+  check(
+    "TL3  the reserve tracks the fee -- 20 / 41 / 20,000 Gwei give three different costs",
+    at20 !== at41 && at41 !== atCeil && atCeil > at20 * 500n,
+    `${at20} / ${at41} / ${atCeil} wei`
+  );
+}
 
 // ── Trap 2: sell quotes are gross, sell() compares net ──────────────────────────
 console.log("\n── quotes ──");
@@ -159,6 +194,21 @@ console.log("\n── quotes ──");
   // currentPrice() failure this method exists to avoid.
   check("T3c  a zero quote returns null, never 0", impactPct(0n, 1n, 1n, 1n) === null);
   check("T3d  a zero probe returns null, never 0", impactPct(1n, 1n, 0n, 1n) === null);
+
+  // A2 PINS THE DEFINITION. The probe method yields ONE ratio; the formula picks a side,
+  // and the two sides are reciprocals -- 15.65% and 18.55% for the same live $500 buy.
+  // We report PRICE MOVE (marginal/effective - 1). Without this row a future edit could
+  // flip the denominator and every other impact row would still pass, because they only
+  // check sign and degeneracy.
+  //
+  // Rates chosen so the two definitions are far apart and unmistakable:
+  //   marginal 100, effective 80 -> shortfall 20.00%, price move 25.00%
+  const pm = impactPct(80n, 1n, 100n, 1n);
+  check(
+    "T3e  impact is PRICE MOVE (marginal/effective - 1), not token shortfall",
+    pm === 25,
+    `got ${pm}% (shortfall form would be 20%)`
+  );
 }
 
 // ── Trap 6: quote vs settlement divergence ──────────────────────────────────────
@@ -214,6 +264,6 @@ console.log("\n── snipe tax ──");
   );
 }
 
-const total = 31;
+const total = 36;
 console.log(`\n${total - failures}/${total} checks passed`);
 if (failures) process.exit(1);

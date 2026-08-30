@@ -112,7 +112,12 @@ export const en = {
     amountToken: "Amount in {symbol}",
     max: "Max",
     estimatedReceive: "Estimated receive",
+    // A2. The probe method yields one ratio and the formula picks a side; 15.65% and
+    // 18.55% are reciprocals of the same $500 trade. We report PRICE MOVE, so the label
+    // has to say that -- "Price impact" alone is not self-describing and either figure
+    // would be defensible under it.
     priceImpact: "Price impact",
+    priceImpactNote: "your average price vs. the best available rate",
     minimumReceived: "Minimum received",
     atSlippage: "at {pct} slippage",
     gasReserve: "Gas reserve",
@@ -138,9 +143,13 @@ export const en = {
     cancelled: "Cancelled — nothing was sent.",
     cannotFill: "The curve cannot fill this trade right now. Try a smaller amount.",
     wouldFail: "This trade would fail on chain right now. The curve may have moved.",
-    settledBuy: "Settled. Your balance is now {amount} {symbol}.",
-    settledSell: "Settled. Your USDC balance is now {amount}.",
-    settledUnknown: "Settled. Refresh to see your updated balance.",
+    // A4: these report the amounts THIS TRANSACTION moved, decoded from its own Trade
+    // event. Not a balance read afterwards, which a concurrent trade or the gas deduction
+    // could have raced.
+    settledBuyExact: "Settled. You paid {usdc} USDC and received {tokens} {symbol}.",
+    settledSellExact: "Settled. You sold {tokens} {symbol} and received {usdc} USDC.",
+    settledUnknown:
+      "Settled, but this page could not read the amounts from the transaction. Check the explorer for the exact figures.",
 
     affordDust: "Your balance is too small to cover gas for a single transaction.",
     affordBalance: "That is more USDC than you hold.",
@@ -184,6 +193,11 @@ export const en = {
     loading: "Loading trades…",
     indexerDown:
       "Trade history is unavailable — the indexer is unreachable. Everything above is read from {chain} directly and is unaffected.",
+    // A5: a missing indexer CONFIG is a different failure from an unreachable indexer, and
+    // the first version rendered an empty section for it -- silently. Trap 19's rule is to
+    // name what is unavailable, not to show nothing.
+    indexerNotConfigured:
+      "Trade history is not configured for this deployment. Everything above is read from {chain} directly and is unaffected.",
   },
 
   // Custom-error copy. One key per error NAME in the ABI. The build check refuses to

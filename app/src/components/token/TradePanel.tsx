@@ -12,7 +12,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, usePublicClient } from "wagmi";
-import { parseUnits, type Address } from "viem";
+import { parseUnits, decodeEventLog, type Address, type Log } from "viem";
 import { erc20Abi } from "viem";
 import { lfx1Abi } from "../../abi/lfx1";
 import { lfx1TokenAbi } from "../../abi/lfx1Token";
@@ -24,7 +24,7 @@ import { useBalances } from "../../hooks/useBalances";
 import { useFees } from "../../hooks/useFees";
 import { useChain } from "../../providers/ChainProvider";
 import { minOutFromQuote } from "../../lib/quotes";
-import { checkAffordability, gasLimitFor } from "../../lib/gas";
+import { checkAffordability, gasLimitFor, GAS_LIMIT_UNITS_FOR_PRECHECK } from "../../lib/gas";
 import { tradeGate } from "../../lib/curve";
 import { safeText } from "../../lib/format";
 import { useT } from "../../i18n";
@@ -67,40 +67,81 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
     chainId: arc.id,
   });
 
-  // TRAP 6: report what the RECEIPT says, never the quote. The snipe tax decays per
-  // second and the clamp can bind between quote and execution, so the two genuinely
-  // differ -- and the quote is the number the user was shown, which makes presenting it
-  // as the outcome the most misleading thing available.
+  // TRAP 6 + A4: read the settled amount from the RECEIPT'S OWN EVENT.
+  //
+  // Never echo the quote -- the snipe tax decays per second and the clamp can bind between
+  // quote and execution, so the two genuinely differ, and the quote is the number the user
+  // was shown, which makes presenting it as the outcome the most misleading option.
+  //
+  // But the first version read a fresh BALANCE after the receipt, and a balance delta is
+  // only correct if nothing else moved the balance in between. It can be raced by a second
+  // tab, another trade landing, or -- on Arc specifically -- by gas being deducted from the
+  // same USDC balance the sell pays into. Decoding `Trade(token, trader, isBuy, usdcAmount,
+  // tokenAmount)` out of this transaction's own logs is exact and cannot be raced: the
+  // amounts are the ones this transaction actually moved.
   useEffect(() => {
     if (!receipt || !address) return;
-    (async () => {
+
+    let settledUsdc: bigint | undefined;
+    let settledTokens: bigint | undefined;
+
+    for (const log of receipt.logs as Log[]) {
+      // Only this factory's logs, and only this trader's -- a block can contain other
+      // people's trades on the same token.
+      if (log.address.toLowerCase() !== FACTORY_ADDRESS.toLowerCase()) continue;
       try {
-        const bal = (await client!.readContract({
-          address: side === "buy" ? token : USDC_ADDRESS,
-          abi: side === "buy" ? lfx1TokenAbi : erc20Abi,
-          functionName: "balanceOf",
-          args: [address],
-        })) as bigint;
-        setSettled(
-          side === "buy"
-            ? t("trade.settledBuy", { amount: fmt.token(bal), symbol })
-            : t("trade.settledSell", { amount: fmt.usdc(bal) })
-        );
+        const ev = decodeEventLog({ abi: lfx1Abi, data: log.data, topics: log.topics });
+        if (ev.eventName !== "Trade") continue;
+        const a = ev.args as unknown as {
+          token: Address;
+          trader: Address;
+          isBuy: boolean;
+          usdcAmount: bigint;
+          tokenAmount: bigint;
+        };
+        if (a.trader.toLowerCase() !== address.toLowerCase()) continue;
+        if (a.token.toLowerCase() !== token.toLowerCase()) continue;
+        settledUsdc = a.usdcAmount;
+        settledTokens = a.tokenAmount;
       } catch {
-        setSettled(t("trade.settledUnknown"));
+        // A log this ABI cannot decode is someone else's event. Not an error.
       }
-      balances.refetch();
-      data.refetch();
-    })();
+    }
+
+    if (settledTokens !== undefined && settledUsdc !== undefined) {
+      setSettled(
+        side === "buy"
+          ? t("trade.settledBuyExact", {
+              tokens: fmt.tokenExact(settledTokens),
+              symbol,
+              usdc: fmt.usdcExact(settledUsdc),
+            })
+          : t("trade.settledSellExact", {
+              tokens: fmt.tokenExact(settledTokens),
+              symbol,
+              usdc: fmt.usdcExact(settledUsdc),
+            })
+      );
+    } else {
+      // No Trade event from us in this receipt. Say that rather than inventing a figure
+      // from a balance read that may have been raced.
+      setSettled(t("trade.settledUnknown"));
+    }
+
+    balances.refetch();
+    data.refetch();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receipt]);
 
   const gasCostWei = useMemo(() => {
-    // A realistic per-operation cost for the affordability check. Buys are the more
-    // expensive path (measured max 194,372 against a sell's 119,254).
-    const units = side === "buy" ? 200_000n : 130_000n;
-    return units * (maxFeePerGas ?? 0n);
-  }, [side, maxFeePerGas]);
+    // A3: the pre-submit affordability check must price the SAME limit the transaction
+    // will carry. The wallet itself refuses to sign unless
+    // `balance >= gasLimit * maxFeePerGas`, so a check using a smaller figure would pass a
+    // trade the wallet then rejects -- the UI saying yes and the wallet saying no.
+    //
+    // Unused gas is refunded, so this is a bar to clear, not a cost to pay.
+    return GAS_LIMIT_UNITS_FOR_PRECHECK * (maxFeePerGas ?? 0n);
+  }, [maxFeePerGas]);
 
   const afford =
     balances.usdc6 !== undefined && maxFeePerGas
@@ -294,15 +335,18 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           {!quote || amount === 0n
             ? "—"
             : side === "buy"
-              ? `${fmt.token(quote.out)} ${symbol}`
-              : `${fmt.usdc(quote.out)} USDC`}
+              ? `${fmt.tokenCompact(quote.out)} ${symbol}`
+              : `${fmt.usdcExact(quote.out)} USDC`}
           {quote?.clamped && (
             <span className="hint"> — {t("trade.partiallyFilled")}</span>
           )}
         </dd>
 
         {/* HEADLINE, not a footnote. */}
-        <dt>{t("trade.priceImpact")}</dt>
+        <dt>
+          {t("trade.priceImpact")}
+          <div className="hint">{t("trade.priceImpactNote")}</div>
+        </dt>
         <dd className={quote?.impact !== null && (quote?.impact ?? 0) > 10 ? "impact-high" : ""}>
           {side === "sell"
             ? "—"
@@ -316,8 +360,8 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           {minOut === 0n
             ? "—"
             : side === "buy"
-              ? `${fmt.token(minOut)} ${symbol}`
-              : `${fmt.usdc(minOut)} USDC`}
+              ? `${fmt.tokenExact(minOut)} ${symbol}`
+              : `${fmt.usdcExact(minOut)} USDC`}
           <span className="hint"> {t("trade.atSlippage", { pct: fmt.bps(Number(SLIPPAGE_BPS)) })}</span>
         </dd>
 
@@ -325,7 +369,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
         <dd>
           {maxFeePerGas
             ? t("trade.gasReserveHeld", {
-                amount: fmt.usdc((balances.reserveWei + 999_999_999_999n) / 1_000_000_000_000n, 4),
+                amount: fmt.usdcExact((balances.reserveWei + 999_999_999_999n) / 1_000_000_000_000n, 4),
               })
             : "…"}
           <span className="hint"> {t("trade.gasReserveWhy")}</span>
@@ -335,7 +379,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
         <dd>
           {balances.availableToTrade6 === undefined
             ? "…"
-            : `${fmt.usdc(balances.availableToTrade6)} USDC`}
+            : `${fmt.usdcExact(balances.availableToTrade6)} USDC`}
         </dd>
       </dl>
 

@@ -11,12 +11,24 @@
 /**
  * Multiplier on `eth_estimateGas` for the transaction LIMIT.
  *
- * Arc's eth_estimateGas returns NO margin and viem passes it through raw
- * (`request.gas = await estimateGas(...)`), so without this a trade whose state moves
- * between estimate and execution runs out of gas. Sized for estimator drift, nothing
- * else -- the reserve handles the separate question of what to withhold.
+ * RAISED FROM 1.5 TO 3.0 (A3), because 1.5 was far thinner than it reads.
+ *
+ * Measured: estimateGas returned 143,576 against 194,372 actually consumed -- the estimate
+ * came in 26% BELOW reality, so the ratio to cover is already 1.354. At x1.5 the real
+ * headroom over a known-good buy is about 11%, not 50%. And no measured buy triggered
+ * GRADUATION, which does strictly more work than anything in the sample: it seeds a pool,
+ * moves the LP, and writes the one-way state transition.
+ *
+ * The asymmetry is total. Unused gas is REFUNDED, so an oversized limit costs nothing but
+ * a slightly higher balance bar; an undersized one fails the single most important
+ * transaction in the product, and fails it on the buy that completes a graduation.
+ *
+ * x3.0 gives ~120% headroom over the measured worst ratio. The cost is that a wallet
+ * checks `balance >= gasLimit * maxFeePerGas` before signing, so the limit does raise the
+ * floor to transact -- which is why GAS_LIMIT_UNITS_FOR_PRECHECK below uses the SAME
+ * multiplier, rather than the affordability check and the sent limit disagreeing.
  */
-export const GAS_LIMIT_MULTIPLIER_X10 = 15n; // x1.5
+export const GAS_LIMIT_MULTIPLIER_X10 = 30n; // x3.0
 
 export function gasLimitFor(estimate: bigint): bigint {
   return (estimate * GAS_LIMIT_MULTIPLIER_X10) / 10n;
@@ -39,6 +51,16 @@ export function gasLimitFor(estimate: bigint): bigint {
  * exactly when the network is busy.
  */
 export const GAS_RESERVE_UNITS = 249_546n;
+
+/**
+ * Worst-case gas for ONE trade, for the pre-submit affordability check.
+ *
+ * The real limit is `estimate x 3` computed at send time, but affordability is checked
+ * before any estimate exists. This is the measured worst buy (194,372) under the same
+ * multiplier, so the check and the transaction agree rather than the check passing a
+ * trade the wallet then refuses to sign.
+ */
+export const GAS_LIMIT_UNITS_FOR_PRECHECK = (194_372n * GAS_LIMIT_MULTIPLIER_X10) / 10n;
 
 /**
  * What the reserve costs at a given price, in USDC wei (18dp native accounting).
