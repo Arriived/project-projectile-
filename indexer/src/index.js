@@ -139,6 +139,61 @@ async function creatorLaunchBps(purchased) {
   return Number((purchased * 10000n) / cachedCurveSupply);
 }
 
+// ── migration 003 ───────────────────────────────────────────────────────────
+
+let cachedTotalSupply = null;
+
+/// @notice TOTAL_TOKEN_SUPPLY, for tokens.total_supply. A constant on the factory, so it
+///         is read once and cached like the curve supply above.
+///
+///         ⚠ This is the TOTAL (1,000,000,000e18), not CURVE_TOKEN_SUPPLY
+///         (807,000,000e18). They differ by LP_TOKEN_RESERVE, the 193M held back to seed
+///         the pool at graduation, and the split is load-bearing for the flash-loan bound
+///         (CLAUDE.md §1.2). The view's market_cap_usdc is computed against this column,
+///         so substituting the curve supply here would silently change every market cap
+///         on the site by a factor of 1000/807.
+async function totalSupply() {
+  if (cachedTotalSupply === null) {
+    cachedTotalSupply = await withRetry(() => factory.TOTAL_TOKEN_SUPPLY());
+  }
+  return cachedTotalSupply === 0n ? null : cachedTotalSupply.toString();
+}
+
+// Block timestamps, memoised by block number.
+//
+// WHY THIS EXISTS. `trades.created_at` defaults to now() at INSERT time, so it records
+// when the indexer saw a trade rather than when the trade happened. Measured on 30 August
+// 2026, rows ingested during a catch-up carried up to 30.9 HOURS of drift -- which put
+// 31-hour-old trades inside the "last 1 hour" volume window. A time window built on that
+// looks live and is not, which is worse than having no window.
+//
+// Several trades usually share a block (and on Arc, several blocks share a timestamp), so
+// the cache keeps this to roughly one extra RPC call per block rather than per trade. It
+// is bounded so a long backfill cannot grow it without limit.
+const blockTimeCache = new Map();
+const BLOCK_TIME_CACHE_MAX = 5000;
+
+async function blockTimeISO(blockNumber) {
+  const key = Number(blockNumber);
+  if (blockTimeCache.has(key)) return blockTimeCache.get(key);
+
+  let iso = null;
+  try {
+    const block = await withRetry(() => provider.getBlock(key));
+    if (block && block.timestamp) iso = new Date(Number(block.timestamp) * 1000).toISOString();
+  } catch (err) {
+    // A missing block time degrades the row to created_at via the view's COALESCE. That
+    // is the documented fallback, not a failure -- refusing to index a trade because its
+    // timestamp could not be fetched would lose the trade itself, which is strictly
+    // worse than an approximate window.
+    console.warn(`  [warn] could not read timestamp for block ${key}: ${err.message}`);
+  }
+
+  if (blockTimeCache.size >= BLOCK_TIME_CACHE_MAX) blockTimeCache.clear();
+  blockTimeCache.set(key, iso);
+  return iso;
+}
+
 async function upsertTokenFromChain(tokenAddress) {
   const curve = await withRetry(() => factory.curves(tokenAddress));
   const token = new ethers.Contract(tokenAddress, ERC20_MIN_ABI, provider);
@@ -177,6 +232,10 @@ async function upsertTokenFromChain(tokenAddress) {
       creator_launch_purchased: curve.creatorLaunchPurchased.toString(),
       creator_launch_bps: await creatorLaunchBps(curve.creatorLaunchPurchased),
       lp_recipient: curve.lpRecipient,
+      // migration 003. Read from the contract, never hardcoded -- the same trap the
+      // hand-maintained ABI was. The view computes market_cap_usdc from this column
+      // and the live virtual reserves.
+      total_supply: await totalSupply(),
     },
     { onConflict: "contract_address" }
   );
@@ -236,6 +295,11 @@ async function handleTrade(log) {
     token_amount: log.args.tokenAmount.toString(),
     tx_hash: log.transactionHash,
     block_number: log.blockNumber,
+    // migration 003. The chain's own timestamp, NOT created_at -- which defaults to
+    // now() and therefore records ingest time. Every volume window in
+    // tokens_with_volume filters on COALESCE(block_time, created_at), so this column
+    // is what makes those windows mean what they say.
+    block_time: await blockTimeISO(log.blockNumber),
   });
   if (error) throw error;
 
