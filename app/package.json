@@ -10,10 +10,11 @@
     "typecheck": "tsc -b --noEmit",
     "verify:chain": "node --experimental-strip-types scripts/verify-chain.mts",
     "verify:guard": "node --experimental-strip-types scripts/verify-guard.mts",
-    "verify": "npm run verify:chain && npm run verify:guard && npm run verify:wallets && npm run verify:trade",
+    "verify": "npm run verify:chain && npm run verify:guard && npm run verify:wallets && npm run verify:trade && npm run verify:i18n",
     "verify:wallets": "node --experimental-strip-types scripts/verify-wallets.mts",
     "measure:gas": "node --experimental-strip-types scripts/measure-gas.mts",
-    "verify:trade": "node --experimental-strip-types scripts/verify-trade.mts"
+    "verify:trade": "node --experimental-strip-types scripts/verify-trade.mts",
+    "verify:i18n": "node --experimental-strip-types scripts/verify-i18n.mts"
   },
   "dependencies": {
     "@metamask/connect-evm": "^2.1.1",

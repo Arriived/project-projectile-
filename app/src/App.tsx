@@ -8,8 +8,10 @@ import { WalletBar } from "./components/WalletBar";
 import { TokenPage } from "./routes/TokenPage";
 import { useChain } from "./providers/ChainProvider";
 import { arc } from "./chain";
+import { useT } from "./i18n";
 
 export function App() {
+  const { t } = useT();
   const { guard, inAutoPrompt } = useChain();
 
   // Suppressed while the automatic prompt is open: the user is mid-fix with a wallet
@@ -21,10 +23,10 @@ export function App() {
     <div className="page">
       <header className="topbar">
         <Link to="/" className="brand">
-          Ballista <span className="brand-sub">Arc Testnet</span>
+          Ballista <span className="brand-sub">{arc.name}</span>
         </Link>
         <nav className="nav">
-          <Link to="/">Explore</Link>
+          <Link to="/">{t("common.explore")}</Link>
         </nav>
         <WalletBar />
       </header>
@@ -33,20 +35,15 @@ export function App() {
         <div className="banner banner-warn" role="alert">
           <strong>
             {guard.status === "wrong"
-              ? `Your wallet is on chain ${guard.chainId}, not ${arc.name}.`
-              : "Your wallet's network could not be confirmed."}
+              ? t("chain.bannerWrong", { chainId: guard.chainId ?? "?", chain: arc.name })
+              : t("chain.bannerUnknown")}
           </strong>{" "}
-          Nothing can be signed until it is switched. Everything on the page is read from{" "}
-          {arc.name} directly and is unaffected.
+          {t("chain.bannerBody", { chain: arc.name })}
           {/* Wallets scope networks PER SITE. MetaMask's main selector can read
               "Ethereum" while this origin is permitted something else, and it is the
               per-site one that governs what gets signed. That mismatch cost a full
               debugging round. */}
-          <span className="banner-aside">
-            Seeing a different network in your wallet? Check the network it lists for{" "}
-            <strong>this site</strong>, not the main selector — wallets can scope networks
-            per site, and the per-site one is what counts here.
-          </span>
+          <span className="banner-aside">{t("chain.bannerPerSite")}</span>
         </div>
       )}
 
@@ -58,9 +55,7 @@ export function App() {
           element={
             <main className="main">
               <p className="phase-note">
-                <strong>Phase 2.</strong> The token page is built and live at{" "}
-                <code>/t/:address</code>. The list page is Phase 3 and is not built yet —
-                open a token by address to see the page.
+                <strong>{t("dev.phase2Title")}</strong> {t("dev.phase2Body")}
               </p>
             </main>
           }

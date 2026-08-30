@@ -144,6 +144,45 @@ if (typeof module !== "undefined") module.exports = { REVERT_BY_SELECTOR, explai
   return { js, missing, extra, count: errors.length };
 }
 
+// ── i18n parity, delegated ─────────────────────────────────────────────────────
+//
+// The requirement: a custom error must not ship with copy in one language and missing in
+// another. Enforcement lives in app/scripts/verify-i18n.mts, which owns the locale
+// catalogues and knows which locales are SHIPPED (and must therefore be complete) versus
+// PLANNED (reported only).
+//
+// This DELEGATES rather than duplicating the rule. Two implementations of "every error
+// has copy" would eventually disagree, and the one that disagrees silently is the one
+// that lets a gap through -- which is precisely the failure this check exists to prevent.
+//
+// Runs under --experimental-strip-types because the catalogues are TypeScript, and being
+// typed is what makes a misspelled key a compile error rather than an invisible fallback
+// to English.
+function checkI18n() {
+  const { spawnSync } = require("child_process");
+  const script = path.join(ROOT, "app", "scripts", "verify-i18n.mts");
+  if (!fs.existsSync(script)) {
+    console.error(`i18n check missing at ${script}. Refusing to generate.`);
+    process.exit(1);
+  }
+  const r = spawnSync(process.execPath, ["--experimental-strip-types", script], {
+    encoding: "utf8",
+    stdio: "pipe",
+  });
+  const out = `${r.stdout || ""}${r.stderr || ""}`;
+  if (r.status !== 0) {
+    console.error(out);
+    console.error("");
+    console.error("i18n parity check FAILED — refusing to generate revert copy.");
+    console.error("Every custom error needs copy in every SHIPPED locale. See app/src/i18n/.");
+    process.exit(1);
+  }
+  out
+    .split("\n")
+    .filter((l) => l.includes("custom error") || l.includes("every UI key") || l.includes("keys ("))
+    .forEach((l) => console.log(l));
+}
+
 const { js, missing, extra, count } = build();
 
 if (missing.length) {
@@ -152,6 +191,8 @@ if (missing.length) {
   process.exit(1);
 }
 if (extra.length) console.warn(`note: COPY has entries for errors not in the ABI: ${extra.join(", ")}`);
+
+checkI18n();
 
 if (process.argv.includes("--check")) {
   const cur = fs.existsSync(OUT) ? fs.readFileSync(OUT, "utf8") : "";

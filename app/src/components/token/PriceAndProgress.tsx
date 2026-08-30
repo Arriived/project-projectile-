@@ -1,27 +1,28 @@
 // Section 3 — price, market cap, and progress toward graduation.
 //
 // The progress figure comes from `graduationProgressBps(token)` ON THE CONTRACT, not from
-// arithmetic here. Same rule as quotes: the contract exposes it, so call it. The local
-// helper in lib/curve.ts exists only for the list page, where per-token calls are not
-// affordable and the indexer's approximate figures are display-only (trap 21).
+// arithmetic here. Same rule as quotes: the contract exposes it, so call it.
 //
 // poolBoost is deliberately excluded from progress. It is added to the pool's USDC side
 // at graduation but must NEVER count toward the threshold (CLAUDE.md §7A), and a bar that
 // counted it would promise a graduation that is further away than it looks.
+//
+// Every figure is formatted through the i18n layer, not toFixed(). Compact notation is
+// where locales genuinely diverge -- en "123.46M", zh "1.23亿", ko "1.23억" -- so a
+// hand-rolled K/M/B/T ladder would be wrong in two of the three configured locales.
 
 import type { TokenData } from "../../hooks/useCurve";
 import { marketCapUsdc6 } from "../../hooks/useCurve";
-import { fmtUsd, fmtUsdc } from "../../lib/format";
 import { CurveState } from "../../lib/curve";
 import { EXPLORER_URL } from "../../config";
+import { useT } from "../../i18n";
 
 export function PriceAndProgress({ data }: { data: TokenData }) {
+  const { t, fmt } = useT();
   const { curve, totalSupply, progressBps } = data;
   if (!curve) return null;
 
-  const mcap =
-    totalSupply !== undefined ? marketCapUsdc6(curve, totalSupply) : undefined;
-
+  const mcap = totalSupply !== undefined ? marketCapUsdc6(curve, totalSupply) : undefined;
   const graduated = curve.state === CurveState.GRADUATED;
   const pct = progressBps !== undefined ? progressBps / 100 : null;
 
@@ -29,24 +30,24 @@ export function PriceAndProgress({ data }: { data: TokenData }) {
     <section className="card">
       <div className="stat-row">
         <div className="stat">
-          <div className="stat-label">Market cap</div>
-          <div className="stat-value">{mcap === undefined ? "…" : fmtUsd(mcap)}</div>
+          <div className="stat-label">{t("price.marketCap")}</div>
+          <div className="stat-value">{mcap === undefined ? "…" : fmt.usd(mcap)}</div>
         </div>
         <div className="stat">
-          <div className="stat-label">In the curve</div>
-          <div className="stat-value">{fmtUsd(curve.realUsdcReserves)}</div>
+          <div className="stat-label">{t("price.inTheCurve")}</div>
+          <div className="stat-value">{fmt.usd(curve.realUsdcReserves)}</div>
         </div>
         <div className="stat">
-          <div className="stat-label">Threshold</div>
-          <div className="stat-value">{fmtUsd(curve.graduationThresholdUsdc)}</div>
+          <div className="stat-label">{t("price.threshold")}</div>
+          <div className="stat-value">{fmt.usd(curve.graduationThresholdUsdc)}</div>
         </div>
       </div>
 
       {graduated ? (
         <p className="graduated-note">
-          <strong>Graduated.</strong> Trading has moved to the DEX pool.{" "}
+          <strong>{t("price.graduated")}</strong> {t("price.graduatedBody")}{" "}
           <a href={`${EXPLORER_URL}/address/${curve.token}`} target="_blank" rel="noreferrer">
-            View the token on the explorer ↗
+            {t("price.viewOnExplorer")}
           </a>
         </p>
       ) : (
@@ -61,16 +62,12 @@ export function PriceAndProgress({ data }: { data: TokenData }) {
               aria-valuemax={100}
             />
           </div>
-          <span className="progress-pct">{pct === null ? "…" : `${pct.toFixed(1)}%`}</span>
+          <span className="progress-pct">{pct === null ? "…" : fmt.pct(pct, 1)}</span>
         </div>
       )}
 
       {curve.poolBoostEnabled && curve.poolBoost > 0n && (
-        <p className="hint">
-          Pool boost: {fmtUsdc(curve.poolBoost)} USDC will be added to the pool at
-          graduation. It does not count toward the threshold above, and no holder receives
-          it — it makes the pool deeper.
-        </p>
+        <p className="hint">{t("price.poolBoost", { amount: fmt.usdc(curve.poolBoost) })}</p>
       )}
     </section>
   );

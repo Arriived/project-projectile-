@@ -20,12 +20,14 @@ import { useAccount, useConnect, useConnectors, useDisconnect } from "wagmi";
 import { arc } from "../chain";
 import { useChain } from "../providers/ChainProvider";
 import { selectWallets, walletLabel, isGenericInjected } from "../lib/wallets";
+import { useT } from "../i18n";
 
 function short(addr: string) {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
 export function WalletBar() {
+  const { t } = useT();
   const { address, connector } = useAccount();
   const { guard, switchToArc, switching, stuck, inAutoPrompt, switchError } = useChain();
   const { connect, isPending: connecting, error: connectError, variables } = useConnect();
@@ -49,7 +51,7 @@ export function WalletBar() {
       <div className="wallet">
         <div className="wallet-picker">
           {wallets.length === 0 && (
-            <span className="wallet-err">No wallet extension detected.</span>
+            <span className="wallet-err">{t("wallet.noWalletDetected")}</span>
           )}
           {wallets.map((w) => {
             const live = allConnectors.find((c) => c.uid === w.uid);
@@ -62,12 +64,12 @@ export function WalletBar() {
                 onClick={() => live && connect({ connector: live })}
                 title={
                   isGenericInjected(w)
-                    ? "No wallet announced itself; this connects to window.ethereum"
-                    : `Connects specifically to ${w.name}`
+                    ? t("wallet.genericWarning")
+                    : t("wallet.connectsTo", { name: w.name })
                 }
               >
                 {w.icon && <img src={w.icon} alt="" className="wallet-icon" />}
-                {pending ? "Check your wallet…" : w.name}
+                {pending ? t("common.checkYourWallet") : w.name}
               </button>
             );
           })}
@@ -77,7 +79,7 @@ export function WalletBar() {
         {connectError && (
           <span className="wallet-err" role="status">
             {connectError.name === "UserRejectedRequestError"
-              ? "Connection declined."
+              ? t("wallet.connectionDeclined")
               : connectError.message.split("\n")[0]}
           </span>
         )}
@@ -86,13 +88,16 @@ export function WalletBar() {
   }
 
   const connectedWallet = connector
-    ? walletLabel({
-        uid: connector.uid,
-        id: connector.id,
-        name: connector.name,
-        rdns: (connector as { rdns?: string | readonly string[] }).rdns,
-      })
-    : "Unknown wallet";
+    ? walletLabel(
+        {
+          uid: connector.uid,
+          id: connector.id,
+          name: connector.name,
+          rdns: (connector as { rdns?: string | readonly string[] }).rdns,
+        },
+        (name) => t("wallet.unidentifiedWallet", { name })
+      )
+    : t("wallet.notConnected");
 
   return (
     <div className="wallet">
@@ -101,28 +106,28 @@ export function WalletBar() {
           rather than an alarm they are already in the middle of fixing. */}
       {inAutoPrompt ? (
         <span className="wrong-net-label" role="status">
-          Switching to {arc.name} — confirm in {connectedWallet}…
+          {t("chain.switching", { chain: arc.name, wallet: connectedWallet })}
         </span>
       ) : (
         !guard.canTransact && (
           <div className="wrong-net">
             <span className="wrong-net-label">
               {guard.status === "wrong"
-                ? `Wrong network (chain ${guard.chainId})`
-                : "Network unconfirmed"}
+                ? t("chain.wrongNetwork", { chainId: guard.chainId ?? "?" })
+                : t("chain.unconfirmed")}
             </span>
             <button className="btn btn-warn" disabled={switching && !stuck} onClick={switchToArc}>
-              {switching && !stuck ? "Check your wallet…" : `Switch to ${arc.name}`}
+              {switching && !stuck ? t("common.checkYourWallet") : t("chain.switchTo", { chain: arc.name })}
             </button>
             {stuck && (
               <span className="wallet-err" role="status">
-                That didn’t complete — still on the wrong network. Try again.
+                {t("chain.switchStuck")}
               </span>
             )}
             {switchError && !stuck && (
               <span className="wallet-err" role="status">
                 {switchError.name === "UserRejectedRequestError"
-                  ? "Network switch declined — still on the wrong network."
+                  ? t("chain.switchDeclined")
                   : switchError.message.split("\n")[0]}
               </span>
             )}
@@ -132,7 +137,7 @@ export function WalletBar() {
 
       {/* Naming the wallet is not decoration. It is how a user with two extensions knows
           which one this page is actually talking to. */}
-      <span className="wallet-name" title="The wallet this page is bound to">
+      <span className="wallet-name" title={t("wallet.boundTo")}>
         {connector?.icon && <img src={connector.icon} alt="" className="wallet-icon" />}
         {connectedWallet}
       </span>
@@ -141,14 +146,14 @@ export function WalletBar() {
         {guard.canTransact
           ? arc.name
           : guard.status === "wrong"
-            ? `Chain ${guard.chainId}`
-            : "Unconfirmed"}
+            ? t("chain.pillWrong", { chainId: guard.chainId ?? "?" })
+            : t("chain.pillUnconfirmed")}
       </span>
       <span className="addr" title={address}>
         {address ? short(address) : ""}
       </span>
       <button className="btn btn-ghost" onClick={() => disconnect()}>
-        Disconnect
+        {t("common.disconnect")}
       </button>
     </div>
   );

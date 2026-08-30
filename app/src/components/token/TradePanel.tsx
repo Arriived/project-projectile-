@@ -26,13 +26,14 @@ import { useChain } from "../../providers/ChainProvider";
 import { minOutFromQuote } from "../../lib/quotes";
 import { checkAffordability, gasLimitFor } from "../../lib/gas";
 import { tradeGate } from "../../lib/curve";
-import { describeSnipeTax } from "../../lib/snipe";
-import { fmtToken, fmtUsdc, fmtPct, fmtBps, safeText } from "../../lib/format";
+import { safeText } from "../../lib/format";
+import { useT } from "../../i18n";
 
 const SLIPPAGE_BPS = 100n; // 1%
 const BUY_PRESETS = ["1", "5", "25", "100"];
 
 export function TradePanel({ token, data }: { token: Address; data: TokenData }) {
+  const { t, fmt } = useT();
   const { address, isConnected } = useAccount();
   const { guard } = useChain();
   const { maxFeePerGas } = useFees();
@@ -82,11 +83,11 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
         })) as bigint;
         setSettled(
           side === "buy"
-            ? `Settled. Your balance is now ${fmtToken(bal)} ${symbol}.`
-            : `Settled. Your USDC balance is now ${fmtUsdc(bal)}.`
+            ? t("trade.settledBuy", { amount: fmt.token(bal), symbol })
+            : t("trade.settledSell", { amount: fmt.usdc(bal) })
         );
       } catch {
-        setSettled("Settled. Refresh to see your updated balance.");
+        setSettled(t("trade.settledUnknown"));
       }
       balances.refetch();
       data.refetch();
@@ -131,7 +132,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
       // ARE hashed and snapshotted per curve, so a standing trading approval is bounded
       // by terms that cannot move underneath it.
       if (needsUsdcApproval) {
-        setStatus("Approving USDC — confirm in your wallet…");
+        setStatus(t("trade.approvingUsdc"));
         const h = await writeContractAsync({
           address: USDC_ADDRESS,
           abi: erc20Abi,
@@ -142,7 +143,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
         await client.waitForTransactionReceipt({ hash: h });
       }
       if (needsTokenApproval) {
-        setStatus(`Approving ${symbol} — confirm in your wallet…`);
+        setStatus(t("trade.approvingToken", { symbol }));
         const h = await writeContractAsync({
           address: token,
           abi: lfx1TokenAbi,
@@ -155,7 +156,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
 
       // TRAP 6: RE-QUOTE immediately before signing. The quote on screen may be a second
       // old, and a second is the entire difference between a 98% and a 95% snipe tax.
-      setStatus("Re-quoting…");
+      setStatus(t("trade.requoting"));
       const fresh = (await client.readContract({
         address: FACTORY_ADDRESS,
         abi: lfx1Abi,
@@ -171,7 +172,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
 
       const freshMinOut = minOutFromQuote(freshOut, SLIPPAGE_BPS);
       if (freshMinOut <= 0n) {
-        setStatus("The curve cannot fill this trade right now. Try a smaller amount.");
+        setStatus(t("trade.cannotFill"));
         return;
       }
 
@@ -191,11 +192,11 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
       } catch {
         // If the estimate itself reverts, the trade would too. Say so rather than
         // sending something that will fail.
-        setStatus("This trade would fail on chain right now. The curve may have moved.");
+        setStatus(t("trade.wouldFail"));
         return;
       }
 
-      setStatus("Confirm in your wallet…");
+      setStatus(t("trade.confirmInWallet"));
       const h = await writeContractAsync({
         address: FACTORY_ADDRESS,
         abi: lfx1Abi,
@@ -205,13 +206,16 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
         gas,
       });
       setTxHash(h);
-      setStatus("Submitted. Waiting for confirmation…");
+      setStatus(t("trade.submitted"));
     } catch (e) {
       const err = e as { name?: string; message?: string };
       setStatus(
         err.name === "UserRejectedRequestError"
-          ? "Cancelled — nothing was sent."
-          : (err.message ?? "Something went wrong.").split("\n")[0]
+          ? t("trade.cancelled")
+          : // A provider message is raw text from the node, not ours to translate. It is
+            // shown verbatim rather than mapped, because guessing at which of the node's
+            // wordings it is would be exactly the revert-string parsing rule 4 forbids.
+            (err.message ?? t("errors.noReason")).split("\n")[0]
       );
     }
   };
@@ -232,14 +236,14 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           onClick={() => { setSide("buy"); setInput(""); setSettled(null); }}
           disabled={!gate.canBuy}
         >
-          Buy
+          {t("trade.buy")}
         </button>
         <button
           className={`tab ${side === "sell" ? "on" : ""}`}
           onClick={() => { setSide("sell"); setInput(""); setSettled(null); }}
           disabled={!gate.canSell}
         >
-          Sell
+          {t("trade.sell")}
         </button>
       </div>
 
@@ -261,7 +265,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
               setInput((Number(balances.availableToTrade6) / 1e6).toFixed(6))
             }
           >
-            Max
+            {t("trade.max")}
           </button>
         </div>
       )}
@@ -269,7 +273,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
       <input
         className="trade-input"
         inputMode="decimal"
-        placeholder={side === "buy" ? "Amount in USDC" : `Amount in ${symbol}`}
+        placeholder={side === "buy" ? t("trade.amountUsdc") : t("trade.amountToken", { symbol })}
         value={input}
         onChange={(e) => setInput(e.target.value.replace(/[^0-9.]/g, ""))}
       />
@@ -279,60 +283,59 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           the worst thing this page can do. */}
       {side === "buy" && data.snipeTaxBps !== undefined && data.snipeTaxBps > 0 && (
         <div className="snipe-banner">
-          <strong>{describeSnipeTax(data.snipeTaxBps)}</strong>
-          <div className="hint">
-            It decays every second since launch. Your quote is re-taken immediately before
-            you sign, so what you confirm is what settles.
-          </div>
+          <strong>{t("trade.snipeActive", { pct: fmt.bps(data.snipeTaxBps) })}</strong>
+          <div className="hint">{t("trade.snipeExplain")}</div>
         </div>
       )}
 
       <dl className="quote-lines">
-        <dt>Estimated receive</dt>
+        <dt>{t("trade.estimatedReceive")}</dt>
         <dd>
           {!quote || amount === 0n
             ? "—"
             : side === "buy"
-              ? `${fmtToken(quote.out)} ${symbol}`
-              : `${fmtUsdc(quote.out)} USDC`}
+              ? `${fmt.token(quote.out)} ${symbol}`
+              : `${fmt.usdc(quote.out)} USDC`}
           {quote?.clamped && (
-            <span className="hint"> — partially filled; the curve cannot take the full amount</span>
+            <span className="hint"> — {t("trade.partiallyFilled")}</span>
           )}
         </dd>
 
         {/* HEADLINE, not a footnote. */}
-        <dt>Price impact</dt>
+        <dt>{t("trade.priceImpact")}</dt>
         <dd className={quote?.impact !== null && (quote?.impact ?? 0) > 10 ? "impact-high" : ""}>
           {side === "sell"
             ? "—"
             : quote?.impact === null || quote?.impact === undefined
-              ? "unavailable"
-              : fmtPct(quote.impact)}
+              ? t("common.unavailable")
+              : fmt.pct(quote.impact)}
         </dd>
 
-        <dt>Minimum received</dt>
+        <dt>{t("trade.minimumReceived")}</dt>
         <dd>
           {minOut === 0n
             ? "—"
             : side === "buy"
-              ? `${fmtToken(minOut)} ${symbol}`
-              : `${fmtUsdc(minOut)} USDC`}
-          <span className="hint"> at {fmtBps(Number(SLIPPAGE_BPS))} slippage</span>
+              ? `${fmt.token(minOut)} ${symbol}`
+              : `${fmt.usdc(minOut)} USDC`}
+          <span className="hint"> {t("trade.atSlippage", { pct: fmt.bps(Number(SLIPPAGE_BPS)) })}</span>
         </dd>
 
-        <dt>Gas reserve</dt>
+        <dt>{t("trade.gasReserve")}</dt>
         <dd>
           {maxFeePerGas
-            ? `${fmtUsdc((balances.reserveWei + 999_999_999_999n) / 1_000_000_000_000n, 4)} USDC held back`
+            ? t("trade.gasReserveHeld", {
+                amount: fmt.usdc((balances.reserveWei + 999_999_999_999n) / 1_000_000_000_000n, 4),
+              })
             : "…"}
-          <span className="hint"> so you can always sell</span>
+          <span className="hint"> {t("trade.gasReserveWhy")}</span>
         </dd>
 
-        <dt>Available to trade</dt>
+        <dt>{t("trade.availableToTrade")}</dt>
         <dd>
           {balances.availableToTrade6 === undefined
             ? "…"
-            : `${fmtUsdc(balances.availableToTrade6)} USDC`}
+            : `${fmt.usdc(balances.availableToTrade6)} USDC`}
         </dd>
       </dl>
 
@@ -340,28 +343,26 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           string -- Zero8 changed those on 3 September and a parser fails silently. */}
       {afford && !afford.ok && amount > 0n && (
         <p className="trade-warn">
-          {afford.reason === "dust" &&
-            "Your balance is too small to cover gas for a single transaction."}
-          {afford.reason === "balance" && "That is more USDC than you hold."}
-          {afford.reason === "gas" &&
-            "That would leave you unable to cover gas. On Arc, gas comes out of this same USDC balance — including the gas you will need to sell."}
+          {afford.reason === "dust" && t("trade.affordDust")}
+          {afford.reason === "balance" && t("trade.affordBalance")}
+          {afford.reason === "gas" && t("trade.affordGas")}
         </p>
       )}
 
       {!guard.canTransact && isConnected && (
-        <p className="trade-warn">Switch your wallet to {arc.name} to trade.</p>
+        <p className="trade-warn">{t("trade.switchToTrade", { chain: arc.name })}</p>
       )}
 
       <button className="btn btn-primary btn-block" disabled={blocked || busy} onClick={submit}>
         {!isConnected
-          ? "Connect a wallet"
+          ? t("common.connectWallet")
           : busy
-            ? "Working…"
+            ? t("trade.working")
             : needsUsdcApproval || needsTokenApproval
-              ? `Approve and ${side}`
+              ? t("trade.approveAnd", { side: side === "buy" ? t("trade.buy") : t("trade.sell") })
               : side === "buy"
-                ? "Buy"
-                : "Sell"}
+                ? t("trade.buy")
+                : t("trade.sell")}
       </button>
 
       {status && <p className="trade-status">{status}</p>}

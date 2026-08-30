@@ -9,12 +9,14 @@
 // second address -- so disclosure is the actual protection, not the cap (CLAUDE.md §7A).
 
 import type { TokenData } from "../../hooks/useCurve";
-import { fmtBps, shortAddress } from "../../lib/format";
+import { shortAddress } from "../../lib/format";
+import { useT } from "../../i18n";
 import { EXPLORER_URL } from "../../config";
 
 const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 
 export function TrustPanel({ data }: { data: TokenData }) {
+  const { t, fmt } = useT();
   const { curve } = data;
   if (!curve) return null;
 
@@ -33,69 +35,64 @@ export function TrustPanel({ data }: { data: TokenData }) {
 
   return (
     <section className="card">
-      <h2 className="card-title">What the contract guarantees</h2>
+      <h2 className="card-title">{t("trust.title")}</h2>
 
       <dl className="kv">
-        <dt>Buy fee</dt>
+        <dt>{t("trust.buyFee")}</dt>
         <dd>
-          {fmtBps(curve.buyFeeBps)}{" "}
+          {fmt.bps(curve.buyFeeBps)}{" "}
           <span className="hint">
-            ({fmtBps(curve.creatorBuyFeeBps)} of it to the creator)
+            {t("trust.ofItToCreator", { pct: fmt.bps(curve.creatorBuyFeeBps) })}
           </span>
         </dd>
 
-        <dt>Sell fee</dt>
+        <dt>{t("trust.sellFee")}</dt>
         <dd>
-          {fmtBps(curve.sellFeeBps)}{" "}
+          {fmt.bps(curve.sellFeeBps)}{" "}
           <span className="hint">
-            ({fmtBps(curve.creatorSellFeeBps)} of it to the creator)
+            {t("trust.ofItToCreator", { pct: fmt.bps(curve.creatorSellFeeBps) })}
           </span>
         </dd>
 
-        <dt>Creator bought at launch</dt>
+        <dt>{t("trust.creatorBought")}</dt>
         <dd>
           {creatorBps === null ? (
             <>…</>
           ) : creatorBps === 0 ? (
-            <>Nothing — the creator did not use their launch allocation.</>
+            <>{t("trust.creatorBoughtNone")}</>
           ) : (
-            <strong>{(creatorBps / 100).toFixed(2)}% of curve supply</strong>
+            <strong>{t("trust.creatorBoughtPct", { pct: fmt.pct(creatorBps / 100) })}</strong>
           )}
-          <div className="hint">
-            This covers only the creator’s privileged untaxed buy. It is not a cap on what
-            they hold — nothing stops anyone buying more from another address.
-          </div>
+          <div className="hint">{t("trust.creatorBoughtNote")}</div>
         </dd>
 
-        <dt>LP at graduation</dt>
+        <dt>{t("trust.lpAtGraduation")}</dt>
         <dd>
           {lpBurned ? (
             <>
-              <strong>Auto-burned</strong>{" "}
-              <span className="hint">sent to {shortAddress(BURN_ADDRESS)}, unrecoverable</span>
+              <strong>{t("trust.lpBurned")}</strong>{" "}
+              <span className="hint">
+                {t("trust.lpBurnedNote", { address: shortAddress(BURN_ADDRESS) })}
+              </span>
             </>
           ) : (
             <>
-              <strong>Sent to {shortAddress(curve.lpRecipient)}</strong>
-              <div className="hint">
-                Not burned. This LP is held by an address, not destroyed — a different
-                claim, and a different trust assumption.
-              </div>
+              <strong>{t("trust.lpSentTo", { address: shortAddress(curve.lpRecipient) })}</strong>
+              <div className="hint">{t("trust.lpSentNote")}</div>
             </>
           )}
         </dd>
 
-        <dt>Creator</dt>
+        <dt>{t("trust.creator")}</dt>
         <dd className="mono small">
           <a href={`${EXPLORER_URL}/address/${curve.creator}`} target="_blank" rel="noreferrer">
             {curve.creator}
           </a>
         </dd>
 
-        <dt>Mint</dt>
+        <dt>{t("trust.mint")}</dt>
         <dd>
-          <strong>None.</strong> Supply is fixed at creation; the token has no mint
-          function.
+{t("trust.mintNone")}
         </dd>
       </dl>
     </section>

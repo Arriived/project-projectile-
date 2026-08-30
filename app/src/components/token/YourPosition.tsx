@@ -12,10 +12,13 @@ import type { TokenData } from "../../hooks/useCurve";
 import { useBalances } from "../../hooks/useBalances";
 import { useWatchAsset, symbolIsWatchable } from "../../hooks/useWatchAsset";
 import { useChain } from "../../providers/ChainProvider";
-import { fmtToken, fmtUsdc, safeText } from "../../lib/format";
+import { safeText } from "../../lib/format";
+import { useT } from "../../i18n";
+import { arc } from "../../chain";
 import { useFees } from "../../hooks/useFees";
 
 export function YourPosition({ token, data }: { token: Address; data: TokenData }) {
+  const { t, fmt } = useT();
   const { address, isConnected } = useAccount();
   const { guard } = useChain();
   const { maxFeePerGas } = useFees();
@@ -27,10 +30,8 @@ export function YourPosition({ token, data }: { token: Address; data: TokenData 
   if (!isConnected) {
     return (
       <section className="card position">
-        <h2 className="card-title">Your position</h2>
-        <p className="hint">
-          Connect a wallet to see your balance of this token. Browsing needs no wallet.
-        </p>
+        <h2 className="card-title">{t("position.title")}</h2>
+        <p className="hint">{t("position.connectPrompt")}</p>
       </section>
     );
   }
@@ -39,22 +40,24 @@ export function YourPosition({ token, data }: { token: Address; data: TokenData 
 
   return (
     <section className="card position">
-      <h2 className="card-title">Your position</h2>
+      <h2 className="card-title">{t("position.title")}</h2>
 
       <div className="position-row">
         <div>
           <div className="position-balance">
-            {bal === undefined ? "…" : fmtToken(bal)} <span className="position-sym">{symbol}</span>
+            {bal === undefined ? "…" : fmt.token(bal)} <span className="position-sym">{symbol}</span>
           </div>
           <div className="hint">
             {balances.usdc6 === undefined
               ? ""
-              : `${fmtUsdc(balances.usdc6)} USDC in wallet`}
+              : t("position.inWallet", { amount: fmt.usdc(balances.usdc6) })}
             {balances.availableToTrade6 !== undefined && (
               <>
                 {" · "}
-                {fmtUsdc(balances.availableToTrade6)} available to trade
-                <span className="hint"> (gas reserve withheld)</span>
+                {t("position.availableToTrade", {
+                  amount: fmt.usdc(balances.availableToTrade6),
+                })}
+                <span className="hint"> ({t("position.gasReserveWithheld")})</span>
               </>
             )}
           </div>
@@ -67,27 +70,24 @@ export function YourPosition({ token, data }: { token: Address; data: TokenData 
             onClick={() => data.symbol && watch(token, data.symbol)}
             title={
               symbolIsWatchable(data.symbol)
-                ? "Adds this token to your wallet so the balance is visible there"
-                : "This symbol is too long for wallets to add in one click"
+                ? t("position.addToWalletHelp")
+                : t("position.addToWalletTooLong")
             }
           >
-            {state === "pending" ? "Check your wallet…" : "Add to wallet"}
+            {state === "pending" ? t("common.checkYourWallet") : t("position.addToWallet")}
           </button>
           {/* A declined prompt is the user saying no to a convenience. It is NOT a
               failed trade and is never presented as an error. */}
-          {state === "declined" && <span className="hint">Not added — your balance is unaffected.</span>}
-          {state === "added" && <span className="hint">Added.</span>}
+          {state === "declined" && <span className="hint">{t("position.addDeclined")}</span>}
+          {state === "added" && <span className="hint">{t("position.added")}</span>}
           {state === "unsupported" && (
-            <span className="hint">Your wallet doesn’t support one-click adding — use the address above.</span>
+            <span className="hint">{t("position.addUnsupported")}</span>
           )}
         </div>
       </div>
 
       {!guard.canTransact && (
-        <p className="hint">
-          Balances are read from Arc directly, so they are correct even while your wallet
-          is on another network.
-        </p>
+        <p className="hint">{t("position.readFromChain", { chain: arc.name })}</p>
       )}
     </section>
   );

@@ -11,10 +11,12 @@ import type { Address } from "viem";
 import type { TokenData } from "../../hooks/useCurve";
 import { EXPLORER_URL } from "../../config";
 import { safeText } from "../../lib/format";
+import { useT } from "../../i18n";
 import { symbolIsWatchable, MAX_WATCHABLE_SYMBOL_LENGTH } from "../../hooks/useWatchAsset";
 import { TokenImage } from "./TokenImage";
 
 export function TokenIdentity({ token, data }: { token: Address; data: TokenData }) {
+  const { t } = useT();
   const [copied, setCopied] = useState(false);
 
   const copy = async () => {
@@ -30,8 +32,8 @@ export function TokenIdentity({ token, data }: { token: Address; data: TokenData
   // safeText strips bidirectional control characters. createToken validates nothing, so
   // a name can carry RTL overrides whose only purpose here would be to make one token
   // render as another.
-  const name = safeText(data.name, 64) || "(unnamed)";
-  const symbol = safeText(data.symbol, 24) || "(no symbol)";
+  const name = safeText(data.name, 64) || t("token.unnamed");
+  const symbol = safeText(data.symbol, 24) || t("token.noSymbol");
 
   return (
     <section className="card identity">
@@ -45,7 +47,7 @@ export function TokenIdentity({ token, data }: { token: Address; data: TokenData
           {/* Full, not truncated. This is the point of the section. */}
           <code className="mono">{token}</code>
           <button className="btn btn-tiny" onClick={copy}>
-            {copied ? "Copied" : "Copy"}
+            {copied ? t("common.copied") : t("common.copy")}
           </button>
           <a
             className="btn btn-tiny btn-ghost"
@@ -53,7 +55,7 @@ export function TokenIdentity({ token, data }: { token: Address; data: TokenData
             target="_blank"
             rel="noreferrer"
           >
-            Verified contract ↗
+            {t("token.verifiedContract")}
           </a>
         </div>
 
@@ -61,9 +63,10 @@ export function TokenIdentity({ token, data }: { token: Address; data: TokenData
             than leaving the "Add to wallet" button to fail silently later. */}
         {data.symbol && !symbolIsWatchable(data.symbol) && (
           <p className="identity-warn">
-            This symbol is {data.symbol.length} characters. Wallets cap one-click adding at{" "}
-            {MAX_WATCHABLE_SYMBOL_LENGTH}, so holders may have to add it by hand using the
-            address above.
+            {t("token.symbolTooLong", {
+              length: data.symbol.length,
+              max: MAX_WATCHABLE_SYMBOL_LENGTH,
+            })}
           </p>
         )}
       </div>

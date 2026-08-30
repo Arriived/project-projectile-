@@ -89,7 +89,23 @@ const check = (label: string, pass: boolean, detail = "") => {
     walletLabel(generic).includes("unidentified"),
     walletLabel(generic)
   );
-  check("W8  label handles no connector", walletLabel(undefined) === "Not connected");
+  // W8 changed shape when i18n landed. walletLabel no longer owns any user-facing English:
+  // the "not connected" wording is the CALLER's, supplied from the locale catalogue, so
+  // this module stays free of untranslated copy and remains testable without an i18n
+  // runtime. Empty here means "nothing to label", which is the honest answer.
+  check(
+    "W8  no connector -> empty; the caller supplies the not-connected wording",
+    walletLabel(undefined) === "",
+    JSON.stringify(walletLabel(undefined))
+  );
+  // The generic-connector phrasing is injectable so it can be translated. Proving the
+  // injection is used matters: a formatter that silently ignored its argument would leave
+  // English in the UI for every locale, and nothing else would catch it.
+  check(
+    "W9  the unidentified phrasing is taken from the injected formatter",
+    walletLabel(generic, (n) => `<<${n}>>`) === "<<Injected>>",
+    walletLabel(generic, (n) => `<<${n}>>`)
+  );
 }
 
 // The invariant that outranks the rows: the generic connector may only ever be offered
@@ -115,6 +131,6 @@ const check = (label: string, pass: boolean, detail = "") => {
   );
 }
 
-const total = 9;
+const total = 10;
 console.log(`\n${total - failures}/${total} checks passed`);
 if (failures) process.exit(1);

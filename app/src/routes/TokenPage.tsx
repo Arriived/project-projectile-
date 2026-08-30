@@ -18,8 +18,10 @@ import { TradePanel } from "../components/token/TradePanel";
 import { TrustPanel } from "../components/token/TrustPanel";
 import { TradesFeed } from "../components/token/TradesFeed";
 import { tradeGate } from "../lib/curve";
+import { useT } from "../i18n";
 
 export function TokenPage() {
+  const { t } = useT();
   const { address: raw } = useParams<{ address: string }>();
 
   // A malformed address in the URL is a user-visible state, not a crash. Checksummed so
@@ -28,10 +30,10 @@ export function TokenPage() {
     return (
       <main className="main">
         <div className="card card-err">
-          <strong>Not a valid token address.</strong>
+          <strong>{t("token.invalidAddress")}</strong>
           <p className="hint mono">{raw ?? "(none)"}</p>
           <Link to="/" className="btn">
-            Back to all tokens
+            {t("common.back")}
           </Link>
         </div>
       </main>
@@ -43,13 +45,14 @@ export function TokenPage() {
 }
 
 function TokenPageInner({ token }: { token: `0x${string}` }) {
+  const { t } = useT();
   const data = useCurve(token);
   const { curve, isLoading, isError } = data;
 
   if (isLoading && !curve) {
     return (
       <main className="main">
-        <div className="card skeleton-card">Loading token…</div>
+        <div className="card skeleton-card">{t("token.loadingToken")}</div>
       </main>
     );
   }
@@ -60,13 +63,11 @@ function TokenPageInner({ token }: { token: `0x${string}` }) {
     return (
       <main className="main">
         <div className="card card-err">
-          <strong>No curve found for this address.</strong>
-          <p className="hint">
-            It was not launched by this factory, or the network is unreachable.
-          </p>
+          <strong>{t("token.notFoundTitle")}</strong>
+          <p className="hint">{t("token.notFoundBody")}</p>
           <p className="mono small">{token}</p>
           <Link to="/" className="btn">
-            Back to all tokens
+            {t("common.back")}
           </Link>
         </div>
       </main>
@@ -92,7 +93,7 @@ function TokenPageInner({ token }: { token: `0x${string}` }) {
         <TradePanel token={token} data={data} />
       ) : (
         <div className="card card-closed">
-          <h2 className="card-title">Trading closed</h2>
+          <h2 className="card-title">{t("trade.closedTitle")}</h2>
           <p>{gate.reason}</p>
         </div>
       )}

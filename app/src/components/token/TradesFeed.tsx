@@ -14,14 +14,9 @@ import { useQuery } from "@tanstack/react-query";
 import type { Address } from "viem";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, EXPLORER_URL } from "../../config";
 import type { TokenData } from "../../hooks/useCurve";
-import {
-  fmtToken,
-  fmtUsdc,
-  shortAddress,
-  relativeAge,
-  safeText,
-  approxBigIntFromIndexer,
-} from "../../lib/format";
+import { shortAddress, safeText, approxBigIntFromIndexer } from "../../lib/format";
+import { useT } from "../../i18n";
+import { arc } from "../../chain";
 
 type TradeRow = {
   tx_hash: string;
@@ -34,6 +29,7 @@ type TradeRow = {
 };
 
 export function TradesFeed({ token, data }: { token: Address; data: TokenData }) {
+  const { t, fmt } = useT();
   const symbol = safeText(data.symbol, 16) || "tokens";
 
   const { data: trades, isError, isLoading } = useQuery({
@@ -58,40 +54,37 @@ export function TradesFeed({ token, data }: { token: Address; data: TokenData })
 
   return (
     <section className="card">
-      <h2 className="card-title">Recent trades</h2>
+      <h2 className="card-title">{t("trades.title")}</h2>
 
       {/* TRAP 19: the indexer is a speed layer, not a trust layer. When it is
           unreachable the page says so and stays readable -- everything above this
           section is read from the chain and is unaffected. */}
       {isError && (
-        <p className="hint">
-          Trade history is unavailable — the indexer is unreachable. Everything above is
-          read from Arc directly and is unaffected.
-        </p>
+        <p className="hint">{t("trades.indexerDown", { chain: arc.name })}</p>
       )}
 
-      {isLoading && !trades && <p className="hint">Loading trades…</p>}
+      {isLoading && !trades && <p className="hint">{t("trades.loading")}</p>}
 
-      {trades && trades.length === 0 && <p className="hint">No trades yet.</p>}
+      {trades && trades.length === 0 && <p className="hint">{t("trades.none")}</p>}
 
       {trades && trades.length > 0 && (
         <table className="trades">
           <tbody>
-            {trades.map((t) => (
-              <tr key={t.tx_hash}>
-                <td className={t.is_buy ? "buy" : "sell"}>{t.is_buy ? "Buy" : "Sell"}</td>
-                <td className="mono small">{shortAddress(t.trader_address)}</td>
-                <td>{fmtUsdc(approxBigIntFromIndexer(t.usdc_amount))} USDC</td>
+            {trades.map((row) => (
+              <tr key={row.tx_hash}>
+                <td className={row.is_buy ? "buy" : "sell"}>{row.is_buy ? t("trade.buy") : t("trade.sell")}</td>
+                <td className="mono small">{shortAddress(row.trader_address)}</td>
+                <td>{fmt.usdc(approxBigIntFromIndexer(row.usdc_amount))} USDC</td>
                 <td className="hint">
                   {/* approx*: token_amount arrives from PostgREST as a JSON number and
                       has ALREADY lost its low digits (trap 21). Fine for a feed, never
                       for anything acted on. */}
-                  ~{fmtToken(approxBigIntFromIndexer(t.token_amount))} {symbol}
+                  ~{fmt.token(approxBigIntFromIndexer(row.token_amount))} {symbol}
                 </td>
-                <td className="hint">{relativeAge(t.created_at)}</td>
+                <td className="hint">{fmt.age(row.created_at)}</td>
                 <td>
                   <a
-                    href={`${EXPLORER_URL}/tx/${t.tx_hash}`}
+                    href={`${EXPLORER_URL}/tx/${row.tx_hash}`}
                     target="_blank"
                     rel="noreferrer"
                     className="hint"

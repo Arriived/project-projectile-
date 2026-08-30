@@ -69,8 +69,16 @@ export function selectWallets(connectors: readonly WalletChoice[]): WalletChoice
  * one extension may not be the ones the page is bound to. That ambiguity is what produced
  * the original bug, and the UI should not reproduce it.
  */
-export function walletLabel(c: WalletChoice | undefined): string {
-  if (!c) return "Not connected";
-  if (isGenericInjected(c)) return `${c.name} (unidentified wallet)`;
+export function walletLabel(
+  c: WalletChoice | undefined,
+  /**
+   * How to phrase the generic connector. Injected rather than hardcoded so this module
+   * stays free of user-facing English and remains testable without an i18n runtime --
+   * scripts/verify-wallets.mts calls it with a plain template.
+   */
+  unidentified: (name: string) => string = (n) => `${n} (unidentified wallet)`
+): string {
+  if (!c) return "";
+  if (isGenericInjected(c)) return unidentified(c.name);
   return c.name;
 }
