@@ -3,7 +3,9 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "verify:liveness": "node scripts/verify-liveness.js",
+    "backfill": "node scripts/backfill-block-time.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

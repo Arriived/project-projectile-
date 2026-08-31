@@ -499,12 +499,30 @@ node-operator config and CLI. The contract is unaffected and R15 stands.
 insufficient-balance error text — `insufficient funds for gas * price + value` becomes
 revm 38's `OutOfFunds` variant.
 
-**Audited: NOTHING in the suite asserts on RPC error text.** Checked rather than assumed,
-across `test/` and `scripts/`. Every hit is display-only — a `console.log`, or the `detail`
-field of a `check()` — and the only literal string match in the repo,
-`preflight.js:127`, matches `"disagrees"`, which is **our own** thrown `Error`, not a node
-message. So the count of places needing a version-agnostic rewrite was **zero**, and no
-pattern note is warranted for message-matching.
+~~**Audited: NOTHING in the suite asserts on RPC error text.**~~ **THAT AUDIT WAS WRONG,
+and the thing it dismissed is exactly what later broke production — corrected 31 August
+2026.**
+
+The audit looked at `test/` and `scripts/` and concluded the count of places matching on
+RPC error text was **zero**, so "no pattern note is warranted for message-matching". It was
+not zero, and it missed the two that mattered:
+
+1. **`indexer/src/index.js`, `withRetry`.** It classified rate limits as
+   `err.code === -32011`. Arc actually returns **`-32005`**. It worked only because the
+   regex `/rate limit/i` happened to match the *message*. Our own retry logic was
+   depending on error text.
+2. **ethers, underneath us, and this is the one that cost 29 hours.**
+   `subscriber-filterid.js` has a downgrade-to-polling path for a backend without filters.
+   It is gated on `UNSUPPORTED_OPERATION`, and `provider-jsonrpc.js` decides that by
+   `message.match(/the method .* does not exist/i)`. Arc says `"internal error"`, so
+   ethers classified it `UNKNOWN_ERROR`, never downgraded, and retried `eth_newFilter`
+   forever. **Had Arc returned `-32601 method not found`, the fallback would have fired
+   and nothing would have happened.**
+
+**The standing rule was right and the audit was wrong.** The lesson is not "re-run the
+audit more carefully" — it is that the audit's *scope* was wrong. It searched our source
+for string comparisons. The dependency doing the message-matching was `node_modules`, and
+the fragile string was one **we do not control and did not write**. See §11.11.
 
 **A real weakness sat underneath it, and that was worth fixing.** The two R15 failure cases
 passed on `catch (e) { check(..., true) }` — pass on ANY throw. Zero8 would not have broken
@@ -1713,7 +1731,132 @@ figures should be monochrome so the one coloured thing means something.**
 | **No hosting, no runbook, no rollback, no user docs** | None of these exist. Not started, not scheduled. |
 | **Migration 003** | Approved, not written. See "The exact next action". |
 
-## 11.11 Settled — do not re-argue
+## 11.11 The indexer's live mode — filters, and how it went dark for 29 hours
+
+⚠ **Live mode POLLS `eth_getLogs`. It is not a subscription, and it must not become one.**
+
+### Arc does not support filters. Measured 31 August 2026, on BOTH hosts.
+
+| method | `rpc.testnet.arc.io` | `rpc.testnet.arc.network` |
+|---|---|---|
+| `eth_newFilter` | **`-32603 internal error`** | **`-32603`** |
+| `eth_newBlockFilter` | **`-32603`** | **`-32603`** |
+| `eth_getLogs` | works | works |
+| `eth_subscribe` over **WebSocket** (`wss://`) | **works** | **works** |
+| `eth_subscribe` over **HTTP** | **returns an id — see the trap below** | same |
+
+**WebSocket subscriptions genuinely work**, and that is worth knowing rather than
+re-deriving: `wss://rpc.testnet.arc.io` connects and `eth_subscribe("logs", …)` returns a
+usable id on both hosts.
+
+**They are still not used.** A dropped or silently-dead subscription has *exactly* the
+failure mode being fixed — process alive, nothing arriving, checkpoint frozen. Polling
+from the checkpoint is **self-healing**: every tick re-reads from where it left off, so a
+missed tick just means the next one covers more blocks. The subscription design would
+reimport the bug in a new coat.
+
+`eth_getLogs` rate-limits on request **frequency**, not span: a 1-block query succeeded and
+a 10-block query 2.5s later returned `-32005`. Catch-up already paces at
+`CHUNK_DELAY_MS = 750`; live polling reuses the same path.
+
+### ⚠ `eth_subscribe` OVER HTTP IS A FAIL-OPEN TRAP
+
+It returns a plausible subscription id. Then:
+
+- `eth_getFilterChanges` on that id → **`-32603`**
+- `eth_unsubscribe` on that id → **`false`**
+
+So it accepts the call and hands back something worthless. **Anything checking "did
+subscribe succeed?" gets yes.** A future session trying subscriptions over HTTP will see a
+green result and index nothing. Use `wss://` or do not use subscriptions.
+
+### Why it retried forever instead of failing
+
+Not `withRetry` — that would have thrown on the first attempt, since `-32603` is neither a
+rate limit nor node lag. The loop is inside ethers, and **ethers has a fallback for exactly
+this case that never fires**:
+
+```js
+// subscriber-filterid.js
+if (!isError(error, "UNSUPPORTED_OPERATION") || error.operation !== "eth_newFilter") throw error;
+// The backend does not support Filter ID; downgrade to polling
+```
+
+`provider-jsonrpc.js` decides `UNSUPPORTED_OPERATION` by **regex-matching the error
+message** — `message.match(/the method .* does not exist/i)`. Arc says `"internal error"`.
+No match → `UNKNOWN_ERROR` → re-thrown into ethers' own catch → `console.log("@TODO", error)`
+→ `provider.once("block", poller)` **re-arms it on the next block**.
+
+Measured over 45 seconds:
+
+```
+eth_newFilter attempts        : 11   (~4s apart = pollingInterval)
+distinct request ids used     : 1    -> id 2, every single time
+backoff                       : none
+provider "error" events fired : 0
+process alive                 : yes
+```
+
+**Three layers each swallowed it**, which is why there was no signal anywhere:
+
+1. **ethers' `console.log("@TODO", error)`** — not an event, not a rejection.
+   Uninterceptable from our code.
+2. **`provider.on("error", …)`** — measured **zero events**. The handler the code relied on
+   to surface provider problems is dead for this failure class.
+3. **`process.on("unhandledRejection")`** — never saw it either, and logged-and-continued
+   even when it did fire.
+
+And `degraded` was only set inside the log handler, which required a log to *arrive*. None
+ever did, so it stayed `false` forever and the checkpoint never advanced.
+
+### What replaced it
+
+- **One code path.** `catchUp()` IS live mode, called on a 5s interval. The two-path
+  version is what broke: catch-up polled and worked, live mode subscribed and did nothing.
+- **Bounded failure.** 5 consecutive failed polls → log the failing method → `exit(1)`.
+  A supervisor restarts it or a human sees it. Never an infinite quiet loop.
+- **`unhandledRejection` is FATAL**, not a log line.
+- **`withRetry` matches rate limits by CODE** (`-32005`, `-32011`), text only as fallback.
+
+### ⚠ THE LIVENESS ASSERTION IS HEAD-RELATIVE. NEVER REWRITE IT AGAINST A CLOCK.
+
+`livenessVerdict()` compares the checkpoint to the **chain head**, and that distinction is
+the whole value:
+
+| head | checkpoint | verdict |
+|---|---|---|
+| moving | moving | healthy |
+| still | still | **quiet chain — perfectly fine** |
+| **moving** | **still** | **silently dead. This is the signature.** |
+
+**On a wall-clock timer, rows 2 and 3 are identical** — both look like "no new rows for N
+minutes" — so a timer either fires constantly on a quiet chain or is set so loose it never
+fires. Against the head they are opposites. It catches every silent-death variant including
+ones nobody has thought of, because it does not care *why* the checkpoint stopped.
+
+Limit: **1,000 blocks** (~8 min at Arc's 0.48s blocks), 3 consecutive strikes, then
+`exit(1)`. Strikes clear **only on a poll that actually kept up** — clearing on any
+successful poll lets a permanently-lagging indexer alternate strike/reset forever and never
+die. A `null` checkpoint counts as infinitely behind: unreadable is not evidence of health.
+
+`indexer/scripts/verify-liveness.js` is 14 checks, all red-proved. The one that matters most
+is **V1**, which fails the moment the rule is rewritten against time.
+
+### ⚠ The checkpoint is MONOTONIC — two indexers will fight over it
+
+`saveCheckpoint` refuses to lower the checkpoint. Found by running two instances **by
+accident** while testing this fix: each catches up from its own start block and blindly
+writes its own cursor, so the **slower one overwrites the faster one** and the checkpoint
+goes *backwards*. Observed: `59782875` written, then `59776875` written over it.
+
+Nothing corrupts — every handler is idempotent, so the range is just re-read — but the
+indexer appears to make no progress while working hard, and the liveness check above would
+eventually (correctly) kill it with the cause invisible. Refusing to lower it makes
+concurrent instances merely wasteful instead of pathological, and costs one read.
+
+**Before starting the indexer, check nothing else is already running it.**
+
+## 11.12 Settled — do not re-argue
 
 Same standing as §6.
 
@@ -1726,6 +1869,11 @@ Same standing as §6.
   exit and is never derived from the limit.
 - **i18n stays in-house on `Intl`.** The 17 kB gzip a library costs is not worth it here.
 - **Bind wallets via EIP-6963.** Never go back to the generic `injected()` connector.
+- **The indexer polls `eth_getLogs`. Live mode is never a subscription** — filters are
+  unsupported on Arc, and a dead subscription reproduces the outage (§11.11).
+- **The liveness check is head-relative, never wall-clock.** A quiet chain and a dead
+  indexer are identical on a timer and opposite against the head.
+- **Classify RPC errors by CODE.** Text matching is a fallback, and it is what broke.
 
 ---
 

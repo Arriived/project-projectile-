@@ -74,8 +74,22 @@ async function withRetry(fn, { retries = 5, baseDelayMs = 1000 } = {}) {
     try {
       return await fn();
     } catch (err) {
+      // ⚠ MATCH ON CODES FIRST, TEXT ONLY AS A FALLBACK.
+      //
+      // This used to test `err.code === -32011` alone, and Arc actually returns **-32005**
+      // for a rate limit. It worked only because the message regex happened to match
+      // "rate limit exceeded" -- i.e. our own retry logic was depending on error TEXT, the
+      // exact fragility that caused the live-mode outage. ethers has the same weakness one
+      // layer down: it decides a method is unsupported by matching
+      // /the method .* does not exist/i, so Arc's "internal error" defeats its
+      // downgrade-to-polling path entirely.
+      //
+      // Measured against Arc: -32005 "rate limit exceeded". -32011 is kept because it is
+      // what some other providers return and removing it would narrow coverage for no gain.
+      // The text match stays as a last resort, not as the mechanism.
+      const RATE_LIMIT_CODES = [-32005, -32011];
       const isRateLimit =
-        err.code === -32011 ||
+        RATE_LIMIT_CODES.includes(err.code) ||
         /request limit|rate limit|too many requests/i.test(err.message || err.shortMessage || "");
       // "missing revert data" with no actual revert reason on a call that should be
       // trivially safe (reading a public variable right after its own contract's
@@ -349,12 +363,27 @@ function parseFactoryLog(log) {
   }
 }
 
-async function catchUp() {
+/**
+ * Read forward from the checkpoint to the current head, in chunks.
+ *
+ * ⚠ THIS IS ALSO LIVE MODE. Live mode is this function on an interval -- see watchLive().
+ * There is deliberately ONE code path for reading logs, because the two-path version is
+ * what broke: catch-up polled `eth_getLogs` and worked, while live mode used
+ * `provider.on()` and silently did nothing for 29 hours.
+ *
+ * `quiet` suppresses the per-chunk chatter for the live poll, which would otherwise print
+ * a line every few seconds forever. It does NOT suppress anything that indicates a
+ * problem.
+ *
+ * Returns the block it reached, so the caller can compare progress against the head.
+ */
+async function catchUp({ quiet = false } = {}) {
   const checkpoint = await getLastProcessedBlock(supabase);
   const fromDefault = Number(FACTORY_DEPLOY_BLOCK || 0);
   let from = checkpoint !== null ? checkpoint + 1 : fromDefault;
+  let reached = checkpoint;
 
-  console.log(`Catching up from block ${from}...`);
+  if (!quiet) console.log(`Catching up from block ${from}...`);
 
   // Re-fetches the current chain head every iteration instead of fixing it once at
   // the start. A long catch-up run (working through a big backlog) takes real time,
@@ -401,88 +430,220 @@ async function catchUp() {
     }
 
     await saveCheckpoint(supabase, to);
-    console.log(`  processed through block ${to} (${parsed.length} events)`);
+    reached = to;
+    // Quiet ticks stay quiet, but an EVENT is never silent -- a live poll that indexes
+    // something says so, because "the indexer is working" should be observable.
+    if (!quiet || parsed.length > 0) {
+      console.log(`  processed through block ${to} (${parsed.length} events)`);
+    }
     from = to + 1;
     await sleep(CHUNK_DELAY_MS);
   }
 
-  console.log("Caught up. Switching to live mode.");
+  if (!quiet) console.log("Caught up. Switching to live mode.");
+  return reached;
 }
 
 // ── Live mode ───────────────────────────────────────────────────────────
 
-function watchLive() {
-  let degraded = false; // once true, stop advancing the checkpoint until a manual restart
-  let processingChain = Promise.resolve(); // serializes event handling — see below
+// ── Live mode ───────────────────────────────────────────────────────────
+//
+// ⚠ LIVE MODE IS POLLING, NOT A SUBSCRIPTION, AND THAT IS NOT A STYLE CHOICE.
+//
+// It used to be `provider.on({ address }, cb)`. Against the Arc RPC that silently indexed
+// NOTHING for 29 hours while the process reported healthy. Measured, on both
+// rpc.testnet.arc.io and rpc.testnet.arc.network:
+//
+//   eth_newFilter        -32603 internal error   (NOT supported)
+//   eth_newBlockFilter   -32603 internal error   (NOT supported)
+//   eth_getLogs          works
+//
+// ethers HAS a downgrade-to-polling path for exactly this case, in
+// subscriber-filterid.js. It never fires, because it is gated on the error being
+// UNSUPPORTED_OPERATION and ethers decides that by REGEX-MATCHING THE ERROR MESSAGE
+// (provider-jsonrpc.js: `message.match(/the method .* does not exist/i)`). Arc says
+// "internal error", which matches nothing, so ethers classifies it UNKNOWN_ERROR,
+// re-throws into its own catch, prints `console.log("@TODO", error)` and re-arms itself
+// on the next block. Forever. Measured: 11 attempts in 45s, ~4s apart, no backoff, the
+// SAME request id every time, and ZERO `provider.on("error")` events.
+//
+// Had Arc returned -32601 "method not found", ethers would have downgraded to polling
+// and none of this would have happened.
+//
+// WEBSOCKET SUBSCRIPTIONS DO WORK on both hosts (wss://, eth_subscribe returns a usable
+// id). They are still not used here: a dropped or silently-dead subscription has exactly
+// the failure mode being fixed -- process alive, nothing arriving, checkpoint frozen.
+// Polling from the checkpoint is SELF-HEALING, because every tick re-reads from where it
+// left off, so a missed tick just means the next one covers more blocks.
+//
+// ⚠ eth_subscribe OVER HTTP IS A TRAP: it returns a plausible id, then
+// eth_getFilterChanges on that id gives -32603 and eth_unsubscribe returns false.
+// Anything checking "did subscribe succeed?" gets yes. Do not reintroduce it.
 
-  async function processLiveLog(log) {
-    const parsedLog = parseFactoryLog(log);
-    if (!parsedLog) return;
+/** How often to poll. Arc blocks are ~0.48s, so this is ~10 blocks of ground per tick. */
+const LIVE_POLL_MS = 5000;
 
-    try {
-      await dispatchEvent(parsedLog);
+/**
+ * Consecutive failed polls before the process gives up and exits.
+ *
+ * The bug this bounds: an unrecoverable RPC method error retried forever, quietly. A
+ * bounded count means a genuinely transient blip is ridden out, and a broken RPC method
+ * kills the process LOUDLY so a supervisor restarts it or a human sees it.
+ */
+const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 
-      // Only advance the checkpoint while nothing has failed yet. Freezing it after a
-      // failure (rather than continuing to advance past subsequent successful events)
-      // means a restart's catch-up correctly re-syncs from before the failure — every
-      // handler is idempotent, so re-processing anything already-successful in that
-      // range is safe, just slightly redundant. The alternative (letting the checkpoint
-      // keep advancing on later successes) would permanently skip the failed event on
-      // any future restart, which is the exact silent-data-loss bug this whole pass
-      // was meant to fix.
-      if (!degraded) await saveCheckpoint(supabase, parsedLog.blockNumber);
-    } catch (err) {
-      degraded = true;
-      console.error(
-        `\n❌ Live event handling FAILED for ${parsedLog.eventName} on ` +
-        `${parsedLog.args.token} (tx ${log.transactionHash}): ${err.message}`
-      );
-      console.error(
-        "Checkpoint progress is now frozen — this and further events will still be " +
-        "attempted and written when possible, but restart the indexer once the " +
-        "underlying issue is resolved so catch-up correctly re-syncs from before this failure."
-      );
-    }
+/**
+ * ── THE LIVENESS ASSERTION ───────────────────────────────────────────────
+ *
+ * How far the chain head may run ahead of our checkpoint before we treat the indexer as
+ * silently dead.
+ *
+ * ⚠ MEASURED AGAINST THE HEAD, NEVER AGAINST WALL-CLOCK TIME, and that distinction is the
+ * entire point. On a timer, a quiet chain and a dead indexer are indistinguishable -- both
+ * look like "no new rows for N minutes", so a timer either fires constantly on a quiet
+ * chain or is set so loose it never fires at all. Against the head they are opposites:
+ *
+ *   head moving, checkpoint moving    -> healthy
+ *   head still,  checkpoint still     -> quiet chain, perfectly fine
+ *   head moving, checkpoint STILL     -> silently dead. This is the signature.
+ *
+ * That comparison catches every silent-death variant, including ones nobody has thought
+ * of yet, because it does not care WHY the checkpoint stopped -- only that the chain
+ * advanced and we did not.
+ *
+ * At ~0.48s blocks this is roughly 8 minutes of ground lost before it fires.
+ */
+const MAX_HEAD_LAG_BLOCKS = 1000;
+
+/** Consecutive liveness violations tolerated before exiting, to ride out one bad poll. */
+const MAX_LIVENESS_STRIKES = 3;
+
+/**
+ * The liveness rule, as a PURE function so it can be red-proved without a chain.
+ *
+ * Takes where we reached, where the chain is, and how many strikes are already standing;
+ * returns the new strike count and whether to die. No I/O, no clock.
+ *
+ * `reached === null` means the checkpoint could not be read at all, which is treated as
+ * infinitely behind rather than as fine -- an unreadable checkpoint is not evidence of
+ * health.
+ */
+function livenessVerdict({
+  reached,
+  head,
+  strikes,
+  maxLag = MAX_HEAD_LAG_BLOCKS,
+  maxStrikes = MAX_LIVENESS_STRIKES,
+}) {
+  const lag = reached === null ? Infinity : head - reached;
+
+  if (lag <= maxLag) {
+    // Only a poll that actually KEPT UP clears the strikes. Clearing on any successful
+    // poll would let a permanently-lagging indexer alternate strike/reset forever and
+    // never reach the limit -- alive, behind, and silent, which is the bug.
+    return { lag, strikes: 0, fatal: false };
   }
 
-  // One subscription for every log at this address, instead of a separate one per
-  // event type (previously: TokenCreated + Trade + Graduated + a block listener for
-  // checkpointing = 4 simultaneous subscriptions, which is what triggered the rate
-  // limit the instant live mode started).
-  provider.on({ address: FACTORY_ADDRESS }, (log) => {
-    // Chained rather than fired independently: two events arriving close together are
-    // both async and yield at every `await`, so without this they could interleave —
-    // letting a LATER block's checkpoint get saved while an EARLIER block's handler is
-    // still mid-flight (and might fail afterward). Chaining forces strict in-order
-    // processing, so `degraded` is always checked against a fully-settled prior state.
-    processingChain = processingChain.then(() => processLiveLog(log));
-  });
+  const next = strikes + 1;
+  return { lag, strikes: next, fatal: next >= maxStrikes };
+}
 
-  // Provider-level errors (dropped connection, rate limit on the subscription itself,
-  // etc.) get logged instead of crashing the process. NOTE: unlike an earlier version
-  // of this comment claimed, ethers v6's WebSocketProvider reconnection behavior on a
-  // dropped connection isn't something to rely on with full confidence — if events
-  // stop appearing here for an extended period without any further log output at all,
-  // don't assume it's silently recovering; restart the process manually instead of
-  // waiting.
-  provider.on("error", (err) => {
-    console.error("Provider error:", err.message || err);
-  });
+/**
+ * Poll forward forever. Never returns; exits the process on an unrecoverable condition.
+ */
+async function watchLive() {
+  console.log(
+    `Live mode: polling eth_getLogs every ${LIVE_POLL_MS}ms ` +
+      `(filters are unsupported on this RPC -- see the note above).`
+  );
 
-  console.log(`Watching ${FACTORY_ADDRESS} for new events...`);
+  let consecutiveFailures = 0;
+  let livenessStrikes = 0;
+
+  for (;;) {
+    await sleep(LIVE_POLL_MS);
+
+    try {
+      const reached = await catchUp({ quiet: true });
+      consecutiveFailures = 0;
+
+      // ── liveness, head-relative ──────────────────────────────────────────
+      const head = await withRetry(() => provider.getBlockNumber());
+      const verdict = livenessVerdict({ reached, head, strikes: livenessStrikes });
+      livenessStrikes = verdict.strikes;
+
+      if (verdict.strikes > 0) {
+        console.error(
+          `⚠ LIVENESS: checkpoint ${reached} is ${verdict.lag} blocks behind head ${head} ` +
+            `(limit ${MAX_HEAD_LAG_BLOCKS}) — strike ${verdict.strikes}/${MAX_LIVENESS_STRIKES}`
+        );
+      }
+
+      if (verdict.fatal) {
+        console.error(
+          `\n❌ FATAL: the chain advanced while the checkpoint did not, ${MAX_LIVENESS_STRIKES} ` +
+            `polls running. The indexer is alive but recording nothing, which is the exact ` +
+            `failure this check exists to catch. Exiting so it is visible rather than silent.`
+        );
+        process.exit(1);
+      }
+    } catch (err) {
+      consecutiveFailures++;
+      const method = err?.payload?.method ? ` (${err.payload.method})` : "";
+      console.error(
+        `Poll failed${method}: ${err.message || err} ` +
+          `— failure ${consecutiveFailures}/${MAX_CONSECUTIVE_POLL_FAILURES}`
+      );
+
+      if (consecutiveFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+        console.error(
+          `\n❌ FATAL: ${MAX_CONSECUTIVE_POLL_FAILURES} consecutive poll failures. ` +
+            `Stopping rather than looping quietly — an unrecoverable RPC error retried ` +
+            `forever is what took the data dark for 29 hours.`
+        );
+        if (err?.payload?.method) {
+          console.error(
+            `The failing method was ${err.payload.method}. If this RPC does not support ` +
+              `it, the fix is a different RPC or a different method, not a retry.`
+          );
+        }
+        process.exit(1);
+      }
+
+      // Back off before the next attempt, capped. Bounded by the failure count above, so
+      // this cannot become the infinite quiet loop it replaces.
+      await sleep(Math.min(30_000, LIVE_POLL_MS * 2 ** consecutiveFailures));
+    }
+  }
 }
 
 // ── Entry point ─────────────────────────────────────────────────────────
 
 // Last-resort safety net — anything not already caught explicitly above logs clearly
 // here instead of Node dumping a raw, hard-to-read crash.
+// ⚠ THIS HANDLER USED TO SWALLOW. It logged and continued, which is one of the three
+// layers that let a dead indexer look alive for 29 hours: ethers printed
+// `console.log("@TODO", error)` internally, `provider.on("error")` never fired at all
+// (measured: 0 events), and anything that did escape landed here and became a log line.
+//
+// An unhandled rejection is a bug by definition -- some path threw and nobody was
+// waiting. Continuing past it means running in an unknown state, and the failure this
+// file exists to prevent is precisely "running in an unknown state while reporting
+// healthy". So it is now FATAL.
 process.on("unhandledRejection", (err) => {
-  console.error("Unhandled rejection:", err);
+  console.error("\n❌ FATAL: unhandled rejection — exiting rather than continuing blind.");
+  console.error(err);
+  process.exit(1);
 });
 
 async function main() {
   await catchUp();
-  watchLive();
+  // AWAITED. watchLive never returns normally -- it polls forever and calls
+  // process.exit(1) on an unrecoverable condition. Leaving it un-awaited meant main()
+  // resolved immediately and any rejection escaped into the unhandledRejection handler
+  // below, which logs and swallows. That is one of the three layers that kept a dead
+  // indexer looking alive.
+  await watchLive();
 }
 
 if (require.main === module) {
@@ -492,4 +653,14 @@ if (require.main === module) {
   });
 }
 
-module.exports = { upsertTokenFromChain, supabase, provider };
+module.exports = {
+  upsertTokenFromChain,
+  supabase,
+  provider,
+  // Exported for scripts/verify-liveness.js. The liveness rule is the one piece of this
+  // file that can be proved without a chain, so it is exported rather than buried.
+  livenessVerdict,
+  MAX_HEAD_LAG_BLOCKS,
+  MAX_LIVENESS_STRIKES,
+  MAX_CONSECUTIVE_POLL_FAILURES,
+};
