@@ -122,6 +122,8 @@ export const en = {
       "The indexer only aggregates a 1-hour volume window today. Showing that under a {window} label would claim more than the data supports.",
     volumeIs1h: "volume is a 1-hour window",
     marketCap: "Market cap",
+    lessThan: "<{value}",
+    progressNoneYet: "No buys yet",
     approxTooltip:
       "Approximate. This figure comes from the indexer, which rounds large numbers before the browser sees them. The token page reads the chain directly.",
     fdv: "FDV",

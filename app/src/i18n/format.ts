@@ -45,6 +45,23 @@ function nf(locale: Locale, opts: Intl.NumberFormatOptions): Intl.NumberFormat {
 /** Threshold below which compact notation is pointless. */
 const COMPACT_FLOOR = 1000;
 
+/**
+ * Below this, USDC renders in full rather than compacted.
+ *
+ * 10,000 rather than COMPACT_FLOOR's 1,000, because compact notation was destroying the
+ * only differences that existed. Measured on live data: four tokens with market caps of
+ * 2002.11, 2002.40, 2002.40 and 2002.11 USDC all rendered as "2K", so a grid of cards
+ * claimed four identical tokens when they were not. 9,999 rendered as "10K".
+ *
+ * A launch curve opens around 2,000 USDC, so the entire early life of every token sits
+ * inside the band compact notation flattens -- which is exactly the band a trader is
+ * scanning. Above 10K the compaction earns its place.
+ *
+ * Note this also agrees with zh-Hans, which has no unit below 万 (10,000) and therefore
+ * renders these values in full anyway.
+ */
+const USDC_COMPACT_FLOOR = 10_000;
+
 // ── EXACT: for numbers the user acts on ────────────────────────────────────────
 
 /**
@@ -85,7 +102,7 @@ export function formatUsdcCompact(locale: Locale, usdc6: bigint): string {
   if (Math.abs(n) < 0.01) {
     return nf(locale, { minimumFractionDigits: 2, maximumFractionDigits: 8 }).format(n);
   }
-  if (Math.abs(n) < COMPACT_FLOOR) {
+  if (Math.abs(n) < USDC_COMPACT_FLOOR) {
     return nf(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
   }
   return nf(locale, { notation: "compact", maximumFractionDigits: 2 }).format(n);

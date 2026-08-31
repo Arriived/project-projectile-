@@ -26,8 +26,11 @@ import {
   pageCount,
   approxMarketCapUsdc6,
   approxProgressBps,
+  progressLabelKind,
+  MIN_RENDERABLE_PCT,
   type ListToken,
 } from "../src/lib/tokenList.ts";
+import { formatUsdcCompact } from "../src/i18n/format.ts";
 
 let failures = 0;
 const check = (label: string, pass: boolean, detail = "") => {
@@ -208,6 +211,70 @@ console.log("\n── display figures ──");
   );
 }
 
-const total = 30;
+// ── "has anyone bought this?" ───────────────────────────────────────────────────
+console.log("\n── progress labels ──");
+{
+  // The live numbers this was written against. PRC4587 has never been traded; TXS2809
+  // had two buys and two sells, leaving 0.48 USDC against an 8,000 USDC threshold.
+  const never = tok({ address: "0xnever", approxRealUsdcReserves: 0n, approxThresholdUsdc: 8_000_000_000n });
+  const tiny = tok({ address: "0xtiny", approxRealUsdcReserves: 480_001n, approxThresholdUsdc: 8_000_000_000n });
+  const real = tok({ address: "0xreal", approxRealUsdcReserves: 4_000_000_000n, approxThresholdUsdc: 8_000_000_000n });
+
+  check(
+    "L13a a never-traded curve is 'none', not a percentage",
+    progressLabelKind(never) === "none",
+    progressLabelKind(never)
+  );
+
+  // THE ROW THAT MATTERS. approxProgressBps divides in bigint and TRUNCATES: 0.48 USDC
+  // against 8,000 is 0.6 bps, which comes back as 0. A label keyed on the percentage
+  // therefore reports "no buys yet" for a curve that has genuinely been traded -- the
+  // exact confusion the label was added to remove, reintroduced one layer down. This
+  // fails if the implementation ever goes back to testing the percentage.
+  check(
+    "L13  a TRADED curve below 0.1% is 'below', NOT 'none' (bps truncates to 0 here)",
+    progressLabelKind(tiny) === "below",
+    `bps=${approxProgressBps(tiny)} -> ${progressLabelKind(tiny)}`
+  );
+  check(
+    "L13b the two are distinguishable at all",
+    progressLabelKind(never) !== progressLabelKind(tiny),
+    "a card must not say the same thing about a traded and an untraded curve"
+  );
+  check(
+    "L13c a curve above the threshold shows the real figure",
+    progressLabelKind(real) === "exact",
+    `bps=${approxProgressBps(real)} -> ${progressLabelKind(real)}`
+  );
+  check(
+    "L13d the label threshold is the exported constant, not a literal",
+    MIN_RENDERABLE_PCT === 0.1,
+    String(MIN_RENDERABLE_PCT)
+  );
+}
+
+// ── compact formatting must not flatten real differences ────────────────────────
+console.log("\n── compact market cap ──");
+{
+  // Measured live: four tokens at 2002.11 / 2002.40 / 2002.40 / 2002.11 USDC ALL rendered
+  // as "2K", so the grid claimed four identical tokens when they were not. A launch curve
+  // opens around 2,000 USDC, so the whole early life of every token sat inside the band
+  // compact notation flattened -- which is the band a trader actually scans.
+  const a = formatUsdcCompact("en", 2_002_110_697n);
+  const b = formatUsdcCompact("en", 2_002_395_953n);
+  check("L14  two market caps that differ RENDER differently", a !== b, `${a} vs ${b}`);
+  check(
+    "L14b sub-10K values are not compacted at all",
+    !/[KMBT]/.test(formatUsdcCompact("en", 9_999_000_000n)),
+    formatUsdcCompact("en", 9_999_000_000n)
+  );
+  check(
+    "L14c above 10K compaction still applies",
+    /K/.test(formatUsdcCompact("en", 12_345_000_000n)),
+    formatUsdcCompact("en", 12_345_000_000n)
+  );
+}
+
+const total = 39;
 console.log(`\n${total - failures}/${total} checks passed`);
 if (failures) process.exit(1);

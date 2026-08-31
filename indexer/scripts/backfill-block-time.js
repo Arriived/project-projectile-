@@ -1,4 +1,4 @@
-// Backfills trades.block_time and tokens.total_supply for rows written before
+// Backfills trades.block_time and tokens.curve_token_supply for rows written before
 // migration 003.
 //
 // ── WHY THIS IS NEEDED ──────────────────────────────────────────────────────
@@ -129,30 +129,31 @@ async function main() {
   console.log(`\ntrades ${DRY_RUN ? "that would be" : ""} updated: ${written}`);
   console.log(`worst created_at vs block_time drift now visible: ${maxDriftH.toFixed(1)} h`);
 
-  // ── 2. tokens.total_supply ────────────────────────────────────────────────
+  // ── 2. tokens.curve_token_supply ────────────────────────────────────────────────
   //
-  // ⚠ TOTAL_TOKEN_SUPPLY (1,000,000,000e18), NOT CURVE_TOKEN_SUPPLY (807,000,000e18).
-  // The view's market_cap_usdc is computed against this column; substituting the curve
-  // supply would change every market cap on the site by a factor of 1000/807.
-  const total = (await factory.TOTAL_TOKEN_SUPPLY()).toString();
-  console.log(`\nTOTAL_TOKEN_SUPPLY from the contract: ${total}`);
+  // ⚠ CURVE_TOKEN_SUPPLY (807,000,000e18), NOT TOTAL_TOKEN_SUPPLY (1,000,000,000e18).
+  // Market cap is price x CIRCULATING supply, and the 193M LP reserve is held by the
+  // factory during the curve phase -- it cannot be sold into the curve. Using the total
+  // would overstate every market cap by 1000/807 = 1.24x.
+  const total = (await factory.CURVE_TOKEN_SUPPLY()).toString();
+  console.log(`\nCURVE_TOKEN_SUPPLY from the contract: ${total}`);
 
   const { data: needSupply, error: sErr } = await supabase
     .from("tokens")
     .select("contract_address")
-    .is("total_supply", null);
+    .is("curve_token_supply", null);
 
   if (sErr) {
     console.error(`Could not read tokens: ${sErr.message}`);
     process.exit(1);
   }
-  console.log(`tokens needing total_supply: ${needSupply.length}`);
+  console.log(`tokens needing curve_token_supply: ${needSupply.length}`);
 
   if (!DRY_RUN && needSupply.length) {
     for (const t of needSupply) {
       const { error: uErr } = await supabase
         .from("tokens")
-        .update({ total_supply: total })
+        .update({ curve_token_supply: total })
         .eq("contract_address", t.contract_address);
       if (uErr) console.error(`  failed on ${t.contract_address}: ${uErr.message}`);
     }

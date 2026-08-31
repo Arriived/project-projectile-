@@ -1658,6 +1658,29 @@ this session by reading its columns.
 - **Every figure on a card is `~` and named `approx*`** (trap 21: PostgREST serialises
   uint256 as a JSON **number**, truncated before JavaScript sees it). Nothing acted on comes
   from the indexer — clicking a card opens the token page, which reads the chain.
+
+  ⚠ **TRAP 21 OBSERVED, NOT THEORISED — 30 August 2026.** Reading the live view with the
+  anon key, `virtual_token_reserves` came back as:
+
+  ```
+  1.0749234267333488e+27
+  ```
+
+  A **float64 in scientific notation**. The true value is an exact 28-digit integer;
+  `Number.MAX_SAFE_INTEGER` is ~9e15, so roughly **eleven digits were gone before any
+  JavaScript ran**. Not a parsing choice we can override — PostgREST emitted a JSON number
+  and the precision was already lost in the response body.
+
+  **This instance is stronger than the `trades` one and worth keeping separately**, because
+  it is a **reserve** — the exact field the `approx*` convention exists to guard. It is
+  harmless where it currently sits: market cap and progress are display figures, and the
+  relative error is ~1e-16, far below anything a card renders.
+
+  **Which is precisely why it is easy to move somewhere it isn't.** The same column, copied
+  into a quote, a slippage floor or a `minTokensOut`, is a number the contract will not
+  honour. The rule is not "reserves are approximate" — it is that **anything sourced from
+  the indexer is approximate, and the token page reads the chain because of this.** Do not
+  let an `approx*` value cross into a path that signs.
 - **The chain fallback is BOUNDED to 36,000 blocks (~4.8h)** and says so in the UI.
   Replaying from the deploy block would hang the page on exactly the day the indexer is
   down, because Arc's public RPC rejects wide `eth_getLogs` ranges and then rate-limits the

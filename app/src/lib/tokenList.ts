@@ -88,11 +88,54 @@ export function approxMarketCapUsdc6(t: ListToken, curveSupply: bigint): bigint 
   return (t.approxVirtualUsdcReserves * curveSupply) / t.approxVirtualTokenReserves;
 }
 
-/** Progress toward graduation in bps, approximate, clamped. Display only. */
+/**
+ * Progress toward graduation in bps, approximate, clamped. Display only.
+ *
+ * ⚠ TRUNCATES. The division is in bigint, so this returns whole basis points: a curve
+ * holding 0.48 USDC against an 8,000 USDC threshold is 0.6 bps and comes back as **0**.
+ * That is fine for a progress BAR and fatal for any "has anyone bought this" test --
+ * see progressLabelKind below.
+ */
 export function approxProgressBps(t: ListToken): number {
   if (t.approxThresholdUsdc === 0n) return 10_000;
   if (t.approxRealUsdcReserves >= t.approxThresholdUsdc) return 10_000;
   return Number((t.approxRealUsdcReserves * 10_000n) / t.approxThresholdUsdc);
+}
+
+/**
+ * The smallest percentage the card actually renders, at one decimal place.
+ *
+ * Exported so the label and the threshold that triggers it are the SAME number.
+ * Hardcoding it in the component and again here would be two constants that agree right
+ * up until someone changes the decimal places and only one of them moves.
+ */
+export const MIN_RENDERABLE_PCT = 0.1;
+
+/** Which of three genuinely different facts a card's progress figure should state. */
+export type ProgressLabel = "none" | "below" | "exact";
+
+/**
+ * "Has anyone bought this?" is the first question a trader asks about a new launch, and
+ * one decimal place answered it wrongly.
+ *
+ * Measured on live data: PRC4587 has never been traded and TXS2809 has had two buys and
+ * two sells, and BOTH rendered as "0.0%". Those are not the same fact.
+ *
+ * ⚠ THE never-traded TEST READS THE RESERVES, NOT THE PERCENTAGE, and that distinction is
+ * the whole function. The first version of this tested `progressBps === 0`, which reports
+ * "no buys yet" for any curve under 1 basis point because approxProgressBps truncates --
+ * reintroducing the exact confusion it was written to remove, one layer down.
+ *
+ *   none   real reserves are exactly zero. Nothing has happened.
+ *   below  traded, but rounds away at the rendered precision. Show "<0.1%".
+ *   exact  show the figure.
+ */
+export function progressLabelKind(
+  t: ListToken,
+  minRenderablePct = MIN_RENDERABLE_PCT
+): ProgressLabel {
+  if (t.approxRealUsdcReserves === 0n) return "none";
+  return approxProgressBps(t) / 100 < minRenderablePct ? "below" : "exact";
 }
 
 /**

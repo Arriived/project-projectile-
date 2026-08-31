@@ -7,12 +7,12 @@
 -- Adds to tokens_with_volume:
 --   last_buy_block, last_buy_at,
 --   volume_24h_usdc, volume_7d_usdc, volume_all_usdc,
---   total_supply, market_cap_usdc,
+--   curve_token_supply, market_cap_usdc,
 --   symbol_collision_count, name_collision_count
 --
 -- Adds two stored columns:
 --   trades.block_time   -- see THE BUG below; this is the load-bearing part
---   tokens.total_supply
+--   tokens.curve_token_supply
 --
 -- Safe to run on a live database: additive on tables, and the view is recreated with
 -- every column it had before plus the new ones. Re-runnable.
@@ -88,29 +88,33 @@ CREATE INDEX IF NOT EXISTS trades_token_block_idx
 CREATE INDEX IF NOT EXISTS trades_block_time_idx
   ON public.trades (block_time);
 
--- ── 2. tokens.total_supply ───────────────────────────────────────────────────
+-- ── 2. tokens.curve_token_supply ───────────────────────────────────────────────────
 --
 -- Stored rather than hardcoded in the frontend, for the same reason creator_launch_bps
 -- is (migration 002): the indexer reads it from the contract, so it cannot drift from
 -- what the chain says the way a constant in a TypeScript file can.
 --
--- ⚠ WHICH SUPPLY THIS IS, AND WHY IT MATTERS. The contract exposes TWO supply constants:
+-- ⚠ WHICH SUPPLY THIS IS, AND WHY IT IS THE CURVE SUPPLY. The contract exposes:
 --
 --     CURVE_TOKEN_SUPPLY   807,000,000e18   sold through the bonding curve
 --     LP_TOKEN_RESERVE     193,000,000e18   held back to seed the pool at graduation
---     TOTAL_TOKEN_SUPPLY   1,000,000,000e18 the sum, and what this column holds
+--     TOTAL_TOKEN_SUPPLY   1,000,000,000e18 the sum
 --
--- The 807M/193M split is load-bearing for the flash-loan bound (CLAUDE.md §1.2) and
--- neither number should be treated as interchangeable with the other.
+-- This column holds CURVE_TOKEN_SUPPLY, and the name says so.
 --
--- This column holds TOTAL_TOKEN_SUPPLY, because that is what "total supply" means and a
--- column whose name disagrees with its contents is the drift this project keeps paying
--- for. The consequence is recorded plainly: the frontend previously computed market cap
--- against CURVE_TOKEN_SUPPLY, so market_cap_usdc below is 1000/807 = 1.2392x the figure
--- the client used to render. That is a DEFINITIONAL CHANGE, not a bug fix, and it is
--- called out here rather than buried in a diff.
+-- Market cap is price x CIRCULATING supply. During the curve phase the 193M LP reserve
+-- is held by the factory and cannot be sold into the curve -- it is not circulating, and
+-- pricing it as though it were overstates every market cap by 1000/807 = 1.24x. On a
+-- product whose stated moat is verifiability, an inflated headline number is the wrong
+-- thing to be wrong about.
+--
+-- ⚠ GRADUATED TOKENS ARE A DIFFERENT QUESTION AND THIS COLUMN DOES NOT ANSWER IT. After
+-- graduation the 193M IS in the pool and IS tradeable, so the circulating figure and the
+-- fully-diluted figure genuinely diverge -- and the card renders both MC and FDV. This
+-- column is the curve-phase denominator; anything wanting a post-graduation circulating
+-- supply must derive it separately rather than reusing this. Flagged, not solved.
 ALTER TABLE public.tokens
-  ADD COLUMN IF NOT EXISTS total_supply numeric;
+  ADD COLUMN IF NOT EXISTS curve_token_supply numeric;
 
 -- No backfill from SQL. NULL means "not yet observed by the indexer", which the view
 -- renders as a NULL market cap rather than zero -- a zero market cap is a claim, NULL is
@@ -179,8 +183,23 @@ SELECT t.contract_address,
     v.last_buy_block,
     v.last_buy_at,
 
+    -- ── 003: is this token's window arithmetic EXACT? ─────────────────────────
+    --
+    -- TRUE when every trade behind the figures above carries a real block_time, so the
+    -- windows mean what they say. FALSE when any of them is still falling back to
+    -- created_at, which is ingest time and can be 30 hours adrift.
+    --
+    -- THE POINT OF THIS COLUMN IS THAT IT CLEARS ITSELF. The frontend shows its
+    -- "approximate" note when this is false and stops when it is true, per token, with
+    -- no flag to flip by hand. A caveat that needs a human to remove it is still on the
+    -- page in October saying nothing.
+    --
+    -- A token with NO trades is exact by vacuous truth: there is nothing to be wrong
+    -- about. bool_and over zero rows is NULL, hence the COALESCE.
+    COALESCE(v.windows_exact, true) AS volume_windows_exact,
+
     -- ── 003: supply and market cap ───────────────────────────────────────────
-    t.total_supply,
+    t.curve_token_supply,
 
     -- Computed per query from LIVE virtual reserves. NOT stored and NOT materialised:
     -- pinning it would let the pinned value drift from the reserves it claims to
@@ -190,9 +209,9 @@ SELECT t.contract_address,
     -- the token; NULL is the honest absence of one, and the frontend renders it as
     -- "unavailable".
     CASE
-      WHEN t.total_supply IS NULL OR t.virtual_token_reserves IS NULL
+      WHEN t.curve_token_supply IS NULL OR t.virtual_token_reserves IS NULL
         OR t.virtual_token_reserves = 0 THEN NULL
-      ELSE (t.virtual_usdc_reserves * t.total_supply / t.virtual_token_reserves) / 1000000.0
+      ELSE (t.virtual_usdc_reserves * t.curve_token_supply / t.virtual_token_reserves) / 1000000.0
     END AS market_cap_usdc,
 
     -- ── 003: collision disclosure (C3 / rule 2) ──────────────────────────────
@@ -254,7 +273,8 @@ SELECT t.contract_address,
               -- share timestamps, so max(block_time) can tie where max(block_number)
               -- cannot (CLAUDE.md §9.3).
               max(tr.block_number) FILTER (WHERE tr.is_buy) AS last_buy_block,
-              max(COALESCE(tr.block_time, tr.created_at)) FILTER (WHERE tr.is_buy) AS last_buy_at
+              max(COALESCE(tr.block_time, tr.created_at)) FILTER (WHERE tr.is_buy) AS last_buy_at,
+              bool_and(tr.block_time IS NOT NULL) AS windows_exact
          FROM public.trades tr
         GROUP BY tr.token_address
      ) v ON v.token_address = t.contract_address;
@@ -281,9 +301,9 @@ GRANT SELECT ON public.tokens_with_volume TO anon, authenticated;
 --     FROM public.tokens_with_volume ORDER BY name_collision_count DESC;
 --
 --   -- market cap is derived from live reserves, not pinned
---   SELECT symbol, virtual_usdc_reserves, virtual_token_reserves, total_supply,
+--   SELECT symbol, virtual_usdc_reserves, virtual_token_reserves, curve_token_supply,
 --          market_cap_usdc
---     FROM public.tokens_with_volume WHERE total_supply IS NOT NULL;
+--     FROM public.tokens_with_volume WHERE curve_token_supply IS NOT NULL;
 --
 --   -- how much of the trade history still lacks a real block time
 --   SELECT count(*) FILTER (WHERE block_time IS NULL) AS needs_backfill,
@@ -300,7 +320,7 @@ GRANT SELECT ON public.tokens_with_volume TO anon, authenticated;
 --   DROP INDEX IF EXISTS trades_token_block_idx;
 --   DROP INDEX IF EXISTS trades_block_time_idx;
 --   ALTER TABLE public.trades DROP COLUMN IF EXISTS block_time;
---   ALTER TABLE public.tokens DROP COLUMN IF EXISTS total_supply;
+--   ALTER TABLE public.tokens DROP COLUMN IF EXISTS curve_token_supply;
 --   COMMIT;
 --
 -- Then restore the view from 000_base_schema.sql and re-run its GRANT. Dropping the

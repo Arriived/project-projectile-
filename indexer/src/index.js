@@ -141,22 +141,21 @@ async function creatorLaunchBps(purchased) {
 
 // ── migration 003 ───────────────────────────────────────────────────────────
 
-let cachedTotalSupply = null;
-
-/// @notice TOTAL_TOKEN_SUPPLY, for tokens.total_supply. A constant on the factory, so it
-///         is read once and cached like the curve supply above.
+/// @notice CURVE_TOKEN_SUPPLY, for tokens.curve_token_supply.
 ///
-///         ⚠ This is the TOTAL (1,000,000,000e18), not CURVE_TOKEN_SUPPLY
-///         (807,000,000e18). They differ by LP_TOKEN_RESERVE, the 193M held back to seed
-///         the pool at graduation, and the split is load-bearing for the flash-loan bound
-///         (CLAUDE.md §1.2). The view's market_cap_usdc is computed against this column,
-///         so substituting the curve supply here would silently change every market cap
-///         on the site by a factor of 1000/807.
-async function totalSupply() {
-  if (cachedTotalSupply === null) {
-    cachedTotalSupply = await withRetry(() => factory.TOTAL_TOKEN_SUPPLY());
+///         ⚠ The CURVE supply (807,000,000e18), NOT TOTAL_TOKEN_SUPPLY (1,000,000,000e18).
+///         Market cap is price x CIRCULATING supply, and during the curve phase the 193M
+///         LP reserve is held by the factory and cannot be sold into the curve. Using the
+///         total would overstate every market cap on the site by 1000/807 = 1.24x.
+///
+///         Reuses the same cached read as creatorLaunchBps -- one constant, one source,
+///         so the market-cap denominator and the creator-percentage denominator cannot
+///         drift apart.
+async function curveTokenSupply() {
+  if (cachedCurveSupply === null) {
+    cachedCurveSupply = await withRetry(() => factory.CURVE_TOKEN_SUPPLY());
   }
-  return cachedTotalSupply === 0n ? null : cachedTotalSupply.toString();
+  return cachedCurveSupply === 0n ? null : cachedCurveSupply.toString();
 }
 
 // Block timestamps, memoised by block number.
@@ -234,8 +233,8 @@ async function upsertTokenFromChain(tokenAddress) {
       lp_recipient: curve.lpRecipient,
       // migration 003. Read from the contract, never hardcoded -- the same trap the
       // hand-maintained ABI was. The view computes market_cap_usdc from this column
-      // and the live virtual reserves.
-      total_supply: await totalSupply(),
+      // and the live virtual reserves. CURVE supply, not total: see curveTokenSupply().
+      curve_token_supply: await curveTokenSupply(),
     },
     { onConflict: "contract_address" }
   );

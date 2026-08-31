@@ -18,7 +18,13 @@ import { Link } from "react-router-dom";
 import { useT } from "../../i18n";
 import { TokenImage } from "../token/TokenImage";
 import { shortAddress, safeText } from "../../lib/format";
-import { approxMarketCapUsdc6, approxProgressBps, type ListToken } from "../../lib/tokenList";
+import {
+  approxMarketCapUsdc6,
+  approxProgressBps,
+  progressLabelKind,
+  MIN_RENDERABLE_PCT,
+  type ListToken,
+} from "../../lib/tokenList";
 
 /**
  * The `~` that prefixes every indexer-sourced figure, carrying its own explanation.
@@ -60,6 +66,7 @@ export function TokenCard({
 
   const mcap = approxMarketCapUsdc6(token, curveSupply);
   const pct = approxProgressBps(token) / 100;
+  const labelKind = progressLabelKind(token, MIN_RENDERABLE_PCT);
 
   return (
     <Link to={`/t/${token.address}`} className="tcard">
@@ -108,7 +115,27 @@ export function TokenCard({
               <div className="tcard-track">
                 <div className="tcard-fill" style={{ width: `${Math.min(100, pct)}%` }} />
               </div>
-              <span className="tcard-pct">{fmt.pct(pct, 1)}</span>
+              {/* "Has anyone bought this?" is the first question a trader asks about a new
+                  launch, and one decimal place answered it wrongly. Measured live:
+                  PRC4587 has genuinely never been traded, while TXS2809 had two buys and
+                  two sells -- 0.48 USDC against an 8,000 USDC threshold, which is 0.006%
+                  and rounds away. Both rendered "0.0%".
+
+                  Three states now, and the rule lives in lib/tokenList.ts rather than in
+                  this JSX so it is testable and red-proved (L13/L14):
+                    none   -> "No buys yet"  (nothing has happened)
+                    below  -> "<0.1%"        (traded, nowhere near graduating)
+                    exact  -> the figure
+
+                  The `<` prefix comes from the catalogue, not concatenation, so it stays
+                  translatable. */}
+              <span className="tcard-pct">
+                {labelKind === "none"
+                  ? t("list.progressNoneYet")
+                  : labelKind === "below"
+                    ? t("list.lessThan", { value: fmt.pct(MIN_RENDERABLE_PCT, 1) })
+                    : fmt.pct(pct, 1)}
+              </span>
             </div>
           </>
         )}
