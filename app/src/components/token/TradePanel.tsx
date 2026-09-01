@@ -58,7 +58,15 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
     }
   }, [input, side]);
 
-  const { data: quote, isFetching: quoting } = useQuote(token, side, amount);
+  // Age drives the quote polling cadence: 1s while the snipe tax is still decaying per
+  // second, 30s once the curve only moves on trades. From the CONTRACT's own
+  // creationTimestamp, not a local clock, so a skewed browser cannot decide we are
+  // outside the window while the chain says otherwise.
+  const tokenAgeSeconds = data.curve
+    ? Math.max(0, Math.floor(Date.now() / 1000) - Number(data.curve.creationTimestamp))
+    : undefined;
+
+  const { data: quote, isFetching: quoting } = useQuote(token, side, amount, true, tokenAgeSeconds);
 
   const { writeContractAsync, isPending: writing } = useWriteContract();
   const [txHash, setTxHash] = useState<`0x${string}` | undefined>();

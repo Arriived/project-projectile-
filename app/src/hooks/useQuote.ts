@@ -34,24 +34,69 @@ export type Quote = {
   impact: number | null;
 };
 
+/**
+ * How long after creation the snipe tax is still decaying.
+ *
+ * The published table is `[9800, 9500, 9000, 8000, 6000, 4000, 2000, 0]`, indexed by
+ * ELAPSED SECONDS. So the tax changes every second for seven seconds and is then flat
+ * forever. `SNIPE_DECAY_SECONDS` is that table's length, plus a second of slack for
+ * clock skew between the browser and the chain.
+ */
+export const SNIPE_DECAY_SECONDS = 9;
+
+/** While the tax is decaying per second, a quote is stale in one second. */
+export const QUOTE_POLL_HOT_MS = 1_000;
+
+/**
+ * Afterwards the curve only moves when someone trades, so there is nothing to poll FOR.
+ * 30s is a liveness floor, not a freshness requirement -- the trade panel re-quotes
+ * immediately before signing regardless (trap 6), so a slightly old displayed number can
+ * never become a number the contract is asked to honour.
+ */
+export const QUOTE_POLL_COLD_MS = 30_000;
+
+/**
+ * The polling interval for a token created `ageSeconds` ago.
+ *
+ * ⚠ THE OLD FIXED 4s WAS WRONG IN BOTH DIRECTIONS AT ONCE, which is why this is a
+ * function rather than a constant:
+ *
+ *   - TOO SLOW when it mattered. The tax decays every second for seven seconds; a 4s
+ *     poll sampled that curve about twice and missed most of it -- during precisely the
+ *     window the snipe tax exists to govern.
+ *   - TOO FAST afterwards. A curve that nobody is trading does not change, so a quote
+ *     every 4 seconds forever is ~15 RPC calls per minute per open page, bought for
+ *     nothing.
+ *
+ * `undefined` age means "not known yet" and is treated as HOT: over-polling for one tick
+ * is cheap, under-polling during the snipe window is the failure this exists to prevent.
+ */
+export function quotePollIntervalMs(ageSeconds: number | undefined): number {
+  if (ageSeconds === undefined) return QUOTE_POLL_HOT_MS;
+  return ageSeconds < SNIPE_DECAY_SECONDS ? QUOTE_POLL_HOT_MS : QUOTE_POLL_COLD_MS;
+}
+
 export function useQuote(
   token: Address | undefined,
   side: Side,
   amount: bigint,
-  enabled = true
+  enabled = true,
+  /** Seconds since this token was created. Drives the polling cadence; see above. */
+  tokenAgeSeconds?: number
 ) {
   const client = usePublicClient({ chainId: arc.id });
+  const interval = quotePollIntervalMs(tokenAgeSeconds);
 
   return useQuery({
     // The amount is IN THE KEY. That is what makes trap 7 structurally impossible rather
     // than merely unlikely.
     queryKey: ["quote", token, side, amount.toString()],
     enabled: enabled && !!token && !!client && amount > 0n,
-    // Quotes go stale within a SECOND during the snipe window, where the tax decays per
-    // second. Nothing here is cached beyond a moment, and the panel re-quotes
-    // immediately before signing regardless (trap 6).
-    staleTime: 1_000,
-    refetchInterval: 4_000,
+    // Matches the poll: during the decay a quote is stale in a second; afterwards it is
+    // only as stale as the last trade, and nothing here is ever signed without a fresh
+    // re-quote (trap 6).
+    staleTime: interval,
+    refetchInterval: interval,
     placeholderData: (prev) => prev,
     queryFn: async (): Promise<Quote> => {
       const factory = { address: FACTORY_ADDRESS, abi: lfx1Abi } as const;
