@@ -255,6 +255,16 @@ async function upsertTokenFromChain(tokenAddress) {
   if (error) throw error;
 }
 
+/**
+ * Refresh a token's curve state, and hand the caller the reserves it just read.
+ *
+ * ⚠ THE RETURN VALUE IS LOAD-BEARING (migration 004). handleTrade writes these same
+ * numbers onto the trade row as the POST-TRADE curve state, which is what the candle
+ * chart plots. `tokens` only ever holds the CURRENT reserves, so once a second trade
+ * lands the state at the first is gone and cannot be recovered from the row.
+ *
+ * Returning them here rather than re-reading means the chart costs ZERO extra RPC calls.
+ */
 async function updateReservesFromChain(tokenAddress) {
   const curve = await withRetry(() => factory.curves(tokenAddress));
   const { error } = await supabase
@@ -271,6 +281,11 @@ async function updateReservesFromChain(tokenAddress) {
     })
     .eq("contract_address", tokenAddress);
   if (error) throw error;
+
+  return {
+    virtualUsdcReserves: curve.virtualUsdcReserves.toString(),
+    virtualTokenReserves: curve.virtualTokenReserves.toString(),
+  };
 }
 
 async function handleTokenCreated(log) {
@@ -300,6 +315,18 @@ async function handleTrade(log) {
     .maybeSingle();
   if (!tokenRow) await upsertTokenFromChain(tokenAddress);
 
+  // ⚠ RESERVES ARE READ BEFORE THE INSERT, NOT AFTER (migration 004).
+  //
+  // This used to insert the trade and then refresh reserves. The order matters now: the
+  // trade row carries the POST-TRADE curve state, and that is what the candle chart
+  // plots. `tokens` holds only the CURRENT reserves, so the instant a second trade lands
+  // the state at the first is unrecoverable.
+  //
+  // Reordering costs nothing -- it is the same single read either way -- and refreshing
+  // `tokens` first is safe on a retry because that write is idempotent: it always sets
+  // whatever the chain currently says, regardless of how many times it runs.
+  const reserves = await updateReservesFromChain(tokenAddress);
+
   const { error } = await supabase.from("trades").insert({
     token_address: tokenAddress,
     trader_address: log.args.trader,
@@ -313,10 +340,15 @@ async function handleTrade(log) {
     // tokens_with_volume filters on COALESCE(block_time, created_at), so this column
     // is what makes those windows mean what they say.
     block_time: await blockTimeISO(log.blockNumber),
+    // migration 004. The curve state AFTER this trade. The chart derives mid-price from
+    // these -- never from usdc_amount/token_amount, which is execution price INCLUDING
+    // the snipe tax and would draw a 5.3x sawtooth that is the fee schedule, not the
+    // market. See the migration's header.
+    virtual_usdc_reserves: reserves.virtualUsdcReserves,
+    virtual_token_reserves: reserves.virtualTokenReserves,
   });
   if (error) throw error;
 
-  await updateReservesFromChain(tokenAddress);
   console.log(`[Trade] ${log.args.isBuy ? "buy" : "sell"} on ${tokenAddress}`);
 }
 
