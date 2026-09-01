@@ -7,6 +7,7 @@ import { Routes, Route, Link, Navigate, useLocation } from "react-router-dom";
 import { WalletBar } from "./components/WalletBar";
 import { TokenPage } from "./routes/TokenPage";
 import { About } from "./routes/About";
+import { Create } from "./routes/Create";
 import { TokenList } from "./routes/TokenList";
 import { useChain } from "./providers/ChainProvider";
 import { arc } from "./chain";
@@ -60,6 +61,7 @@ export function App() {
 
       <Routes>
         <Route path="/t/:address" element={<TokenPage />} />
+        <Route path="/create" element={<Create />} />
         <Route path="/about" element={<About />} />
         <Route path="/" element={<TokenList />} />
         <Route path="*" element={<Navigate to="/" replace />} />

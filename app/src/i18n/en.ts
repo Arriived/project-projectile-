@@ -158,6 +158,32 @@ export const en = {
     about: "About",
   },
 
+  create: {
+    heading: "Launch a token",
+    name: "Name",
+    symbol: "Symbol",
+    metadataUri: "Image or metadata URL",
+    uriPlaceholder: "https://… or ipfs://…",
+    poolBoost: "Send my creator fees into the pool instead",
+    poolBoostNote:
+      "Deepens the pool at graduation by roughly 1-4%. Nobody receives a payout — it is a signal, not income.",
+    feeLabel: "Creation fee",
+    launch: "Launch",
+    approving: "Approving the fee — check your wallet…",
+    launching: "Launching — check your wallet…",
+    errNameEmpty: "A name is required.",
+    errSymbolEmpty: "A symbol is required.",
+    warnSymbolLong:
+      "{length} characters. The contract accepts this, but wallets cap the symbol at {max}, so holders will not be able to add it in one click.",
+    warnBidi:
+      "This contains text-direction characters, which can make one token render as another. It will still launch.",
+    warnUriScheme: "That does not look like a URL a browser can load.",
+    blockConnect: "Connect a wallet to launch.",
+    blockChain: "Switch to {chain} to launch.",
+    blockCooldown: "Wait {seconds}s — one launch per address at a time.",
+    blockFunds: "You need about {needed} USDC — the fee plus gas, which is also USDC.",
+  },
+
   wallet: {
     noWalletDetected: "No wallet extension detected.",
     connectionDeclined: "Connection declined.",

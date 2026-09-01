@@ -611,3 +611,42 @@ a:hover { opacity: 0.7; }
   /* 44px is the tap target that survives a thumb. Part C. */
   min-height: 44px;
 }
+
+/* ── Create ───────────────────────────────────────────────────────────────────
+   Single column, generous line length. A launch is a deliberate act, not a
+   quick one, so the form is not compressed into a row. */
+.create { max-width: 560px; }
+.create-h { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 22px; }
+
+.field { display: block; margin-bottom: 18px; }
+.field-label {
+  display: block; font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 6px;
+}
+.input {
+  width: 100%; box-sizing: border-box;
+  padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: #fff; color: var(--text);
+  /* 16px minimum: anything smaller triggers iOS zoom-on-focus. */
+  font-size: 16px; font-family: inherit;
+}
+.input:focus { outline: none; border-color: var(--text); }
+
+.field-check {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 14px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--soft); font-size: 14px; line-height: 1.45;
+}
+.field-check input { margin-top: 3px; flex: none; }
+
+.create-warn {
+  border-left: 2px solid var(--warn-line); padding-left: 10px;
+  color: var(--warn); margin: -8px 0 16px; font-size: 13px; line-height: 1.45;
+}
+.create-fee {
+  display: flex; justify-content: space-between;
+  padding: 12px 0; border-top: 1px solid var(--line); margin: 22px 0 16px;
+  font-family: var(--mono); font-size: 13px;
+}
+.btn-lg { width: 100%; padding: 13px; font-size: 15px; min-height: 48px; }
+.create-blocker { margin-top: 10px; text-align: center; }
