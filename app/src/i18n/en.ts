@@ -158,6 +158,14 @@ export const en = {
     about: "About",
   },
 
+  chart: {
+    heading: "Price",
+    noTradesYet: "No trades yet — this is the launch price.",
+    historyUnavailable: "Earlier trades predate price recording.",
+    unavailable: "Price history is unavailable right now.",
+    midPriceNote: "Curve mid-price, before fees and snipe tax.",
+  },
+
   create: {
     heading: "Launch a token",
     name: "Name",

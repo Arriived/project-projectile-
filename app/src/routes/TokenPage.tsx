@@ -8,15 +8,25 @@
 // worst failure on this chain, where a buy succeeds, MetaMask shows nothing, and the
 // user's gas-and-settlement balance is the only thing visibly changed (rule 9).
 
+import { lazy, Suspense } from "react";
 import { useParams, Link } from "react-router-dom";
 import { isAddress, getAddress } from "viem";
 import { useCurve } from "../hooks/useCurve";
+import { useCandles } from "../hooks/useCandles";
+import { LAUNCH_TOKEN_DECIMALS, USDC_ERC20_DECIMALS } from "../chain";
 import { TokenIdentity } from "../components/token/TokenIdentity";
 import { YourPosition } from "../components/token/YourPosition";
 import { PriceAndProgress } from "../components/token/PriceAndProgress";
 import { TradePanel } from "../components/token/TradePanel";
 import { TrustPanel } from "../components/token/TrustPanel";
 import { TradesFeed } from "../components/token/TradesFeed";
+
+// Lazily loaded: lightweight-charts is the single biggest dependency in the app and
+// nothing outside this route uses it. Loading it on the list page would tax every
+// visitor for a component most of them never reach.
+const PriceChart = lazy(() =>
+  import("../components/token/PriceChart").then((m) => ({ default: m.PriceChart }))
+);
 import { tradeGate } from "../lib/curve";
 import { useT } from "../i18n";
 
@@ -47,6 +57,25 @@ export function TokenPage() {
 function TokenPageInner({ token }: { token: `0x${string}` }) {
   const { t } = useT();
   const data = useCurve(token);
+
+  // The curve mid-price, in USDC per whole token. Same formula the candle view uses, so
+  // the flat launch line and the traded series are on ONE definition rather than two that
+  // agree until they do not.
+  //
+  // USDC is 6dp and the token is 18dp, hence the 1e12 rescale. For an UNTRADED curve the
+  // current reserves are still the launch reserves, which is what makes the flat line a
+  // real price rather than a placeholder.
+  const launchPrice =
+    data.curve && data.curve.virtualTokenReserves > 0n
+      ? (Number(data.curve.virtualUsdcReserves) / Number(data.curve.virtualTokenReserves)) *
+        10 ** (LAUNCH_TOKEN_DECIMALS - USDC_ERC20_DECIMALS)
+      : undefined;
+
+  const candles = useCandles(
+    token,
+    launchPrice,
+    data.curve ? Number(data.curve.creationTimestamp) : undefined
+  );
   const { curve, isLoading, isError } = data;
 
   if (isLoading && !curve) {
@@ -83,6 +112,19 @@ function TokenPageInner({ token }: { token: `0x${string}` }) {
 
       {/* 2 — your position, high up, for the reason in rule 9. */}
       <YourPosition token={token} data={data} />
+
+      {/* 3 — the chart, above the trade panel, where a trader looks first.
+              Mid-price from reserves, never execution price: adjacent buys and sells
+              at the same reserve level differ 5.3x because of the snipe tax, and
+              charting that draws the fee schedule rather than the market. */}
+      <Suspense fallback={<div className="chart-skeleton" aria-hidden />}>
+        <PriceChart
+          points={candles.points}
+          isFlatLaunch={candles.isFlatLaunch}
+          isHistoryUnchartable={candles.isHistoryUnchartable}
+          isLoading={candles.isLoading}
+        />
+      </Suspense>
 
       {/* 3 — price and progress toward the threshold. */}
       <PriceAndProgress data={data} />
