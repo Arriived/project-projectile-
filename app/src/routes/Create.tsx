@@ -22,6 +22,7 @@ import { useNavigate } from "react-router-dom";
 import { useAccount, usePublicClient, useWalletClient, useReadContract } from "wagmi";
 import { decodeEventLog, erc20Abi, type Address } from "viem";
 import { useT } from "../i18n";
+import { useToast } from "../providers/ToastProvider";
 import { arc } from "../chain";
 import { lfx1Abi } from "../abi/lfx1";
 import { FACTORY_ADDRESS, USDC_ADDRESS } from "../config";
@@ -58,6 +59,7 @@ export function Create() {
   const [poolBoost, setPoolBoost] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
+  const toast = useToast();
 
   const factory = { address: FACTORY_ADDRESS, abi: lfx1Abi, chainId: arc.id } as const;
 
@@ -116,6 +118,9 @@ export function Create() {
 
   async function onLaunch() {
     if (!wallet || !client || !address) return;
+    // Re-entrancy guard. Two launches would mean two creation fees, and the second would
+    // revert on the cooldown -- after the fee had already left.
+    if (phase === "approving" || phase === "launching") return;
     setError(null);
 
     try {
@@ -215,11 +220,15 @@ export function Create() {
       }
 
       setPhase("done");
+      toast.ok(t("toast.launched"), `${name.trim()} ($${symbol.trim()})`);
       if (launched) nav(`/t/${launched}`);
     } catch (e) {
       setPhase("error");
-      const msg = e instanceof Error ? e.message.split("\n")[0] : String(e);
+      const err = e as { name?: string; message?: string };
+      const msg = (err.message ?? String(e)).split("\n")[0];
       setError(msg);
+      // A rejected signature is a decision, not a failure, and gets no error toast.
+      if (err.name !== "UserRejectedRequestError") toast.bad(t("toast.launchFailed"), msg);
     }
   }
 
@@ -305,7 +314,8 @@ export function Create() {
       </div>
 
       <button
-        className="btn btn-primary btn-lg"
+        className={`btn btn-primary btn-lg ${busy ? "btn-busy" : ""}`}
+        aria-busy={busy || undefined}
         disabled={!!blocker || busy || blocksSubmission(issues)}
         onClick={onLaunch}
       >

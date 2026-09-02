@@ -7,6 +7,7 @@ import { config } from "./wagmi";
 import { App } from "./App";
 import { ChainProvider } from "./providers/ChainProvider";
 import { WalletDiagnostics } from "./diagnostics/WalletDiagnostics";
+import { ToastProvider } from "./providers/ToastProvider";
 import { BrowserRouter } from "react-router-dom";
 import { I18nProvider } from "./i18n";
 import "./styles.css";
@@ -48,7 +49,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           ) : (
             <BrowserRouter>
               <ChainProvider>
-                <App />
+                <ToastProvider>
+                  <App />
+                </ToastProvider>
               </ChainProvider>
             </BrowserRouter>
           )}

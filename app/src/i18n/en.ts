@@ -158,6 +158,15 @@ export const en = {
     about: "About",
   },
 
+  toast: {
+    boughtTitle: "Bought",
+    soldTitle: "Sold",
+    confirmedTitle: "Confirmed",
+    tradeFailed: "Trade failed",
+    launched: "Token launched",
+    launchFailed: "Launch failed",
+  },
+
   chart: {
     heading: "Price",
     noTradesYet: "No trades yet — this is the launch price.",

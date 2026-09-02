@@ -28,6 +28,8 @@ import { checkAffordability, gasLimitFor, GAS_LIMIT_UNITS_FOR_PRECHECK } from ".
 import { tradeGate } from "../../lib/curve";
 import { safeText } from "../../lib/format";
 import { useT } from "../../i18n";
+import { useToast } from "../../providers/ToastProvider";
+import { Figure } from "../Figure";
 
 const SLIPPAGE_BPS = 100n; // 1%
 const BUY_PRESETS = ["1", "5", "25", "100"];
@@ -44,6 +46,15 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
   const [input, setInput] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [settled, setSettled] = useState<string | null>(null);
+  // ⚠ COVERS THE WHOLE PATH, not just the write.
+  //
+  // useWriteContract().isPending only goes true once writeContractAsync is CALLED, and
+  // submit() does a re-quote, an affordability check and a gas estimate before that. That
+  // gap was a live, enabled Buy button doing invisible work -- the dead interval between
+  // clicking and MetaMask appearing, and the double-click window Phase 6 lists as an
+  // attack.
+  const [submitting, setSubmitting] = useState(false);
+  const toast = useToast();
 
   const symbol = safeText(data.symbol, 16) || "tokens";
   const gate = data.curve ? tradeGate(data.curve.state) : tradeGate(99);
@@ -130,10 +141,30 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
               usdc: fmt.usdcExact(settledUsdc),
             })
       );
+      // ⚠ THE TOAST CARRIES THE RECEIPT'S NUMBER, NOT THE QUOTE. Same string that was
+      // just decoded from this transaction's own Trade event. Echoing the quote here
+      // would present the figure the user was SHOWN as the figure they GOT, and those
+      // genuinely differ when the snipe tax decays or the clamp binds between quote and
+      // execution.
+      toast.ok(
+        side === "buy" ? t("toast.boughtTitle") : t("toast.soldTitle"),
+        side === "buy"
+          ? t("trade.settledBuyExact", {
+              tokens: fmt.tokenExact(settledTokens),
+              symbol,
+              usdc: fmt.usdcExact(settledUsdc),
+            })
+          : t("trade.settledSellExact", {
+              tokens: fmt.tokenExact(settledTokens),
+              symbol,
+              usdc: fmt.usdcExact(settledUsdc),
+            })
+      );
     } else {
       // No Trade event from us in this receipt. Say that rather than inventing a figure
       // from a balance read that may have been raced.
       setSettled(t("trade.settledUnknown"));
+      toast.ok(t("toast.confirmedTitle"), t("trade.settledUnknown"));
     }
 
     balances.refetch();
@@ -170,6 +201,10 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
     side === "sell" && balances.tokenAllowance18 !== undefined && balances.tokenAllowance18 < amount;
 
   const submit = async () => {
+    // Re-entrancy guard. A disabled button can still be activated by keyboard in some
+    // browsers, and a second submit would send a SECOND transaction.
+    if (submitting) return;
+    setSubmitting(true);
     setStatus(null);
     setSettled(null);
     if (!data.curve || !client) return;
@@ -258,18 +293,28 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
       setStatus(t("trade.submitted"));
     } catch (e) {
       const err = e as { name?: string; message?: string };
-      setStatus(
-        err.name === "UserRejectedRequestError"
-          ? t("trade.cancelled")
-          : // A provider message is raw text from the node, not ours to translate. It is
-            // shown verbatim rather than mapped, because guessing at which of the node's
-            // wordings it is would be exactly the revert-string parsing rule 4 forbids.
-            (err.message ?? t("errors.noReason")).split("\n")[0]
-      );
+      const rejected = err.name === "UserRejectedRequestError";
+      // A provider message is raw text from the node, not ours to translate. It is shown
+      // verbatim rather than mapped, because guessing at which of the node's wordings it
+      // is would be exactly the revert-string parsing rule 4 forbids. viem decodes our
+      // custom errors by name before this point, so where one exists it is already in the
+      // message rather than reconstructed here.
+      const reason = (err.message ?? t("errors.noReason")).split("\n")[0];
+      setStatus(rejected ? t("trade.cancelled") : reason);
+      // A rejection is a decision, not a failure. It gets no error toast.
+      if (!rejected) toast.bad(t("toast.tradeFailed"), reason);
+    } finally {
+      // In `finally` so a throw anywhere above cannot strand the button disabled forever.
+      setSubmitting(false);
     }
   };
 
-  const busy = writing || confirming || quoting;
+  // ⚠ `quoting` IS DELIBERATELY NOT HERE. It used to be, which disabled the button every
+  // time a quote refreshed -- once per SECOND during the snipe window. A control that
+  // flickers unusable while the user is trying to press it is worse than a stale number,
+  // and the two states are unrelated: one is "we are re-reading a price", the other is
+  // "a transaction is in flight". Refreshing is surfaced on the FIGURES instead.
+  const busy = submitting || writing || confirming;
   const blocked =
     !isConnected ||
     !guard.canTransact ||
@@ -374,11 +419,20 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
       <dl className="quote-lines">
         <dt>{t("trade.estimatedReceive")}</dt>
         <dd>
-          {!quote || amount === 0n
-            ? "—"
-            : side === "buy"
-              ? `${fmt.tokenCompact(quote.out)} ${symbol}`
-              : `${fmt.usdcExact(quote.out)} USDC`}
+          {/* Dimmed with a pulsing dot while a new quote is in flight. The previous
+              number stays on screen (placeholderData) so the panel does not flash empty,
+              but it is marked as being re-read rather than presented as current -- during
+              the snipe window it can be a full second and one tax step out of date. */}
+          <Figure
+            refreshing={quoting}
+            value={
+              !quote || amount === 0n
+                ? "—"
+                : side === "buy"
+                  ? `${fmt.tokenCompact(quote.out)} ${symbol}`
+                  : `${fmt.usdcExact(quote.out)} USDC`
+            }
+          />
           {quote?.clamped && (
             <span className="hint"> — {t("trade.partiallyFilled")}</span>
           )}
@@ -390,9 +444,10 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           <div className="hint">{t("trade.priceImpactNote")}</div>
         </dt>
         <dd className={quote?.impact !== null && (quote?.impact ?? 0) > 10 ? "impact-high" : ""}>
-          {side === "sell"
-            ? "—"
-            : quote?.impact === null || quote?.impact === undefined
+          {/* The sell side computes impact too now -- it used to hardcode null, so a
+              seller never saw a figure at any size even though selling moves the price
+              down against them by the same mechanism. */}
+          {quote?.impact === null || quote?.impact === undefined
               ? t("common.unavailable")
               : fmt.pct(quote.impact)}
         </dd>
@@ -439,7 +494,12 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
         <p className="trade-warn">{t("trade.switchToTrade", { chain: arc.name })}</p>
       )}
 
-      <button className="btn btn-primary btn-block" disabled={blocked || busy} onClick={submit}>
+      <button
+        className={`btn btn-primary btn-block ${busy ? "btn-busy" : ""}`}
+        disabled={blocked || busy}
+        aria-busy={busy || undefined}
+        onClick={submit}
+      >
         {!isConnected
           ? t("common.connectWallet")
           : busy
