@@ -846,3 +846,39 @@ textarea.input { resize: vertical; line-height: 1.5; font-size: 16px; }
   .btn { transition: none; }
   .toast { animation: none; }
 }
+
+/* ── create: image upload ─────────────────────────────────────────────────────
+   The preview is a fixed square rather than intrinsic size: token images are
+   creator-supplied at arbitrary aspect ratios, and a form that reflows as each
+   candidate image loads is unusable for comparing two of them. */
+.upload-row { display: flex; gap: 12px; align-items: flex-start; }
+.upload-preview {
+  width: 84px; height: 84px; flex: none;
+  border-radius: 8px; object-fit: cover; background: var(--soft);
+  border: 1px solid var(--line); display: block;
+}
+.upload-preview-empty {
+  display: flex; align-items: center; justify-content: center;
+  color: var(--line); font-size: 26px;
+}
+.upload-controls { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+/* The real input is driven by the styled button; kept in the DOM (not display:none)
+   so it stays reachable by assistive tech and by the label association. */
+.upload-input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.upload-controls .btn { align-self: flex-start; }
+.upload-error { color: var(--neg); font-size: 13px; margin-top: 8px; display: block; }
+.upload-uri { margin-top: 10px; font-family: var(--mono); font-size: 12px; }
+
+@media (max-width: 560px) {
+  /* Stacking keeps the button full-width and thumb-sized rather than squeezed
+     beside an 84px thumbnail on a 375px screen. */
+  .upload-row { flex-direction: column; }
+  .upload-controls { width: 100%; }
+  .upload-controls .btn { align-self: stretch; text-align: center; min-height: 44px; }
+  /* ⚠ 16px, NOT the 12px used on desktop. iOS Safari zooms the whole page when a text
+     field with a font-size under 16px receives focus, and the page does not zoom back
+     out -- the user is left scrolled sideways in a form. Every other .input in the app
+     is already 16px for this reason; this field opted out for a denser mono URI and
+     was the single field on /create that would have done it. */
+  .upload-uri { font-size: 16px; min-height: 44px; }
+}

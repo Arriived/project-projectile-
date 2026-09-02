@@ -10,14 +10,15 @@
     "typecheck": "tsc -b --noEmit",
     "verify:chain": "node --experimental-strip-types scripts/verify-chain.mts",
     "verify:guard": "node --experimental-strip-types scripts/verify-guard.mts",
-    "verify": "npm run verify:chain && npm run verify:guard && npm run verify:wallets && npm run verify:trade && npm run verify:list && npm run verify:i18n && npm run verify:claims && npm run verify:create",
+    "verify": "npm run verify:chain && npm run verify:guard && npm run verify:wallets && npm run verify:trade && npm run verify:list && npm run verify:i18n && npm run verify:claims && npm run verify:create && npm run verify:upload",
     "verify:wallets": "node --experimental-strip-types scripts/verify-wallets.mts",
     "measure:gas": "node --experimental-strip-types scripts/measure-gas.mts",
     "verify:trade": "node --experimental-strip-types scripts/verify-trade.mts",
     "verify:i18n": "node --experimental-strip-types scripts/verify-i18n.mts",
     "verify:claims": "node --experimental-strip-types scripts/verify-claims.mts",
     "verify:list": "node --experimental-strip-types scripts/verify-list.mts",
-    "verify:create": "node --experimental-strip-types scripts/verify-create.mts"
+    "verify:create": "node --experimental-strip-types scripts/verify-create.mts",
+    "verify:upload": "node --experimental-strip-types scripts/verify-upload.mts"
   },
   "dependencies": {
     "@metamask/connect-evm": "^2.1.1",

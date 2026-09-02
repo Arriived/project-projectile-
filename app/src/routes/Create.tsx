@@ -19,6 +19,7 @@
 
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ImageUpload } from "../components/create/ImageUpload";
 import { useAccount, usePublicClient, useWalletClient, useReadContract } from "wagmi";
 import { decodeEventLog, erc20Abi, type Address } from "viem";
 import { useT } from "../i18n";
@@ -249,16 +250,7 @@ export function Create() {
         <input className="input" value={symbol} onChange={(e) => setSymbol(e.target.value)} maxLength={32} />
       </label>
 
-      <label className="field">
-        <span className="field-label">{t("create.image")}</span>
-        <input
-          className="input"
-          value={imageUri}
-          onChange={(e) => setImageUri(e.target.value)}
-          placeholder={t("create.uriPlaceholder")}
-        />
-        <span className="hint">{t("create.imageHint")}</span>
-      </label>
+      <ImageUpload value={imageUri} onChange={setImageUri} />
 
       <label className="field">
         <span className="field-label">{t("create.description")}</span>

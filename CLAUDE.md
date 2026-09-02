@@ -10,11 +10,11 @@
 | deployed commit | `38e3e9e` — **not** the same thing, and it should not be. The contract is frozen; everything since is frontend. §7 carries this one. |
 | contract | **FROZEN.** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`, verified, 24,033 / 24,576 — 543 free. Re-confirmed on chain this session: `eth_getCode` returns 24,033 bytes. |
 | ✅ **ALL THREE WRITE PATHS PROVEN ON A REAL WALLET** | **Create, buy and sell, against real MetaMask, 2 September 2026. This closes the longest-open item in the project.** Round trip 246.89 → 246.778 USDC on a 5 USDC trade (~2.2% = two 1% fees plus gas). `wallet_watchAsset` prompted, imported, and MetaMask shows **1,991,519.04** — the correct figure, so decimals are right and trap 4 is clear. See §11.15. |
-| tests | **255 Hardhat passing + 10 pending** (the pending ones are the `FORK=1` suite), **13 Foundry**, **156 frontend** across eight suites (11+22+14+44+39 counted, plus i18n/claims pass-fail, plus 13 create), **11 anon-key RLS checks**. |
+| tests | **255 Hardhat passing + 10 pending** (the pending ones are the `FORK=1` suite), **13 Foundry**, **187 frontend** across nine suites (11+22+14+44+39+13+**31 upload** counted, plus i18n/claims pass-fail), **11 anon-key RLS checks**. |
 | tests NOT re-run | the **10 fork** checks (need a mainnet fork RPC) and the **14 live Arc-testnet R15** checks (need a funded key). Both passed when last run; neither was re-executed. |
 | indexer | Code is fixed and correct (§11.11) but ⚠ **runs on a laptop and nothing supervises it.** Live mode now polls `eth_getLogs`; it must never go back to a subscription. |
 | database | Migrations **000 + 001 + 002 + 003 + 004 all applied.** RLS re-verified with the **anon** key: **11/11**. View returns **5 rows / 34 columns**, `trades` **13 rows** (13 with `block_time`, 3 with reserve snapshots), `token_candles_1m` **3 candles**. |
-| frontend | **BUILT, and the create flow SHIPS.** React + Vite + wagmi + viem in `app/`. `/`, `/t/:address`, `/about` and `/create`. Price chart, toasts, focus states. Entry bundle **225.69 kB gzip**; the chart is a **55.20 kB lazy chunk** loaded only on a token page. |
+| frontend | **BUILT, and the create flow SHIPS — now with image upload.** React + Vite + wagmi + viem in `app/`. `/`, `/t/:address`, `/about`, `/create`. Price chart, toasts, focus states, Pinata uploads. ⚠ **No longer a purely static build**: `app/api/sign-upload.ts` is a serverless function (§11.17). Entry bundle **228.37 kB gzip**; the chart is a **55.20 kB lazy chunk** loaded only on a token page. |
 | ⚠ deployment | **Nothing is deployed anywhere.** Vercel preview config exists (`app/vercel.json`, `app/DEPLOY.md`) and has never been run. |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
@@ -33,18 +33,25 @@ the indexer, click through with a real wallet, and write migration 003. All thre
 **The project is now feature-complete and operationally unstarted.** That is the shape of
 the remaining risk, and it is not the shape it had before.
 
-**1. DEPLOY IT SOMEWHERE.** Nothing is hosted. `app/DEPLOY.md` has the settings, the SPA
-rewrite is written so it cannot swallow the Google verification file, and the safety grep
-on `dist/` is clean (zero `service_role`; the one JWT decodes to `role: anon`). It has
-never been run. Mainnet is **16 September** and a launchpad nobody can reach is worse than
-a missing chart.
+**1. DEPLOY IT SOMEWHERE. STILL THE TOP ITEM — the deploy has NOT been run.**
+Everything around it is now checked rather than merely written: `app/DEPLOY.md` carries
+the settings and the full env-var table, the SPA rewrite excludes both the Google
+verification file and `/api/` (asserted at build time, red-proved), the favicon set is
+present and dimension-verified, source maps are off, and the safety grep was run on the
+**real 74-file build output** — zero `service_role`, one JWT decoding to `role: anon`,
+zero `.map` files. **Set `PINATA_JWT` (unprefixed) on Preview or image upload 503s.**
+Mainnet is **16 September** and a launchpad nobody can reach is worse than a missing chart.
 
 **2. GET THE INDEXER OFF A LAPTOP.** The code is correct and now fails loudly rather than
 silently (§11.11), but nothing restarts it and nothing outside the process knows if it
 stopped. A supervisor plus an external head-relative liveness ping is the whole job.
 
-**3. TEST ON A PHONE.** No viewport below 1280px has ever been opened. Memecoin trading is
-overwhelmingly mobile.
+**3. TEST ON A REAL PHONE.** ⚠ *Partially done — an emulated 375×812 pass found zero
+horizontal overflow on all four routes and caught one iOS zoom-on-focus regression.* What
+an emulator cannot test is what remains: touch latency, the on-screen keyboard resizing the
+viewport mid-form, and **a wallet's in-app webview**, which is where most memecoin trading
+actually happens and which is a different browser from mobile Safari or Chrome. Six
+pre-existing controls also sit under the 44px touch floor.
 
 **4. Send the two Goldsky emails** (§11.17). No session can research them and the provider
 recommendation rests on them.
@@ -1788,15 +1795,15 @@ operational gaps are now the project's real risk rather than the code.
 
 | item | state |
 |---|---|
-| **NOTHING IS DEPLOYED ANYWHERE** | The largest gap now. `app/vercel.json` and `app/DEPLOY.md` exist and have **never been run**. No hosting, no domain, no preview URL. |
+| **NOTHING IS DEPLOYED ANYWHERE** | Still the largest gap. `app/vercel.json` and `app/DEPLOY.md` exist and have **never been run**. No hosting, no domain, no preview URL. **What changed 2 September:** the config is now checked rather than merely written — the safety grep was run on real build output (74 files, one JWT, `role: anon`, zero `service_role`, zero source maps), the favicon set is present and dimension-verified, and the SPA rewrite's two exclusions are asserted at build time and red-proved. The deploy itself remains un-run. |
 | **No runbook, no rollback plan, no user docs** | None exist. Not started, not scheduled. Mainnet is 16 September. |
 | **The indexer runs on a laptop** | No host, no supervisor, no external alerting. The code is correct and fails loudly now (§11.11), but a process that dies on a closed laptop is still dark. The liveness check is head-relative and exits(1); nothing restarts it. |
-| **Mobile has never been tested — not once** | No viewport below 1280px has been opened. Memecoin trading is overwhelmingly mobile. The two surfaces most likely to break are the card grid and the trade panel, which are the two that matter. |
+| **Mobile: FIRST PASS DONE, unproven on real hardware** | ⚠ *This row read "never tested — not once". Corrected 2 September 2026.* All four routes were driven at **375×812** and MEASURED rather than eyeballed: **zero horizontal overflow on `/`, `/about`, `/create` and `/t/:address`**. The card grid and trade panel — the two surfaces this row predicted would break — do not. `.input` was already 16px/44px, so iOS zoom-on-focus was largely handled before this session. **Exactly one regression found and fixed, my own**: the new `.upload-uri` at 12px was the single text field on `/create` that would have triggered Safari's zoom-and-stay-zoomed. **Still open:** six pre-existing controls sit under the 44px touch floor (nav links 22px, Connect 40px), and **nothing has been opened on a real handset** — an emulated viewport tests layout and nothing else: not touch latency, not the on-screen keyboard resizing the viewport, and not a wallet's in-app webview, which is where most memecoin trading actually happens. |
 | **zh-Hans is 7 of 239 keys, and there is no translator** | The decision (en + zh-Hans ship, ko cut) is unchanged and the plumbing is enforced at build. `locales.ts` still ships `en` only. This needs a person, not a session. |
 | **Arc mainnet chainId UNSOURCED** | `5042` came from a secondary source; Circle documents only `5042002`. Do not hardcode it. |
 | **Uniswap V2 unverified on mainnet** | `eth_getCode` on **testnet** returns NO CODE for the mainnet router and factory, which is expected. The same one-line check is the gate on mainnet and has not been run there because mainnet does not exist. |
 | **Goldsky Edge: two unanswered questions** | Mainnet coverage for Edge specifically, and the rps ceiling. Both need an email; see §11.17. The provider recommendation rests on them. |
-| **Image upload designed, not built** | Pinata presigned URLs, Shape B, scoped in §11.17. Makes the project non-static. |
+| ~~Image upload designed, not built~~ → **BUILT** | Shape B shipped: `api/sign-upload.ts`, `src/lib/upload.ts`, `src/lib/ipfs.ts`, `components/create/ImageUpload.tsx`. **31 checks in `verify:upload`, 8 mutations red-proved.** ⚠ The project is **no longer a purely static build** — see §11.17. Unverified end-to-end: no upload has run against a real `PINATA_JWT`. |
 | **Supabase 401s bounded but UNIDENTIFIED** | The app degrades correctly and RLS is 11/11, but the cause of intermittent 401s was never root-caused. |
 | **Supabase under load never benchmarked** | The list query runs a grouped pass over `trades` per request. Free at 13 rows; unmeasured at launch volume. ⚠ `EXPLAIN ANALYZE` cannot run through PostgREST — it needs the SQL editor or a connection string. |
 
@@ -2135,11 +2142,60 @@ is `max_file_size` x `expires`), and **no wallet gate** — a connected address 
 to acquire, real gating means a signature prompt for a non-transaction, and it moves the
 connect step earlier for no security gain.
 
-⚠ **THIS MAKES THE PROJECT NO LONGER A PURELY STATIC BUILD.** Adding an API route changes
-the deploy from "upload a folder" to "upload a folder plus a function". The trust boundary
-is worth stating precisely: **that function can mint an upload URL and nothing else.** It
-holds no key that touches funds, cannot sign a transaction, and cannot affect anything
-already launched. If it disappears, existing tokens are unaffected.
+⚠ **THE PROJECT IS NO LONGER A PURELY STATIC BUILD. THIS IS NOW FACT, NOT A PLAN.**
+The deploy is "a folder plus a function". The trust boundary is worth stating precisely:
+**that function can mint an upload URL and nothing else.** It holds no key that touches
+funds, cannot sign a transaction, reads no database, and cannot affect anything already
+launched. If it disappears, existing tokens are unaffected and only new uploads stop.
+
+### ✅ BUILT — 2 September 2026
+
+| file | role |
+|---|---|
+| `app/api/sign-upload.ts` | the only place `PINATA_JWT` is read. Unprefixed, server-only. |
+| `app/src/lib/upload.ts` | pure client logic: limits, validation, the two-hop upload |
+| `app/src/lib/ipfs.ts` | gateway resolution + the scheme allowlist, shared with `TokenImage` |
+| `app/src/components/create/ImageUpload.tsx` | the UI, wired into `/create` |
+| `app/scripts/verify-upload.mts` | **31 checks, 8 mutations red-proved** |
+
+⚠ **THE HANDLER SIGNATURE IS `export default { async fetch(request) {} }`, NOT named
+`GET`/`POST` EXPORTS.** The named-export form is Next.js-specific; Vercel documents the
+default-export-with-`fetch` object for a non-framework (`framework=other`) project with an
+`api/` directory, which is what this is. Checked against Vercel's docs rather than
+assumed — the named form was the intuitive guess and it is wrong here.
+
+⚠ **The signing host is `uploads.pinata.cloud/v3/files/sign`, NOT `api.pinata.cloud`.**
+Also checked rather than recalled.
+
+⚠ **`/api/sign-upload` IS EXTENSIONLESS, SO THE SPA CATCH-ALL ATE IT.** The rewrite was
+`/((?!.*\.).*)` — dot-free paths go to the shell — and the API path has no dot. Vercel
+checks the filesystem before top-level rewrites so it would *probably* have worked anyway,
+but that is exactly the "probably" this project already refused to accept for the Google
+verification file. Now `/((?!api/)(?!.*\.).*)`, with both exclusions asserted against the
+real `vercel.json` (U26–U29) and red-proved by restoring the old catch-all.
+
+**The constants are duplicated in `api/` rather than imported from `src/`.** A
+cross-directory `.ts` import is compiled by Vercel's builder, not ours, so it fails at
+DEPLOY time — the one place a failure costs a redeploy cycle to find. `verify:upload`
+U8–U10 fail if the two copies drift, which makes the copy safe rather than merely tolerated.
+
+⚠ **SVG IS EXCLUDED FROM THE MIME ALLOWLIST AND MUST STAY EXCLUDED.** It is XML and can
+carry script; a token image is attacker-supplied content rendered next to other people's
+money. Every design tool exports PNG, so excluding it costs a creator nothing. U11 is
+red-proved.
+
+⚠ **UPLOADS WRITE `ipfs://<cid>` TO THE CHAIN, NEVER A GATEWAY URL.** A gateway hostname
+in on-chain metadata is a permanent dependency on one company's domain: if it lapses, every
+token pointing at it breaks and only each individual creator can fix their own. The gateway
+belongs at RENDER time, where `VITE_PINATA_GATEWAY` changes it for every token at once.
+Unset, the fallback is `ipfs.io` — which must FIND content on the network and so may not
+serve a just-pinned CID promptly, which is the moment a creator is watching. Set the
+dedicated gateway.
+
+**Not yet verified end to end: no upload has run against a real `PINATA_JWT`.** Everything
+above is checked by construction and by the local failure path (a missing function produces
+the correct "this is a problem with this site" message, not a crash). The success path has
+never executed.
 
 ## 11.18 Settled — do not re-argue
 
@@ -2169,6 +2225,19 @@ Same standing as §6.
   token; this keeps reappearing and any new payment path must price it.
 - **`quoting` never disables a submit button.** Refreshing is shown on the figures.
 - **Holders are OUT OF SCOPE.** Per-token `Transfer` indexing is not worth solving now.
+- **Image upload is Shape B: a presigned URL, the file never transits our function.**
+  Proxying it collides with Vercel's 4.5 MB body limit and makes a platform cap the
+  product's size cap.
+- **No KV rate limiting and no wallet gate on upload.** The real bound is
+  `max_file_size` × `expires`. A signature prompt to pick an image is the pattern users
+  are correctly taught to treat as phishing, and a connected address gates no attacker.
+- **SVG is never in the image allowlist.** XML, script-capable, attacker-supplied,
+  rendered next to other people's money.
+- **Uploads write `ipfs://<cid>` on chain; the gateway is applied at render time.**
+- **`PINATA_JWT` is server-only and never `VITE_`-prefixed.**
+- **The SPA rewrite excludes both `api/` and any path containing a dot**, structurally
+  rather than by relying on Vercel's filesystem precedence.
+- **Production source maps stay off**, set explicitly so enabling them shows in a diff.
 
 ---
 

@@ -139,6 +139,7 @@ type Ctx = {
     pct: (pct: number, dp?: number) => string;
     bps: (bps: number) => string;
     age: (when: string | number | bigint) => string;
+    bytes: (bytes: number) => string;
   };
 };
 
@@ -206,6 +207,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         pct: (v, dp) => fmt.formatPct(locale, v, dp),
         bps: (v) => fmt.formatBps(locale, v),
         age: (v) => fmt.formatAge(locale, v),
+        bytes: (v) => fmt.formatBytes(locale, v),
       },
     };
   }, [locale, pseudo]);

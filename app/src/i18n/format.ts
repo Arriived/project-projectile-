@@ -148,3 +148,26 @@ export function formatAge(locale: Locale, when: string | number | bigint): strin
   if (secs < 86400) return rtf.format(-Math.floor(secs / 3600), "hour");
   return rtf.format(-Math.floor(secs / 86400), "day");
 }
+
+/**
+ * A file size, for DISPLAY only.
+ *
+ * Binary units (KiB steps) because that is what a size cap is expressed in and what an
+ * operating system's file dialog shows, so a creator comparing our message against their
+ * own file listing sees the same number rather than a 5% discrepancy they cannot explain.
+ *
+ * Locale-aware via `nf` like every other figure here: the decimal separator differs, and
+ * a hand-rolled `toFixed(1)` would render "1.5 MB" to a reader expecting "1,5 MB".
+ */
+export function formatBytes(locale: Locale, bytes: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let n = Math.max(0, bytes);
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  // Whole bytes never want a decimal; everything above does, but only one.
+  const dp = i === 0 ? 0 : n < 10 ? 1 : 0;
+  return `${nf(locale, { minimumFractionDigits: dp, maximumFractionDigits: dp }).format(n)} ${units[i]}`;
+}

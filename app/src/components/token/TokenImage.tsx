@@ -6,20 +6,12 @@
 // the placeholder rather than a broken glyph.
 
 import { useState } from "react";
+import { resolveMediaUri } from "../../lib/ipfs";
 
-/** ipfs:// is not a scheme browsers fetch. Route it through a gateway. */
-function resolveUri(uri: string | undefined): string | null {
-  if (!uri) return null;
-  const trimmed = uri.trim();
-  if (!trimmed) return null;
-  if (trimmed.startsWith("ipfs://")) {
-    return `https://ipfs.io/ipfs/${trimmed.slice(7)}`;
-  }
-  // Only http(s) and data: are loadable. Anything else (javascript:, file:, a bare
-  // string) is treated as absent rather than handed to the browser.
-  if (/^(https?:|data:image\/)/i.test(trimmed)) return trimmed;
-  return null;
-}
+// Gateway resolution and the scheme allowlist moved to lib/ipfs.ts when the create flow
+// started PRODUCING ipfs:// URIs (lib/upload.ts). Two copies of a security allowlist is
+// one copy too many -- the create-side preview and this render path must agree on
+// exactly which schemes are loadable.
 
 export function TokenImage({
   uri,
@@ -33,7 +25,7 @@ export function TokenImage({
   square?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
-  const src = resolveUri(uri);
+  const src = resolveMediaUri(uri);
 
   const style = square
     ? { width: "100%", aspectRatio: "1 / 1" }
