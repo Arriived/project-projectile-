@@ -818,16 +818,32 @@ The four survivors, re-verified rather than carried forward on the old classific
 
 | site | error | class |
 |---|---|---|
-| `_quoteBuy` L392 | `CurveMathError` | **proven** unreachable |
-| `_quoteSell` L534 | `CurveMathError` | **proven** unreachable |
-| `_quoteBuy` L416 | `ClampCostExceededOffer` | **evidenced**, 2,000,000 fuzz cases, zero firings |
-| `_quoteSell` L555 | `ClampInputExceededOffer` | **evidenced**, same |
+| `_quoteBuy` L391 | `CurveMathError` | **proven** unreachable |
+| `_quoteSell` L533 | `CurveMathError` | **proven** unreachable |
+| `_quoteBuy` L415 | `ClampCostExceededOffer` | **evidenced**, 2,000,000 fuzz cases, zero firings |
+| `_quoteSell` L554 | `ClampInputExceededOffer` | **evidenced**, same |
 
 The two `CurveMathError` proofs, checked independently this session rather than accepted:
 `newVirtualUsdc >= virtualUsdcReserves` gives `k/newVirtualUsdc <= virtualTokenReserves` as
 reals, and since `virtualTokenReserves` is an integer, `ceilDiv` cannot exceed it — with
 equality only when the input is zero. `_quoteSell` is the same argument with the operands
 swapped. Both are defensive assertions against a condition the arithmetic forbids.
+
+⚠ **`guard-coverage.jsonl` IS NOW TRACKED, and committing it immediately caught a doc
+error.** It was gitignored as "regenerated, never authored" — which is true of the file and
+wrong about its role: it is the EVIDENCE for the freeze gate this section rests on, and a
+claim whose evidence a fresh clone cannot see is a claim nobody can check without a ~2h
+re-run.
+
+The first thing tracking it exposed: the survivor line numbers in the table above read
+392/416/534/555 and the log says **391/415/533/554**. The log is right — those are the
+`if (!(...)) revert` statements; the doc's numbers pointed at a variable assignment and two
+closing braces, which are not guard sites at all. Corrected above.
+
+⚠ **The line numbers are only meaningful against the commit the sweep RAN on.** R12 and R17
+landed after it, so a future edit to `LFX1.sol` will silently invalidate them without
+invalidating the score. Re-read the file rather than trusting the numbers if the contract
+has moved.
 
 **Keep "proven equivalent" and "unfalsified over N cases" as separate claims.** The two
 classes above are not interchangeable and the table should not be flattened into one number.
@@ -1783,7 +1799,7 @@ operational gaps are now the project's real risk rather than the code.
 | **Image upload designed, not built** | Pinata presigned URLs, Shape B, scoped in §11.17. Makes the project non-static. |
 | **Supabase 401s bounded but UNIDENTIFIED** | The app degrades correctly and RLS is 11/11, but the cause of intermittent 401s was never root-caused. |
 | **Supabase under load never benchmarked** | The list query runs a grouped pass over `trades` per request. Free at 13 rows; unmeasured at launch volume. ⚠ `EXPLAIN ANALYZE` cannot run through PostgREST — it needs the SQL editor or a connection string. |
-| **`guard-coverage.jsonl` is gitignored** | The mutation log CLAUDE.md cites as the freeze gate is not in version control, so a fresh clone cannot check the 52/56 claim without a ~2h re-run. |
+
 
 ## 11.11 The indexer's live mode — filters, and how it went dark for 29 hours
 
