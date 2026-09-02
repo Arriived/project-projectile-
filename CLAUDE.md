@@ -6,14 +6,16 @@
 
 | | |
 |---|---|
-| repo HEAD **when this was written** | `90813c5`, on branch **`ballista-migration`**, tree clean |
+| repo HEAD **when this was written** | `f96f267`, on branch **`ballista-migration`**, tree clean, pushed |
 | deployed commit | `38e3e9e` — **not** the same thing, and it should not be. The contract is frozen; everything since is frontend. §7 carries this one. |
-| contract | **FROZEN.** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`, verified, 24,033 / 24,576 — 543 free. Re-confirmed on chain: `eth_getCode` returns 24,033 bytes. |
-| tests | **255 Hardhat passing + 10 pending** (the pending ones are the `FORK=1` suite), **13 Foundry**, **143 frontend** across seven suites, **11 anon-key RLS checks**. All re-run this session. |
-| tests NOT re-run | the **10 fork** checks (need a mainnet fork RPC) and the **14 live Arc-testnet R15** checks (need a funded key). Both passed when last run; neither was re-executed here. |
-| indexer | ⚠ **STALLED, NOT AT HEAD.** Checkpoint `59455052`, chain head `59663174` — **208,122 blocks behind, ~27.7 hours.** The process is not running. Migrations 000 + 001 + 002 are applied and the data it holds is correct; it is simply not advancing. |
-| database | RLS re-verified with the **anon** key this session: **11/11**. View returns **4 rows**, `trades` **6 rows**, `indexer_state` **401 / 42501**, all four write paths no-ops. Both barriers confirmed live. |
-| frontend | **BUILT.** React + Vite + wagmi + viem, in `app/`. List page, token page and `/about` ship; the create flow (Phase 4) does not. See §11. |
+| contract | **FROZEN.** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`, verified, 24,033 / 24,576 — 543 free. Re-confirmed on chain this session: `eth_getCode` returns 24,033 bytes. |
+| ✅ **ALL THREE WRITE PATHS PROVEN ON A REAL WALLET** | **Create, buy and sell, against real MetaMask, 2 September 2026. This closes the longest-open item in the project.** Round trip 246.89 → 246.778 USDC on a 5 USDC trade (~2.2% = two 1% fees plus gas). `wallet_watchAsset` prompted, imported, and MetaMask shows **1,991,519.04** — the correct figure, so decimals are right and trap 4 is clear. See §11.15. |
+| tests | **255 Hardhat passing + 10 pending** (the pending ones are the `FORK=1` suite), **13 Foundry**, **156 frontend** across eight suites (11+22+14+44+39 counted, plus i18n/claims pass-fail, plus 13 create), **11 anon-key RLS checks**. |
+| tests NOT re-run | the **10 fork** checks (need a mainnet fork RPC) and the **14 live Arc-testnet R15** checks (need a funded key). Both passed when last run; neither was re-executed. |
+| indexer | Code is fixed and correct (§11.11) but ⚠ **runs on a laptop and nothing supervises it.** Live mode now polls `eth_getLogs`; it must never go back to a subscription. |
+| database | Migrations **000 + 001 + 002 + 003 + 004 all applied.** RLS re-verified with the **anon** key: **11/11**. View returns **5 rows / 34 columns**, `trades` **13 rows** (13 with `block_time`, 3 with reserve snapshots), `token_candles_1m` **3 candles**. |
+| frontend | **BUILT, and the create flow SHIPS.** React + Vite + wagmi + viem in `app/`. `/`, `/t/:address`, `/about` and `/create`. Price chart, toasts, focus states. Entry bundle **225.69 kB gzip**; the chart is a **55.20 kB lazy chunk** loaded only on a token page. |
+| ⚠ deployment | **Nothing is deployed anywhere.** Vercel preview config exists (`app/vercel.json`, `app/DEPLOY.md`) and has never been run. |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
 this file was last updated, not where you are. `git rev-parse --short HEAD` is ground
@@ -23,44 +25,32 @@ them. This file once carried **three different HEADs at once** — this table sa
 
 ## The exact next action
 
-⚠ **The previous version of this section is DONE and has been rewritten.** It said "build
-the token page and the token list AS NEW FILES" against the buildless frontend. Both pages
-exist, in React, in `app/` — see §11. The salvage instruction it carried was followed: the
-correctness engine was lifted, and the JS curve math was **not** (§7C).
+⚠ **The previous version of this section is DONE and has been rewritten.** It said restart
+the indexer, click through with a real wallet, and write migration 003. All three happened:
+003 and 004 are applied, and **all three write paths are proven on real MetaMask (§11.15)**
+— which closes the item every prior session had to record as unproven.
 
-**1. Restart the indexer and let it catch up.** It is 208,122 blocks behind and not
-running. `cd indexer && node src/index.js` with the env in §8. Nothing else here needs it,
-but the list page reads from it, and every hour it stays down is an hour of launches the
-product cannot see. **Do NOT reset the checkpoint** — the factory has not changed, so the
-checkpoint is valid and resetting it would replay ~88k blocks for nothing. (Reset it only
-on a redeploy; that hazard is §RESUME/1 below and it is the opposite of this case.)
+**The project is now feature-complete and operationally unstarted.** That is the shape of
+the remaining risk, and it is not the shape it had before.
 
-**2. Click through buy, sell and create with a real wallet.** Still the only part of the
-stack never exercised end to end, and still for the same reason: every browser available
-in-session lacks a wallet extension, so the **signature path is unverified**. This is now
-`cd app && npm run dev` at `http://localhost:5173`, not `frontend/serve.js`.
+**1. DEPLOY IT SOMEWHERE.** Nothing is hosted. `app/DEPLOY.md` has the settings, the SPA
+rewrite is written so it cannot swallow the Google verification file, and the safety grep
+on `dist/` is clean (zero `service_role`; the one JWT decodes to `role: anon`). It has
+never been run. Mainnet is **16 September** and a launchpad nobody can reach is worse than
+a missing chart.
 
-What *is* proven underneath it, against `0xEDeed1F0...`: quotes from `quoteBuy`/`quoteSell`,
-the gas reserve and limit from real receipts, the blocklist check, custom-error decoding
-(viem, natively — no selector map), and the transaction shapes
-(`scripts/verify-frontend-txshapes.js`, 9/9). What is **not** proven is that a real wallet
-signs and lands them. The chain guard itself took four rounds against a real wallet after
-passing against an injected fake every time — that is the standing warning for this step.
+**2. GET THE INDEXER OFF A LAPTOP.** The code is correct and now fails loudly rather than
+silently (§11.11), but nothing restarts it and nothing outside the process knows if it
+stopped. A supervisor plus an external head-relative liveness ping is the whole job.
 
-**3. Migration 003, approved and not yet written.** The list page derives "recent buys"
-from a second query against `trades` because the view cannot serve it, and disables the
-24h/7d windows because the data does not exist. Both are honest today and both are
-worse than the migration. Columns agreed: `last_buy_block`, `last_buy_at`,
-`volume_24h_usdc`, `volume_7d_usdc`, `volume_all_usdc`, `total_supply` (or a computed
-`market_cap_usdc`), `symbol_collision_count`. Confirmed absent from the live view this
-session by reading its columns with the anon key.
+**3. TEST ON A PHONE.** No viewport below 1280px has ever been opened. Memecoin trading is
+overwhelmingly mobile.
 
-**Phase 4 — the create flow — is explicitly gated on the operator's word.** Do not start it
-unprompted. When it is started, R13 is a hard requirement on it: the creation fee must be
-approved for an **exact amount**, never `MaxUint256`.
+**4. Send the two Goldsky emails** (§11.17). No session can research them and the provider
+recommendation rests on them.
 
-`FRONTEND_BUILD_V2.md` holds the nine rules. They are properties of the contract, not of
-the rendering technology, and all nine survived the React rebuild unchanged.
+**Do NOT start:** V4, holders (dropped from scope — per-token `Transfer` indexing is not
+worth it now), or anything on the contract. The contract is closed.
 
 ## Three things that fail SILENTLY — read before touching any of them
 
@@ -952,7 +942,7 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| deployed commit | `38e3e9e` — **the commit the frozen bytecode was built from, NOT the repo HEAD.** Repo HEAD is `90813c5`; the gap is entirely frontend work and the contract has not moved. Keep these two labelled differently, because this file has carried three conflicting HEADs before. |
+| deployed commit | `38e3e9e` — **the commit the frozen bytecode was built from, NOT the repo HEAD.** Repo HEAD is `f96f267`; the gap is entirely frontend work and the contract has not moved. Keep these two labelled differently, because this file has carried three conflicting HEADs before. |
 | bytecode | **24,033 / 24,576 — 543 free.** Verified on chain this session: `eth_getCode` on the factory returns 24,033 bytes. |
 | tests | **255 Hardhat passing + 10 pending** (pending = the `FORK=1` suite, skipped without it), **13 Foundry** (`forge test`, 3 suites, 205s). Re-run this session. The **14 live R15** checks and the **10 fork** checks were **not** re-run — they need a funded key and a fork RPC respectively. |
 | last mutation score | **52/56 = 92.9%**, re-read from `guard-coverage.jsonl` this session rather than recalled: 56 sites, 52 `DETECTED`, 4 `UNDETECTED`. Same four survivors, all classified (§5). |
@@ -1206,17 +1196,60 @@ reverted**. Quotes come from `quoteBuy`/`quoteSell` on the contract — §1.3.
   protection. A quote taken during the snipe window is stale within **one second**, so the
   trade panel **re-quotes immediately before signing** rather than acting on a displayed
   number.
-- **Indexer: ⚠ STALLED. The code works; the process is not running.** Migrations 000 + 001 +
-  002 applied, backfilled from the deploy block. **Measured this session: checkpoint
-  `59455052` against chain head `59663174` — 208,122 blocks behind, ~27.7 hours of chain
-  time.** *(This entry previously said "WORKING … caught up to head, 12 blocks behind". That
-  was true when written and is the exact failure mode this file warns about: a state
-  recorded once and never re-measured. The 12-block figure is kept here as the reading it
-  was, not as the reading it is.)* Restarting it is enough — **do not reset the checkpoint**,
-  because the factory has not changed. Verified end to end when last live: 4 tokens indexed, all
-  from the current factory, with both migrations' columns populated (`state=trading`,
-  `creator_launch_bps`), and trade rows matching on-chain amounts exactly — a SELL recorded
-  `usdc=188113`, the precise net `quoteSell` returned.
+- **Indexer: code CORRECT, hosting UNSOLVED.** *(This entry has read "not started", then
+  "WORKING", then "STALLED" across three sessions. The churn is the point: it is the one
+  component whose state has to be MEASURED rather than recalled — compare
+  `indexer_state.last_processed_block` against `eth_blockNumber` before believing any of
+  it.)* Live mode was silently dead for 29 hours and is now fixed (§11.11): it polls
+  `eth_getLogs`, fails loudly after 5 consecutive errors, treats unhandled rejections as
+  fatal, and carries a head-relative liveness assertion. ⚠ **It still runs on a laptop with
+  no supervisor and no external alerting**, which is now the risk rather than the code.
+  - **⚠ MIGRATIONS 003 AND 004 ARE APPLIED, and 003 exists because of a live bug.**
+
+    **`trades.created_at` is the INDEXER'S INSERT TIME, not the block time.** The insert
+    never supplied it, so it defaulted to `now()`. Measured against every trade row and its
+    block's real timestamp:
+
+    | block | `created_at` | actual block time | drift |
+    |---|---|---|---|
+    | 59446076 | 2026-08-29 14:54:35Z | 2026-08-29 13:37:04Z | 1.3 h |
+    | 59458963 | 2026-08-30 22:21:12Z | 2026-08-29 15:29:51Z | **30.9 h** |
+
+    The 30-hour rows were ingested during a catch-up after downtime. So the **existing
+    `volume_1h_usdc` column was reporting 31-hour-old trades as one-hour volume** on the
+    live site, and any restart after downtime re-stamps history as "just now".
+
+    **003** adds `trades.block_time` (from the chain), `tokens.curve_token_supply`, and to
+    the view: `last_buy_block`, `last_buy_at`, `volume_24h/7d/all_usdc`, `market_cap_usdc`,
+    `symbol_collision_count`, `name_collision_count`, `volume_windows_exact`. Every window
+    filters on `COALESCE(block_time, created_at)`.
+
+    ⚠ **`curve_token_supply` holds CURVE_TOKEN_SUPPLY (807M), not TOTAL (1,000M).** Market
+    cap is price x CIRCULATING supply, and the 193M LP reserve cannot be sold into the
+    curve. Using the total would overstate every market cap by 1.24x. **Graduated tokens
+    are a different question this column does not answer** — after graduation the 193M IS
+    tradeable, so MC and FDV genuinely diverge. Flagged, not solved.
+
+    **The backfill ran: 10 trades, 4 tokens, worst drift 30.9 h corrected, zero remaining.**
+    `volume_windows_exact` then **cleared itself to true on every token with no manual
+    flag**, and `volume_24h_usdc` correctly dropped to 0 — those trades really are older
+    than 24h once `block_time` is real. Before the backfill they counted as recent.
+
+    **004** adds `trades.virtual_usdc_reserves` / `virtual_token_reserves` (the POST-trade
+    curve state) and the `token_candles_1m` view. Written from the read the indexer
+    ALREADY makes — `updateReservesFromChain` now returns what it read and `handleTrade`
+    was reordered read-then-insert, so the chart costs **zero extra RPC calls**. See §11.13
+    for why execution price cannot be charted.
+
+    ⚠ **Rows written before 004 have no reserves and are invisible to the chart.** They are
+    not backfillable: the curve state at that block is unrecoverable from the row, and
+    re-deriving it would mean re-implementing the curve math (§1.3).
+
+    **Both files were parsed with the real PostgreSQL grammar** (`pgsql-parser`,
+    libpg-query WASM) before applying — 003 is 9 statements preserving all 24 pre-existing
+    columns, 004 is 8. `003_ROLLBACK.sql` restores the previous view and its grants, with
+    the body extracted programmatically from `000_base_schema.sql` rather than retyped and
+    proven column-for-column against the live view.
   - **The schema is now reproducible from the repo.** It was not: the base tables lived only
     in the hosted project, and 001/002 are `ALTER TABLE` against tables nothing here could
     create. `000_base_schema.sql` is generated by `indexer/scripts/gen-base-schema.js`.
@@ -1487,6 +1520,19 @@ redirect to `/`. **`/create` is linked but NOT built** — Phase 4 is gated on t
 | `1a6b422` | Phase 3 Part A — seven fixes |
 | `59928fd` / `10be2bf` | Part B — app identity and `/about` |
 | `90813c5` | Part C — the list page at `/` |
+| `1e3fdb7` | CLAUDE.md re-grounded against the repo |
+| `6860f6b` | WalletConnect wired; the fallback bug it exposed |
+| `b904009` | BRIEFING.md, for a chat with no repo access |
+| `c3fdb0d` | item-2 display fixes, schema decisions, 003 rollback |
+| `b38dcf2` | **indexer live mode: poll `eth_getLogs`, make silent death impossible** |
+| `af781fd` | `useQuote`: 1s in the snipe window, 30s after |
+| `9d15a97` | **migration 004: per-trade reserves and the candle view** |
+| `b92f69b` | **Phase 4 — the create flow, R13 red-proved** |
+| `72bd41e` | Vercel preview config and the SPA rewrite |
+| `ed0f8a5` | create + trade fixes from the first real click-through |
+| `753089f` | **the price chart, mid-price from reserves** |
+| `72987cb` | sell-side price impact, which never computed |
+| `f96f267` | **interaction pass: focus, pending, toasts** |
 
 ## 11.3 The chain guard took FOUR rounds, and why is the reusable part
 
@@ -1720,16 +1766,24 @@ figures should be monochrome so the one coloured thing means something.**
 
 ## 11.10 Open, and honestly open
 
+⚠ **Re-read as of 2 September 2026.** The single largest item on this list — the unexercised
+signature path — is CLOSED (§11.15). What remains is mostly operational, and the
+operational gaps are now the project's real risk rather than the code.
+
 | item | state |
 |---|---|
-| **The signature path is UNEXERCISED** | No real wallet has signed a buy, sell or create through the React app. The single largest gap. |
-| **Supabase 401s are bounded but UNIDENTIFIED** | The app degrades correctly on a 401 and the RLS posture is verified 11/11, but the *cause* of intermittent 401s was never root-caused. Bounded, not understood. |
-| **zh-Hans is 7 of 239 keys; `locales.ts` still ships `en` only** | The decision (en + zh-Hans ship, ko cut) is made; the code has not been changed to match. §11.6. |
-| **WalletConnect** | ✅ **WIRED, 30 August 2026.** `projectId` from `VITE_WALLETCONNECT_PROJECT_ID` (public by design, gitignored anyway so a fork does not spend the quota); the connector is built **only** when it is set. **Verified live in-browser:** the modal mounts, its chunks lazy-load, and a valid `wc:` pairing URI carrying `relay-protocol` is generated — which only happens after the relay ACCEPTS the projectId. ⚠ **Still unverified: no real mobile wallet has ever completed a session.** Trap 17 is NOT closed by wiring it — Arc 5042002 is absent from the WalletConnect registry, so first connect issues `wallet_addEthereumChain`; `chain.ts` carries the metadata that call needs, but what a real wallet does with it is untested. |
-| **Arc mainnet chainId** | **Still unsourced.** `5042` came from a secondary source; Circle documents only `5042002`. §10. |
-| **Uniswap V2 on Arc** | Verified this session: `eth_getCode` on **testnet** returns **NO CODE** for both the mainnet router `0x1f7d…efa` and factory `0x89e5…eba`. This is expected (they are mainnet addresses) and is exactly why `GraduationHelper` is inert. **Re-run the same check on mainnet before graduation depends on them.** |
-| **No hosting, no runbook, no rollback, no user docs** | None of these exist. Not started, not scheduled. |
-| **Migration 003** | Approved, not written. See "The exact next action". |
+| **NOTHING IS DEPLOYED ANYWHERE** | The largest gap now. `app/vercel.json` and `app/DEPLOY.md` exist and have **never been run**. No hosting, no domain, no preview URL. |
+| **No runbook, no rollback plan, no user docs** | None exist. Not started, not scheduled. Mainnet is 16 September. |
+| **The indexer runs on a laptop** | No host, no supervisor, no external alerting. The code is correct and fails loudly now (§11.11), but a process that dies on a closed laptop is still dark. The liveness check is head-relative and exits(1); nothing restarts it. |
+| **Mobile has never been tested — not once** | No viewport below 1280px has been opened. Memecoin trading is overwhelmingly mobile. The two surfaces most likely to break are the card grid and the trade panel, which are the two that matter. |
+| **zh-Hans is 7 of 239 keys, and there is no translator** | The decision (en + zh-Hans ship, ko cut) is unchanged and the plumbing is enforced at build. `locales.ts` still ships `en` only. This needs a person, not a session. |
+| **Arc mainnet chainId UNSOURCED** | `5042` came from a secondary source; Circle documents only `5042002`. Do not hardcode it. |
+| **Uniswap V2 unverified on mainnet** | `eth_getCode` on **testnet** returns NO CODE for the mainnet router and factory, which is expected. The same one-line check is the gate on mainnet and has not been run there because mainnet does not exist. |
+| **Goldsky Edge: two unanswered questions** | Mainnet coverage for Edge specifically, and the rps ceiling. Both need an email; see §11.17. The provider recommendation rests on them. |
+| **Image upload designed, not built** | Pinata presigned URLs, Shape B, scoped in §11.17. Makes the project non-static. |
+| **Supabase 401s bounded but UNIDENTIFIED** | The app degrades correctly and RLS is 11/11, but the cause of intermittent 401s was never root-caused. |
+| **Supabase under load never benchmarked** | The list query runs a grouped pass over `trades` per request. Free at 13 rows; unmeasured at launch volume. ⚠ `EXPLAIN ANALYZE` cannot run through PostgREST — it needs the SQL editor or a connection string. |
+| **`guard-coverage.jsonl` is gitignored** | The mutation log CLAUDE.md cites as the freeze gate is not in version control, so a fresh clone cannot check the 52/56 claim without a ~2h re-run. |
 
 ## 11.11 The indexer's live mode — filters, and how it went dark for 29 hours
 
@@ -1856,7 +1910,222 @@ concurrent instances merely wasteful instead of pathological, and costs one read
 
 **Before starting the indexer, check nothing else is already running it.**
 
-## 11.12 Settled — do not re-argue
+## 11.13 The price chart — and why EXECUTION price is unchartable
+
+⚠ **The chart plots CURVE MID-PRICE, derived from reserves. Never `usdc_amount / token_amount`.**
+
+This is the finding that would otherwise be re-derived wrongly, so the evidence is here
+rather than a conclusion. Derived from the trade rows that already existed:
+
+| block | side | usdc | tokens | price |
+|---|---|---|---|---|
+| 59446076 | BUY | 2.0000 | 153,147 | **$1.306e-5** |
+| 59446082 | SELL | 0.1881 | 76,573 | **$2.457e-6** |
+| 59446156 | BUY | 2.0000 | 153,147 | $1.306e-5 |
+| 59446162 | SELL | 0.1881 | 76,573 | $2.457e-6 |
+
+**A 5.3x sawtooth between ADJACENT trades at the SAME reserve level.** That is not the
+market — it is the snipe tax and the fees. `usdc_amount / token_amount` is the effective
+EXECUTION price including tax, so charting it draws the fee schedule. And it is worst
+exactly where it does the most damage: the tax opens at 9800 bps, so **every new token's
+chart would have begun with an enormous spike that means nothing**, at the moment the
+creator and their first buyers are looking hardest.
+
+**The same two trades, priced from reserves, measured after 004 landed:**
+
+```
+buy   2.4901e-6
+sell  2.4809e-6     0.4% apart
+```
+
+That 0.4% is the curve actually moving. **The pair is recorded here because it is the
+proof.** Anyone who reaches for `usdc_amount / token_amount` should be able to see, in one
+table, that it was tried and what it produced.
+
+### Empty minutes are not gaps
+
+On a bonding curve price is a pure function of reserves, and reserves change ONLY when
+someone trades. Between trades the price is **exactly** constant, so carrying the last
+close forward is arithmetic rather than interpolation and a flat candle is a true
+statement. Confirmed against pump.fun, whose own API exposes the same virtual/real reserve
+pair — **they are not doing anything clever, because there is nothing clever to do.**
+
+### Decisions
+
+- **A LINE, not candles.** Almost every bucket holds one trade or none, so candlesticks
+  render as a column of identical doji — all the ink of OHLC conveying the information of a
+  line. `token_candles_1m` already carries open/high/low, so candles can be adopted the day
+  a bucket holds many trades.
+- **A token with no trades gets a FLAT LINE FROM CREATION, not an empty panel.** The curve
+  defines a price from its opening reserves whether or not anyone has traded. This is every
+  brand-new token, which is when the chart matters most.
+- ⚠ **"No trades yet" and "history unchartable" are DIFFERENT STATEMENTS.** The first
+  version said "No trades yet" on a token that had traded five times — its rows predate 004
+  and carry no reserves, so there is genuinely nothing to draw. Saying "no trades yet" there
+  is checkably false. `isHistoryUnchartable` is a separate state.
+- **Library: `lightweight-charts` 5.2.1.** Entry bundle 222.64 → **225.69 kB gzip, +3.05 kB
+  on first paint**; the library is a **55.20 kB lazy chunk** loaded only on a token page.
+
+## 11.14 Phase 4 — the create flow, shipped
+
+`/create` exists and has launched a real token on a real wallet. The rules that cost money
+live in `lib/create.ts`, red-proved in `verify:create` (13 checks).
+
+- ⚠ **R13. The creation fee is approved for an EXACT amount, never `MaxUint256`.**
+  `creationFeeUsdc` is one of only two values NOT in `currentEconomicsHash()`, so the
+  pinning guard cannot fire on a change to it and **the creator's approval is the only bound
+  on the exposure**. Red-proved: returning `MAX_UINT256` fails three rows.
+- ⚠ **The economics hash is fetched INSIDE the submit handler**, in the same action that
+  sends the transaction. Never a hook, never cached. A hash read at page load is stale by
+  definition; submitting it either reverts `EconomicsChanged` (the good case) or pins terms
+  the creator never saw. The test reads the SOURCE so it cannot pass against a copy.
+- **Symbols over 11 characters WARN, never block.** `wallet_watchAsset` caps at 11; the
+  contract validates nothing. Blocking would make this UI stricter than the chain, and the
+  same token would launch fine through the contract directly.
+- ⚠ **AFFORDABILITY COVERS FEE PLUS GAS FROM ONE BALANCE.** A creator holding **exactly
+  0.5 USDC cannot afford to send 0.5 USDC**, because USDC is also the gas token. This is
+  R15 reappearing in a new place and it will keep reappearing; any new payment path must
+  price the gas out of the same balance.
+
+**Trading approvals are a DIFFERENT hazard and are deliberately not the same rule.** The
+trade panel approves the exact trade amount, and that is bounded by terms which ARE hashed
+and snapshotted per curve — so a standing trading approval cannot be moved underneath the
+user. R13 is specifically about the creation fee.
+
+**Metadata:** one "Image or metadata URL" box became Image / Description / X / Telegram,
+assembled into the JSON the token page and indexer already read. A bare image URL with
+nothing else stays **unwrapped**, so a creator with only a picture gets a URI any other
+explorer can render.
+
+## 11.15 ✅ Verified against a real wallet — the longest-open item, closed
+
+**2 September 2026. Create, buy and sell, all three write paths, against real MetaMask.**
+
+This was open from the beginning of the frontend work and is the item every previous
+session had to record as unproven.
+
+| | |
+|---|---|
+| round trip | **246.89 → 246.778 USDC** on a 5 USDC trade — ~2.2%, which is the two 1% fees plus gas |
+| sell | 100% preset filled the full balance, estimated 4.90, **received 4.898** |
+| the panel | quoted a number the contract honoured |
+| approval | **1,991,519** — the exact amount, not `MaxUint256` |
+| `wallet_watchAsset` | **prompted, imported, MetaMask shows 1,991,519.04** |
+
+⚠ **Decimals are confirmed correct on a real wallet.** 18, not 6. Trap 4 is clear — a token
+imported with the USDC number would have rendered a balance 1e12x too large.
+
+**The original silent `watchAsset` failure did not reproduce** once the error path reported
+properly. The bug the diagnostic was built to find may not exist; the diagnostic is kept,
+because what it replaced was a `catch {}` that collapsed three different failures — user
+declined, MetaMask refused the params, provider unreachable — into one quiet grey line.
+**An error we swallow is a bug we cannot see.**
+
+## 11.16 The interaction pass, and two button-state bugs
+
+**Focus was at ZERO.** Not one `:focus-visible` rule existed, no button had any focus
+style, and `.input:focus` actively REMOVED the outline in favour of a border-colour change
+that fails contrast. The app was unnavigable by keyboard. One universal
+`:where(a, button, input, textarea, select, summary, [tabindex]):focus-visible` rule now
+covers everything, so a control added later inherits it. Verified in-browser: **20 of 20
+focusable elements covered, zero uncovered.**
+
+### ⚠ Two real bugs, both in the trade button's state
+
+1. **`busy = writing || confirming || quoting`** disabled the trade button every time a
+   QUOTE refreshed — **once per second during the snipe window**. A control that flickers
+   unusable while someone is pressing it is worse than a stale number, and the two states
+   are unrelated: one is "we are re-reading a price", the other is "a transaction is in
+   flight". Refreshing now shows on the FIGURES; the button reflects only the transaction.
+
+2. **`useWriteContract().isPending` only goes true once `writeContractAsync` is CALLED** —
+   and `submit()` re-quotes, checks affordability and estimates gas first. That whole
+   stretch was **a live, enabled Buy button doing invisible work**: the dead interval
+   between clicking and MetaMask appearing, and the double-click window Phase 6 lists as an
+   attack. An explicit `submitting` state covers the entire path, set on the first line and
+   cleared in `finally` so a throw cannot strand the button disabled.
+
+**Toasts.** Success carries the RECEIPT'S number — the same string decoded from the
+transaction's own `Trade` event, never the quote (trap 6). Failure carries the decoded
+reason. A user rejection is a decision, not a failure, and gets no error toast.
+**Successes auto-dismiss; failures do NOT** — a reason that vanishes after six seconds is a
+reason nobody reads.
+
+**`prefers-reduced-motion`** was already handled by a global block that neutralises
+animation duration with `!important`. Transforms are not animations, so the press nudge is
+neutralised explicitly. Four blocks live; none added redundantly.
+
+## 11.17 Infrastructure decisions — RPC provider and image upload
+
+### RPC: Goldsky Edge as primary, Alchemy as failover
+
+**Goldsky is the only provider with a confirmed Arc mainnet answer** (launch partner, all
+products day one, confirmed by email). Alchemy, QuickNode, Blockdaemon and dRPC publish
+**testnet endpoints only**, and Arc's docs state mainnet addresses are not yet available —
+so "does provider X support mainnet" is currently unanswerable for all of them.
+
+**Edge is a general-purpose JSON-RPC endpoint at a FLAT $5 per million requests, no compute
+units.** That is a structural fit rather than merely a cheaper number: **flat pricing and
+multicall compound.** Eight reads collapsed into one `eth_call` bills as ONE request; under
+weighted CU the same call bills 26 regardless, so the batching work partly cancels itself.
+
+⚠ **TWO QUESTIONS ARE OPEN AND THE RECOMMENDATION RESTS ON THEM.** Both need an email, and
+no session can research them:
+
+1. Does the day-one mainnet guarantee cover **Edge specifically**, or only Turbo and
+   Subgraphs?
+2. **What is Edge's rps ceiling?** Goldsky publishes that limits exist but not the numbers.
+   The rate limit is the binding constraint, not monthly quota — Alchemy free caps at 25
+   rps and QuickNode's $49 tier at 50, and graduation-day traffic spikes.
+
+⚠ **CU is NOT comparable across providers.** Blockdaemon's $0.0000425/CU is $42.50 per
+million against Alchemy's $0.45 — ~94x. That is a unit-definition difference, not a price
+difference, and it could not be resolved: their CU table is not published where it could be
+found. Do not compare those columns directly.
+
+### Multicall3 was ALREADY active, and nobody knew
+
+`chain.ts` spreads viem's built-in `arcTestnet`, which ships
+`contracts.multicall3 = 0xcA11bde05977b3631167028862bE2a173976CA11`. wagmi's
+`useReadContracts` picks it up automatically. Measured on a live token-page load: **three
+requests total**, one `eth_call` going to Multicall3 carrying `useCurve`'s eight reads.
+
+⚠ **JSON-RPC ARRAY BATCHING AND MULTICALL ARE DIFFERENT MECHANISMS AND BOTH WORK ON ARC.**
+Batches of 2, 5 and 10 all returned proper arrays. So CLAUDE.md's `batchMaxCount: 1` rule is
+**not** because Arc rejects batching — keep the setting until someone reproduces the
+original failure under load, but the stated reason is not the real one.
+
+### Image upload: Pinata presigned URLs, Shape B
+
+**A URL field is not acceptable for a launchpad** — that is settled. The upload design is:
+
+- Browser asks a **Vercel serverless function** for a presigned URL (a few hundred bytes)
+- Function calls Pinata `POST /v3/files/sign` with `expires`, `max_file_size`,
+  `allow_mime_types` — **the key never leaves the server**
+- Browser uploads **directly to Pinata**
+
+⚠ **Why NOT proxying the file through the function: Vercel's request body limit is 4.5 MB**
+(`413 FUNCTION_PAYLOAD_TOO_LARGE`). A 2 MB image fits, but base64 makes it ~2.67 MB and the
+cap becomes a platform constraint rather than a product decision. Shape B never touches the
+limit, and cold start lands on a tiny JSON request instead of a 2 MB transfer.
+
+**The size cap and mime allowlist are enforced BY PINATA, server-side** — not by our
+function trusting the client. A scoped key in the bundle was rejected because Pinata's own
+documentation says an upload-only key still lets an attacker "upload tons of files, costing
+you significant money or locking out your account".
+
+**Decisions: no KV rate limiting** (it would add a vendor for a speed bump; the real bound
+is `max_file_size` x `expires`), and **no wallet gate** — a connected address costs nothing
+to acquire, real gating means a signature prompt for a non-transaction, and it moves the
+connect step earlier for no security gain.
+
+⚠ **THIS MAKES THE PROJECT NO LONGER A PURELY STATIC BUILD.** Adding an API route changes
+the deploy from "upload a folder" to "upload a folder plus a function". The trust boundary
+is worth stating precisely: **that function can mint an upload URL and nothing else.** It
+holds no key that touches funds, cannot sign a transaction, and cannot affect anything
+already launched. If it disappears, existing tokens are unaffected.
+
+## 11.18 Settled — do not re-argue
 
 Same standing as §6.
 
@@ -1874,6 +2143,16 @@ Same standing as §6.
 - **The liveness check is head-relative, never wall-clock.** A quiet chain and a dead
   indexer are identical on a timer and opposite against the head.
 - **Classify RPC errors by CODE.** Text matching is a fallback, and it is what broke.
+- **The chart plots CURVE MID-PRICE from reserves.** Never `usdc_amount / token_amount` --
+  that is execution price including the snipe tax and produces a 5.3x sawtooth (§11.13).
+- **A sell is sized in PERCENT, a buy in dollars.** Nobody holds a position in units.
+- **The creation fee is approved for an EXACT amount (R13); trading approvals are a
+  different hazard** and are bounded by the economics hash instead.
+- **The economics hash is fetched in the same action that sends the transaction.**
+- **Affordability always covers the trade PLUS gas from one balance.** USDC is the gas
+  token; this keeps reappearing and any new payment path must price it.
+- **`quoting` never disables a submit button.** Refreshing is shown on the figures.
+- **Holders are OUT OF SCOPE.** Per-token `Transfer` indexing is not worth solving now.
 
 ---
 

@@ -1,6 +1,6 @@
 # Ballista — project briefing
 
-*Written 30 August 2026. For a fresh Claude conversation with no access to the repo.*
+*Written 2 September 2026. For a fresh Claude conversation with no access to the repo.*
 
 **You cannot verify anything in this document.** It was written by an assistant working
 directly in the codebase, from commands run against the live chain, the live database and
@@ -36,66 +36,60 @@ Launch-ready target is ~9 September; that week is buffer, not spare capacity.
 ### The contract is FINISHED and FROZEN
 
 - **Address:** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b` on Arc Testnet
-- **Size:** 24,033 of 24,576 bytes — 543 free. Verified on-chain this session.
-- **Fully verified on Blockscout.** Source is published and readable.
-- **No contract work remains, and none should be started without a written reason.**
+- **Size:** 24,033 of 24,576 bytes. Verified on-chain.
+- **No contract work remains.** Any source edit -- including a comment -- changes the
+  bytecode, because the compiler embeds a hash of the sources. Five factory addresses have
+  existed for this reason.
 
-Any source edit — *including a comment* — changes the compiled bytecode, because the
-compiler embeds a hash of the sources. Five factory addresses have existed for this
-reason. Do not casually edit the contract.
+### ✅ All three write paths are proven on a real wallet
 
-### Test state (all re-run 30 August unless noted)
+**This was the longest-open item in the project and it closed on 2 September 2026.**
+Create, buy and sell, against real MetaMask. Round trip 246.89 → 246.778 USDC on a 5 USDC
+trade (~2.2%, being two 1% fees plus gas). `wallet_watchAsset` prompted, imported, and the
+wallet shows the correct balance -- so token decimals are confirmed right on real hardware.
+
+Every earlier version of this briefing had to say the signature path was unverified. It is
+not any more.
+
+### Test state
 
 | suite | result |
 |---|---|
-| Hardhat (local) | **255 passing**, 10 pending |
-| the 10 pending | the fork suite; needs `FORK=1` and a mainnet fork RPC. **Not re-run.** |
-| Foundry invariants | **13 passing** (~205s) |
-| Frontend | **143 passing** across 7 suites |
+| Hardhat (local) | **255 passing**, 10 pending (the fork suite) |
+| Foundry invariants | **13 passing** |
+| Frontend | **156 checks** across eight suites |
 | Supabase RLS (anon key) | **11/11** |
-| Live Arc-testnet R15 checks | 14, passed when last run. **Not re-run** — needs a funded key. |
 | Mutation score | **52/56 = 92.9%**, 4 survivors, all classified |
 
-### The frontend is BUILT
+Not re-run recently: the 10 fork checks (need a mainnet fork RPC) and the 14 live
+Arc-testnet R15 checks (need a funded key).
 
-React 19 + Vite 6 + wagmi 3.7.7 + viem 2.56 + TanStack Query, in `app/`.
+### The frontend is feature-complete
 
-Three routes ship: `/` (token list), `/t/:address` (token page), `/about` (landing page).
-**`/create` is linked but does not exist** — that is Phase 4, deliberately not started.
+React 19 + Vite 6 + wagmi + viem. Four routes ship: token list, token page, `/about`, and
+**`/create` -- the launch flow now works and has created a real token.** There is a price
+chart, toasts, keyboard focus states, and percentage-based sell sizing.
 
-### ⚠ The indexer is STALLED
+Entry bundle 225.69 kB gzip; the chart is a 55.20 kB lazy chunk loaded only on a token
+page.
 
-Not broken — **not running**. Its checkpoint sits ~217,000 blocks behind the chain head,
-about **29 hours** of Arc time. The data it already holds is correct (4 tokens, 6 trades)
-and all migrations are applied. It just needs restarting.
+### The database
 
-**Do not reset its checkpoint.** The checkpoint is per-factory. Resetting is only correct
-after a *redeploy*; here the factory has not changed, so resetting would replay ~90,000
-blocks for nothing.
+Migrations 000 through 004 all applied. The view carries 34 columns including volume
+windows, market cap, collision counts and a per-token flag saying whether its volume
+windows are exact.
 
-### Source control
+## 3. The largest gap is now operational, not technical
 
-Branch `ballista-migration`, HEAD `6860f6b`, tree clean, **pushed to a private GitHub
-remote**. Until today, 73 commits existed only on one disk; that is now fixed.
+**Nothing is deployed anywhere.** No hosting, no domain, no preview URL. Config exists and
+has never been run.
 
----
+**The indexer runs on a laptop** with no supervisor and no external alerting.
 
-## 3. The single largest gap
+**Mobile has never been tested once.** No viewport below 1280px has been opened, on a
+product whose users are overwhelmingly on phones.
 
-**No real wallet has ever signed a transaction through this app.**
-
-Everything underneath the signature is proven against the live contract — quotes, the gas
-reserve, the blocklist check, error decoding, and the exact transaction shapes. What has
-never happened is a human clicking "Buy" in MetaMask and the transaction landing.
-
-This matters more than it sounds, because of a pattern that has already burned this
-project: **the chain guard took four rounds to fix, and three of those fixes passed against
-a simulated wallet and failed against real MetaMask.** The root cause turned out to be two
-browser extensions fighting over `window.ethereum`. Nothing in a test double reproduced it.
-
-Treat "verified against a fake" as *not verified*.
-
----
+Mainnet is 16 September. The code is in better shape than the operations.
 
 ## 4. Things that are settled — do not reopen these
 
@@ -125,34 +119,30 @@ These were each decided after real work. Re-arguing them wastes the calendar.
 
 ### Now → next few days
 
-1. **Restart the indexer.** It is the only thing currently degraded. The list page reads
-   from it; every hour it is down is an hour of launches the product cannot see.
+1. **DEPLOY IT.** Nothing is hosted. Vercel config exists (`app/DEPLOY.md`) and has never
+   been run. A launchpad nobody can reach is worse than a missing feature.
+2. **Get the indexer off a laptop** — a host, a supervisor, and external alerting. The code
+   now fails loudly rather than silently, but nothing restarts it.
+3. **Test on a phone.** No viewport below 1280px has ever been opened.
+4. **Send two questions to Goldsky** (the chosen RPC provider): does their day-one Arc
+   mainnet guarantee cover their Edge RPC product specifically, and what is its
+   requests-per-second ceiling? The rate limit is the binding constraint, and no research
+   can answer these — they need an email.
 
-2. **Click through buy and sell with a real wallet.** The signature path. This is the
-   highest-value hour available anywhere in the project.
+### Done since the last briefing — do not redo
 
-3. **Migration 003** — approved, not yet written. The list page currently derives "recent
-   buys" from a second database query and *disables* its 24h/7d filters because the data
-   genuinely does not exist. Both are honest workarounds. The migration adds:
-   `last_buy_block`, `last_buy_at`, `volume_24h_usdc`, `volume_7d_usdc`,
-   `volume_all_usdc`, `total_supply`, `symbol_collision_count`.
+Migrations 003 and 004 applied. The create flow shipped. A price chart built. All three
+write paths verified on real MetaMask. The indexer's live-mode outage diagnosed and fixed.
+An interaction and accessibility pass.
 
-4. **Re-run the R15 smoke tests after 3 September.** Arc Testnet gets an upgrade ("Zero8")
-   on 3 September at 15:00 UTC. It contains no consensus changes, so the contract is
-   unaffected — but the suite should be re-run to confirm.
-
-### Phase 4 — the create flow
-
-**Not started, and gated on the operator's explicit go-ahead.** Do not begin it unasked.
-
-One hard requirement when it does begin: the token-creation fee must be approved for an
-**exact amount, never `MaxUint256`**. There is a known open issue (R13) where the creation
-fee is not covered by the contract's economics-pinning hash, so an unlimited approval is
-genuinely exploitable and an exact one is not.
+⚠ One correction to carry forward: the price chart plots **curve mid-price derived from
+reserves**, never `usdc_amount / token_amount`. The latter is execution price including
+the snipe tax and produces a 5.3x sawtooth between adjacent buys and sells at the same
+reserve level. Anyone rebuilding the chart will reach for the wrong one first.
 
 ### Before mainnet — none of this exists yet
 
-- **Hosting.** The app has never been deployed anywhere.
+- **Hosting.** The app has never been deployed anywhere. This is now the top item.
 - **A runbook and a rollback plan.**
 - **User-facing documentation.**
 - **CCTP V2 bridging.** This is *required* scope, not optional: it sits at the top of the
@@ -230,9 +220,9 @@ be tested on testnet; USDC sent directly to the factory is permanently stranded.
 
 ## 8. If you're being asked to help
 
-The most useful things right now, in order: **restarting the indexer**, **the real-wallet
-click-through**, **migration 003**, and then **deployment and hosting**, which does not
-exist at all and is three weeks from a hard deadline.
+The most useful things right now, in order: **deployment**, **getting the indexer onto a
+supervised host**, and **testing on a phone**. All three are operational. The code is in
+better shape than the operations, and mainnet is two weeks away.
 
 The least useful: touching the contract, building Uniswap V4 support, re-arguing any
 decision in section 4, or writing code that re-derives the bonding curve.
