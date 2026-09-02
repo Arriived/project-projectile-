@@ -1,5 +1,9 @@
 # Static assets served at the site root
 
+⚠ Vite copies this README into `dist/` too, so it is PUBLICLY SERVED at `/README.md`.
+Nothing here is secret — the verification path is public by design — but do not add
+anything to this file you would not put on the open web.
+
 These are carried over from the landing page, which held the apex before the app did.
 Vite copies everything in `public/` to the root of the build output untouched.
 
