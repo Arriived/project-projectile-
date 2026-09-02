@@ -197,3 +197,12 @@ export function sellAmountForPercent(balance18: bigint, percent: number): bigint
 
 /** The percentages offered on the sell side. 100 is last because it is the destructive one. */
 export const SELL_PERCENTS = [25, 50, 75, 100] as const;
+
+/**
+ * A negligible SELL, for the sell-side impact probe.
+ *
+ * In tokens, not USDC, because that is what a sell offers. Sized to be economically
+ * irrelevant against a 807,000,000-token curve while still large enough that the
+ * contract's integer maths returns a non-zero output to divide by.
+ */
+export const IMPACT_PROBE_TOKENS18 = 10n ** 18n; // one whole token

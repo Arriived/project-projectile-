@@ -17,7 +17,14 @@ import type { Address } from "viem";
 import { lfx1Abi } from "../abi/lfx1";
 import { FACTORY_ADDRESS } from "../config";
 import { arc } from "../chain";
-import { IMPACT_PROBE_USDC6, impactPct, sellNetOut, type BuyQuote, type SellQuote } from "../lib/quotes";
+import {
+  IMPACT_PROBE_USDC6,
+  IMPACT_PROBE_TOKENS18,
+  impactPct,
+  sellNetOut,
+  type BuyQuote,
+  type SellQuote,
+} from "../lib/quotes";
 
 export type Side = "buy" | "sell";
 
@@ -30,7 +37,7 @@ export type Quote = {
   fee: bigint;
   /** True when the contract will take LESS than offered -- the partial-fill clamp. */
   clamped: boolean;
-  /** Buy only. Null when it cannot be computed honestly -- never silently 0. */
+  /** Both sides. Null when it cannot be computed honestly -- never silently 0. */
   impact: number | null;
 };
 
@@ -141,6 +148,37 @@ export function useQuote(
         args: [token as Address, amount],
       })) as unknown as SellQuote;
 
+      // ⚠ THE SELL SIDE COMPUTES IMPACT TOO. It used to hardcode `impact: null`, so a
+      // seller saw no impact figure at any size -- and selling moves the price DOWN
+      // against them by exactly the same mechanism a buy moves it up. A large sell into a
+      // thin curve is precisely when someone needs the warning, and it was the one case
+      // that never got it.
+      //
+      // Same probe method as the buy (CLAUDE.md §1.3): compare this trade's rate against
+      // a negligible trade's rate. Rates are USDC-per-token here rather than
+      // tokens-per-USDC, so the arguments mirror the buy call -- output first, input
+      // second -- and impactPct's PRICE MOVE convention is unchanged.
+      let impact: number | null = null;
+      try {
+        const probe = (await client!.readContract({
+          ...factory,
+          functionName: "quoteSell",
+          args: [token as Address, IMPACT_PROBE_TOKENS18],
+        })) as unknown as SellQuote;
+        if (probe.actualTokensIn > 0n && q.actualTokensIn > 0n) {
+          impact = impactPct(
+            sellNetOut(q),
+            q.actualTokensIn,
+            sellNetOut(probe),
+            probe.actualTokensIn
+          );
+        }
+      } catch {
+        // A failed probe means we do not KNOW the impact. Null, never 0 -- a confident
+        // zero on a trade that moves the price 20% is the worst available answer.
+        impact = null;
+      }
+
       return {
         side,
         // TRAP 2: sell() compares minUsdcOut against NET. Quoting gross would set an
@@ -149,7 +187,7 @@ export function useQuote(
         actualIn: q.actualTokensIn,
         fee: q.fee,
         clamped: q.actualTokensIn < amount,
-        impact: null,
+        impact,
       };
     },
   });
