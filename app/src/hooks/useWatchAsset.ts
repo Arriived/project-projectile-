@@ -18,48 +18,110 @@ import { LAUNCH_TOKEN_DECIMALS } from "../chain";
 /** MetaMask's enforced maximum (MetaMask/core PR #433, raised from 6). */
 export const MAX_WATCHABLE_SYMBOL_LENGTH = 11;
 
-export type WatchState = "idle" | "pending" | "added" | "declined" | "unsupported";
+/**
+ * ⚠ "failed" IS DISTINCT FROM "declined" AND THE DISTINCTION IS THE WHOLE POINT.
+ *
+ * declined = the user pressed reject (EIP-1193 code 4001). Their choice, no action needed.
+ * failed   = MetaMask refused what WE sent, or the provider was unreachable. Our bug.
+ *
+ * Collapsing these is what hid a real failure on a real wallet: a token was bought, the
+ * balance dropped, nothing arrived, and the UI said the same quiet thing it says when
+ * someone simply clicks no.
+ */
+export type WatchState = "idle" | "pending" | "added" | "declined" | "failed" | "unsupported";
+
+/**
+ * What actually happened on the last attempt, for diagnosis.
+ *
+ * ⚠ THIS EXISTS BECAUSE THE ORIGINAL `catch {}` MADE THE BUG UNDIAGNOSABLE. It swallowed
+ * every error and set "declined", so three completely different failures -- the user
+ * saying no, MetaMask REFUSING the params, and the provider not being reachable at all --
+ * all rendered as the same quiet grey line. Reported on a real wallet: a buy landed, the
+ * USDC balance dropped, and the token never appeared, with nothing anywhere saying why.
+ *
+ * An error we swallow is a bug we cannot see.
+ */
+export type WatchAttempt = {
+  /** Exactly what was sent, so it can be compared against MetaMask's requirements. */
+  params: unknown;
+  /** The provider actually used -- with two extensions installed this is the question. */
+  providerInfo: string;
+  /** Raw resolve value. MetaMask returns `true`/`false`; not a source of truth. */
+  resolved?: unknown;
+  /** Present only when the promise REJECTED. `code` distinguishes 4001 from the rest. */
+  rejected?: { code?: number | string; message: string };
+  outcome: WatchState;
+};
 
 export function useWatchAsset() {
   const { connector } = useAccount();
   const [state, setState] = useState<WatchState>("idle");
+  const [attempt, setAttempt] = useState<WatchAttempt | null>(null);
 
   const watch = useCallback(
     async (token: Address, symbol: string) => {
       setState("pending");
+
+      // Built before the try so it can be reported even when the request throws.
+      const params = {
+        type: "ERC20",
+        options: {
+          address: token,
+          symbol: symbol.slice(0, MAX_WATCHABLE_SYMBOL_LENGTH),
+          // 18, not 6. LFX1Token is stock OpenZeppelin ERC20. Passing 6 -- the USDC
+          // number this codebase uses everywhere else -- renders the balance 1e12x too
+          // large rather than failing, which is why it is pinned to a named constant.
+          decimals: LAUNCH_TOKEN_DECIMALS,
+        },
+      };
+
+      let providerInfo = "none";
       try {
         const provider = (await connector?.getProvider()) as
           | { request: (a: { method: string; params: unknown }) => Promise<unknown> }
           | undefined;
+
+        providerInfo = provider
+          ? `${connector?.name ?? "?"} (${connector?.id ?? "?"})`
+          : `NO PROVIDER from connector ${connector?.id ?? "none"}`;
+
         if (!provider) {
           setState("unsupported");
+          setAttempt({ params, providerInfo, outcome: "unsupported" });
           return;
         }
-        const added = await provider.request({
-          method: "wallet_watchAsset",
-          params: {
-            type: "ERC20",
-            options: {
-              address: token,
-              symbol: symbol.slice(0, MAX_WATCHABLE_SYMBOL_LENGTH),
-              decimals: LAUNCH_TOKEN_DECIMALS,
-            },
-          },
-        });
+
+        const resolved = await provider.request({ method: "wallet_watchAsset", params });
+
         // The return value is NOT a source of truth (MetaMask/core #880 -- its behaviour
         // when the token is already tracked is unspecified). Treated as a hint for the
         // label only; nothing is gated on it.
-        setState(added === false ? "declined" : "added");
-      } catch {
-        // A rejection is the user declining a convenience. It is NOT a failed trade and
-        // must never be surfaced as one -- their tokens are unaffected either way.
-        setState("declined");
+        const outcome: WatchState = resolved === false ? "declined" : "added";
+        setState(outcome);
+        setAttempt({ params, providerInfo, resolved, outcome });
+      } catch (e) {
+        // 4001 is EIP-1193's "user rejected request" -- a genuine decline, and not an
+        // error worth alarming about: their tokens are unaffected either way.
+        //
+        // ANYTHING ELSE IS OUR BUG, NOT THEIR CHOICE. -32602 (invalid params) in
+        // particular means MetaMask refused what we sent, and reporting that as
+        // "declined" is how this went unnoticed.
+        const err = e as { code?: number | string; message?: string };
+        const declined = err?.code === 4001;
+        const outcome: WatchState = declined ? "declined" : "failed";
+        setState(outcome);
+        setAttempt({
+          params,
+          providerInfo,
+          rejected: { code: err?.code, message: err?.message ?? String(e) },
+          outcome,
+        });
       }
     },
     [connector]
   );
 
-  return { watch, state };
+  return { watch, state, attempt };
 }
 
 /**

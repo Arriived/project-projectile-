@@ -165,3 +165,35 @@ export function quoteDivergencePct(quoted: bigint, actual: bigint): number | nul
   const diff = actual > quoted ? actual - quoted : quoted - actual;
   return Number((diff * 10_000n) / quoted) / 100;
 }
+
+/**
+ * How many tokens to sell for a given percentage of a holding.
+ *
+ * ⚠ THIS EXISTS BECAUSE THE SELL INPUT WAS IN RAW TOKEN AMOUNTS. Reported from a real
+ * session: a holder with ~2,000,000 tokens typed "4", sold four tokens, and received
+ * 0.00 USDC. Nobody sizes a sell in token counts -- they think "half". A buy is priced in
+ * dollars because you are spending dollars; a sell is priced in percent because you are
+ * disposing of a position.
+ *
+ * ⚠ 100% RETURNS THE EXACT BALANCE. A "sell everything" that leaves 3 wei behind is a
+ * position the holder cannot clear and a row that never disappears from their wallet.
+ *
+ * Honest note on the early return: `balance * 100n / 100n` is ALREADY exact in bigint, so
+ * that line is defensive rather than load-bearing, and a test cannot distinguish its
+ * presence from its absence. Verified by mutation -- removing it changes nothing and the
+ * suite stays green. It is kept because it makes the guarantee explicit at the point
+ * someone would otherwise reach for a float, which IS the regression that bites: the same
+ * function written as `Number(balance) * pct/100` fails S1, S2, S3, S6 and S7.
+ *
+ * All bigint. A percentage of an 18-decimal balance through Number loses precision above
+ * 2^53 and these balances are routinely ~1e24.
+ */
+export function sellAmountForPercent(balance18: bigint, percent: number): bigint {
+  if (balance18 <= 0n) return 0n;
+  if (percent >= 100) return balance18;
+  if (percent <= 0) return 0n;
+  return (balance18 * BigInt(Math.round(percent))) / 100n;
+}
+
+/** The percentages offered on the sell side. 100 is last because it is the destructive one. */
+export const SELL_PERCENTS = [25, 50, 75, 100] as const;

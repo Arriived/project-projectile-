@@ -23,7 +23,7 @@ export function YourPosition({ token, data }: { token: Address; data: TokenData 
   const { guard } = useChain();
   const { maxFeePerGas } = useFees();
   const balances = useBalances(address, token, maxFeePerGas);
-  const { watch, state } = useWatchAsset();
+  const { watch, state, attempt } = useWatchAsset();
 
   const symbol = safeText(data.symbol, 24) || "tokens";
 
@@ -79,6 +79,16 @@ export function YourPosition({ token, data }: { token: Address; data: TokenData 
           {/* A declined prompt is the user saying no to a convenience. It is NOT a
               failed trade and is never presented as an error. */}
           {state === "declined" && <span className="hint">{t("position.addDeclined")}</span>}
+          {/* ⚠ A FAILURE IS NOT A DECLINE. These used to render identically, which is
+              how a real wallet silently never received a token nobody could explain.
+              The raw params and the provider are shown because the alternative is
+              guessing at someone else's MetaMask. */}
+          {state === "failed" && (
+            <details className="watch-fail">
+              <summary className="wallet-err">{t("position.addFailed")}</summary>
+              <pre className="watch-dump">{JSON.stringify(attempt, null, 2)}</pre>
+            </details>
+          )}
           {state === "added" && <span className="hint">{t("position.added")}</span>}
           {state === "unsupported" && (
             <span className="hint">{t("position.addUnsupported")}</span>

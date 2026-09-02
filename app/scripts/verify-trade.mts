@@ -22,7 +22,7 @@ import {
   checkAffordability,
   reserveCostWei,
 } from "../src/lib/gas.ts";
-import { sellNetOut, minOutFromQuote, minOutForOfferedAmount, impactPct, quoteDivergencePct } from "../src/lib/quotes.ts";
+import { sellNetOut, minOutFromQuote, minOutForOfferedAmount, impactPct, quoteDivergencePct, sellAmountForPercent, SELL_PERCENTS } from "../src/lib/quotes.ts";
 import { tradeGate, graduationProgressBps, CurveState } from "../src/lib/curve.ts";
 import { snipeSchedule } from "../src/lib/snipe.ts";
 
@@ -264,6 +264,40 @@ console.log("\n── snipe tax ──");
   );
 }
 
-const total = 36;
+// ── sell sizing (reported from a real session) ──────────────────────────────────
+console.log("\n── sell percentages ──");
+{
+  // The failure this fixes: a holder with ~2,000,000 tokens typed "4" into a raw token
+  // box, sold four tokens, and received 0.00 USDC. A sell is sized in percent because
+  // nobody holds a position in units.
+  const bal = 2_000_000n * 10n ** 18n;
+
+  check("S1  25% is a quarter", sellAmountForPercent(bal, 25) === bal / 4n);
+  check("S2  50% is half",      sellAmountForPercent(bal, 50) === bal / 2n);
+
+  // THE ROW THAT MATTERS. "Sell everything" that leaves dust is a position the holder
+  // cannot clear and a row that never leaves their wallet. An odd balance is used
+  // precisely because it is where percentage arithmetic would round.
+  const odd = 123_456_789_987_654_321_123n;
+  check(
+    "S3  100% returns the EXACT balance, never a rounded one",
+    sellAmountForPercent(odd, 100) === odd,
+    "no dust left behind on an odd balance"
+  );
+  check("S4  a zero balance sells zero, not NaN", sellAmountForPercent(0n, 50) === 0n);
+  check("S5  0% sells nothing", sellAmountForPercent(bal, 0) === 0n);
+  check("S6  above 100% clamps to the balance", sellAmountForPercent(bal, 150) === bal);
+
+  // Precision: these balances are ~1e24, far past Number.MAX_SAFE_INTEGER (~9e15).
+  const huge = 987_654_321_123_456_789_987_654_321n;
+  check(
+    "S7  percentages are bigint -- no float precision loss at 1e27",
+    sellAmountForPercent(huge, 50) === huge / 2n,
+    "Number() here would silently lose the low digits"
+  );
+  check("S8  the offered percents end at 100", SELL_PERCENTS[SELL_PERCENTS.length - 1] === 100);
+}
+
+const total = 44;
 console.log(`\n${total - failures}/${total} checks passed`);
 if (failures) process.exit(1);

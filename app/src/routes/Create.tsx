@@ -26,6 +26,7 @@ import { arc } from "../chain";
 import { lfx1Abi } from "../abi/lfx1";
 import { FACTORY_ADDRESS, USDC_ADDRESS } from "../config";
 import { useChain } from "../providers/ChainProvider";
+import { PreviewCard } from "../components/create/PreviewCard";
 import { gasLimitFor, GAS_RESERVE_UNITS } from "../lib/gas";
 import {
   validateDraft,
@@ -47,7 +48,13 @@ export function Create() {
 
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
-  const [metadataUri, setMetadataUri] = useState("");
+  // Split from a single "metadata URI" box. A creator has a picture, a sentence and two
+  // links -- not a JSON document -- and asking for the document was asking them to be a
+  // developer. These are assembled into the metadataURI the contract stores.
+  const [imageUri, setImageUri] = useState("");
+  const [description, setDescription] = useState("");
+  const [xHandle, setXHandle] = useState("");
+  const [telegram, setTelegram] = useState("");
   const [poolBoost, setPoolBoost] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -58,6 +65,22 @@ export function Create() {
   // deliberately NOT among them -- see the header.
   const { data: creationFee } = useReadContract({ ...factory, functionName: "creationFeeUsdc" });
   const { data: cooldown } = useReadContract({ ...factory, functionName: "launchCooldown" });
+  // Shown in the preview. Read, never hardcoded -- both are owner-settable and
+  // snapshotted per token, so a constant here would be a promise the page cannot keep.
+  const { data: threshold } = useReadContract({
+    ...factory,
+    functionName: "defaultGraduationThresholdUsdc",
+  });
+  const { data: tableVersion } = useReadContract({
+    ...factory,
+    functionName: "activeSnipeTaxTableVersion",
+  });
+  const { data: snipeTable } = useReadContract({
+    ...factory,
+    functionName: "snipeTaxTable",
+    args: tableVersion !== undefined ? [tableVersion] : undefined,
+    query: { enabled: tableVersion !== undefined },
+  });
   const { data: lastLaunch } = useReadContract({
     ...factory,
     functionName: "lastLaunchTimestamp",
@@ -74,8 +97,8 @@ export function Create() {
   });
 
   const issues: Issue[] = useMemo(
-    () => validateDraft({ name, symbol, metadataUri }),
-    [name, symbol, metadataUri]
+    () => validateDraft({ name, symbol, metadataUri: imageUri }),
+    [name, symbol, imageUri]
   );
 
   const blocker = launchBlocker({
@@ -132,10 +155,27 @@ export function Create() {
         functionName: "currentEconomicsHash",
       })) as `0x${string}`;
 
+      // The contract stores ONE string. The form collects four fields, so they are
+      // assembled here into a JSON document -- the shape the token page and the indexer
+      // already read (description, image, and socials).
+      //
+      // A bare image URL is passed through UNWRAPPED when nothing else is filled in, so a
+      // creator who only has a picture still gets a URI that any other explorer can
+      // render without understanding our JSON.
+      const hasExtras = description.trim() || xHandle.trim() || telegram.trim();
+      const metadataURI = hasExtras
+        ? JSON.stringify({
+            image: imageUri.trim() || undefined,
+            description: description.trim() || undefined,
+            x: xHandle.trim() || undefined,
+            telegram: telegram.trim() || undefined,
+          })
+        : imageUri.trim();
+
       const args = [
         name.trim(),
         symbol.trim(),
-        metadataUri.trim(),
+        metadataURI,
         expectedEconomicsHash,
         poolBoost,
       ] as const;
@@ -187,6 +227,7 @@ export function Create() {
 
   return (
     <main className="main create">
+      <div className="create-form">
       <h1 className="create-h">{t("create.heading")}</h1>
 
       <label className="field">
@@ -200,22 +241,50 @@ export function Create() {
       </label>
 
       <label className="field">
-        <span className="field-label">{t("create.metadataUri")}</span>
+        <span className="field-label">{t("create.image")}</span>
         <input
           className="input"
-          value={metadataUri}
-          onChange={(e) => setMetadataUri(e.target.value)}
+          value={imageUri}
+          onChange={(e) => setImageUri(e.target.value)}
           placeholder={t("create.uriPlaceholder")}
         />
+        <span className="hint">{t("create.imageHint")}</span>
       </label>
+
+      <label className="field">
+        <span className="field-label">{t("create.description")}</span>
+        <textarea
+          className="input"
+          rows={3}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder={t("create.descriptionPlaceholder")}
+          maxLength={280}
+        />
+      </label>
+
+      <div className="field-row">
+        <label className="field">
+          <span className="field-label">{t("create.xHandle")}</span>
+          <input className="input" value={xHandle} onChange={(e) => setXHandle(e.target.value)} />
+        </label>
+        <label className="field">
+          <span className="field-label">{t("create.telegram")}</span>
+          <input className="input" value={telegram} onChange={(e) => setTelegram(e.target.value)} />
+        </label>
+      </div>
 
       <label className="field field-check">
         <input type="checkbox" checked={poolBoost} onChange={(e) => setPoolBoost(e.target.checked)} />
         <span>
           {t("create.poolBoost")}
-          {/* Pool boost is a trust signal, not an economic mechanism, and must not be
-              described as holder fee sharing -- nobody receives anything. */}
-          <span className="hint"> {t("create.poolBoostNote")}</span>
+          {/* Pool boost is a trust signal, not an economic mechanism. The full
+              "nobody receives a payout" wording moved to the tooltip -- as body copy
+              it read as the product apologising for itself. */}
+          <span className="hint" title={t("create.poolBoostTip")}>
+            {" "}
+            {t("create.poolBoostNote")}
+          </span>
         </span>
       </label>
 
@@ -263,6 +332,19 @@ export function Create() {
           {error}
         </p>
       )}
+      </div>
+
+      <PreviewCard
+        name={name}
+        symbol={symbol}
+        imageUri={imageUri}
+        description={description}
+        creationFee={creationFee as bigint | undefined}
+        graduationThreshold={threshold as bigint | undefined}
+        snipeWindowSeconds={
+          Array.isArray(snipeTable) ? (snipeTable as readonly number[]).length : undefined
+        }
+      />
     </main>
   );
 }

@@ -12,7 +12,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, usePublicClient } from "wagmi";
-import { parseUnits, decodeEventLog, type Address, type Log } from "viem";
+import { parseUnits, formatUnits, decodeEventLog, type Address, type Log } from "viem";
 import { erc20Abi } from "viem";
 import { lfx1Abi } from "../../abi/lfx1";
 import { lfx1TokenAbi } from "../../abi/lfx1Token";
@@ -23,7 +23,7 @@ import { useQuote, type Side } from "../../hooks/useQuote";
 import { useBalances } from "../../hooks/useBalances";
 import { useFees } from "../../hooks/useFees";
 import { useChain } from "../../providers/ChainProvider";
-import { minOutFromQuote } from "../../lib/quotes";
+import { minOutFromQuote, sellAmountForPercent, SELL_PERCENTS } from "../../lib/quotes";
 import { checkAffordability, gasLimitFor, GAS_LIMIT_UNITS_FOR_PRECHECK } from "../../lib/gas";
 import { tradeGate } from "../../lib/curve";
 import { safeText } from "../../lib/format";
@@ -316,6 +316,40 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           >
             {t("trade.max")}
           </button>
+        </div>
+      )}
+
+      {/* ⚠ THE SELL SIDE IS SIZED IN PERCENT, NOT TOKENS.
+
+          Reported from a real session: a holder with ~2,000,000 tokens typed "4" into a
+          raw token box, sold four tokens, and got 0.00 USDC back. A buy is priced in
+          dollars because you are spending dollars. A sell is priced in percent because
+          you are disposing of a position, and nobody holds a position in units.
+
+          100% uses the EXACT balance -- see sellAmountForPercent. There is no
+          available-to-trade cap here as there is on buy: the gas reserve exists so a
+          holder can always afford to SELL, so capping the sell with it would withhold
+          the position from the very action the reserve protects. */}
+      {side === "sell" && (
+        <div className="presets">
+          {SELL_PERCENTS.map((pc) => (
+            <button
+              key={pc}
+              className="btn btn-tiny"
+              disabled={!balances.token18}
+              onClick={() =>
+                balances.token18 !== undefined &&
+                setInput(
+                  formatUnits(
+                    sellAmountForPercent(balances.token18, pc),
+                    LAUNCH_TOKEN_DECIMALS
+                  )
+                )
+              }
+            >
+              {pc}%
+            </button>
+          ))}
         </div>
       )}
 
