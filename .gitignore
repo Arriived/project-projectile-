@@ -23,3 +23,6 @@ __pycache__/
 # already covered by the patterns above, which match at any depth.
 app/dist/
 app/tsconfig.tsbuildinfo
+
+.vercel
+.env.*.local
