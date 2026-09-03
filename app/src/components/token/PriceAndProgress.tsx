@@ -28,7 +28,12 @@ export function PriceAndProgress({ data }: { data: TokenData }) {
 
   return (
     <section className="card">
-      <div className="stat-row">
+      {/* auto-fit grid, not a flex row: it holds 3 figures at 390px in two columns and
+          absorbs a 4th or 5th on desktop without a breakpoint. The price-change slot the
+          brief asked to leave open needs no markup here -- one more <div className="stat">
+          and the grid re-flows. Nothing is rendered for it now: a dash or a placeholder
+          would be a claim the data cannot back. */}
+      <div className="stat-strip">
         <div className="stat">
           <div className="stat-label">{t("price.marketCap")}</div>
           <div className="stat-value">{mcap === undefined ? "…" : `${fmt.usdcCompact(mcap)} USDC`}</div>
@@ -41,6 +46,14 @@ export function PriceAndProgress({ data }: { data: TokenData }) {
           <div className="stat-label">{t("price.threshold")}</div>
           <div className="stat-value">{`${fmt.usdcCompact(curve.graduationThresholdUsdc)} USDC`}</div>
         </div>
+        {!graduated && (
+          <div className="stat">
+            <div className="stat-label">{t("price.progressLabel")}</div>
+            {/* Same source as the bar below -- graduationProgressBps() on the CONTRACT,
+                never arithmetic here. */}
+            <div className="stat-value">{pct === null ? "…" : fmt.pct(pct, 1)}</div>
+          </div>
+        )}
       </div>
 
       {graduated ? (

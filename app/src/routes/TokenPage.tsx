@@ -110,7 +110,12 @@ function TokenPageInner({ token }: { token: `0x${string}` }) {
       {/* 1 — identity. Full address, always visible, never behind a tooltip. */}
       <TokenIdentity token={token} data={data} />
 
-      {/* 2 — your position, high up, for the reason in rule 9. */}
+      {/* 2 — the key figures, directly under identity. Moved up from below the chart:
+              these are what a trader scans first, and at 390px the chart pushed them
+              entirely below the fold. */}
+      <PriceAndProgress data={data} />
+
+      {/* 3 — your position, high up, for the reason in rule 9. */}
       <YourPosition token={token} data={data} />
 
       {/* 3 — the chart, above the trade panel, where a trader looks first.
@@ -125,9 +130,6 @@ function TokenPageInner({ token }: { token: `0x${string}` }) {
           isLoading={candles.isLoading}
         />
       </Suspense>
-
-      {/* 3 — price and progress toward the threshold. */}
-      <PriceAndProgress data={data} />
 
       {/* 4 — trade. Closed states explain themselves rather than offering a button
               that reverts. */}

@@ -27,7 +27,24 @@ export function App() {
     <div className="page">
       <header className="topbar">
         <Link to="/" className="brand">
-          Ballista <span className="brand-sub">{arc.name}</span>
+          Ballista{" "}
+          {/* ⚠ THE NETWORK INDICATOR MUST SURVIVE THE MOBILE BREAKPOINT. It was hidden
+              outright at <=560px to recover header height, on the reasoning that the
+              wallet pill already states the network -- but that pill only exists once a
+              wallet is CONNECTED. An unconnected visitor on a phone had nothing telling
+              them this is testnet, and after 16 September a mainnet deployment exists
+              alongside this one. A testnet factory with a similar name is already
+              recorded as an impersonation vector.
+
+              So the label shortens rather than disappearing: the full chain name on
+              desktop, its distinguishing last word on mobile. Both are DERIVED from
+              arc.name, never hardcoded, so this cannot end up claiming the wrong network
+              on a chain switch -- and if the name has no second word the short form is
+              simply the name itself. */}
+          <span className="brand-sub">
+            <span className="brand-sub-full">{arc.name}</span>
+            <span className="brand-sub-short">{arc.name.split(" ").slice(-1)[0]}</span>
+          </span>
         </Link>
         {/* Thin nav: Explore and About only. No Forum -- comments are per-token and
             later, never a global one. No Analytics -- a real surface, but not before

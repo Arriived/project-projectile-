@@ -98,6 +98,8 @@ a:hover { opacity: 0.7; }
   font-size: 18px;
   text-decoration: none;
 }
+.brand-sub-short { display: none; }
+
 .brand-sub {
   font-family: var(--mono);
   font-size: 11px;
@@ -882,3 +884,124 @@ textarea.input { resize: vertical; line-height: 1.5; font-size: 16px; }
      was the single field on /create that would have done it. */
   .upload-uri { font-size: 16px; min-height: 44px; }
 }
+
+/* ── addresses ────────────────────────────────────────────────────────────────
+   An address must wrap on a 390px screen AND copy as exactly 42 characters.
+
+   ⚠ `hyphens: none` is set EXPLICITLY, not left to the `manual` initial value.
+   Measured in a real engine: even with `hyphens: auto` forcibly applied, a
+   Selection still serialises to 42 clean characters -- a CSS hyphen is a render
+   artifact and never reaches the clipboard. So this line is not the fix for the
+   reported corruption (see lib/address.ts for what is). It is here because it
+   costs nothing and forecloses the class: no future UA default, and no
+   inherited rule from a parent, can start hyphenating an address.
+
+   `overflow-wrap: anywhere` is the break mechanism precisely BECAUSE it inserts
+   no character -- unlike a hyphenation pass, it only chooses where the line
+   ends. Do not swap it for anything that adds a glyph. */
+.addr-wrap {
+  display: inline-flex; align-items: baseline; gap: 8px;
+  flex-wrap: wrap; max-width: 100%; min-width: 0;
+}
+.addr-full {
+  hyphens: none; -webkit-hyphens: none;
+  overflow-wrap: anywhere; word-break: normal;
+  font-size: 12px; line-height: 1.5;
+  min-width: 0; flex: 1 1 auto;
+}
+code.addr-full {
+  color: var(--text); background: var(--soft);
+  padding: 5px 9px; border-radius: 6px;
+}
+.addr-copy { flex: none; }
+
+/* Belt and braces: nothing that renders an address may hyphenate, whatever it
+   inherits from. */
+.identity-addr code, .kv dd .addr-full, .mono { hyphens: none; -webkit-hyphens: none; }
+
+/* ── token page: the header stat strip (item 3) ───────────────────────────────
+   auto-fit rather than a fixed column count: the same rule gives 2 columns at
+   390px, 3 at 560px and 4-5 on desktop, and absorbs the price-change figure
+   later without a breakpoint change. That is the "leave a slot" requirement --
+   the grid does not need to know how many figures there are.
+
+   No new colours and no new type: --mono for every figure, the existing
+   .stat-label / .stat-value sizes, on the existing card. */
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 14px 20px;
+}
+.stat-strip .stat { min-width: 0; }
+.stat-strip .stat-value {
+  font-size: 17px;
+  overflow-wrap: anywhere;   /* a long USDC figure wraps rather than widening the grid */
+}
+.stat-strip .stat-sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* ── slippage control (item 4) ────────────────────────────────────────────── */
+.slip { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.slip-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.slip-label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted);
+}
+/* The live value, always on the panel — not only inside the control. */
+.slip-current { font-size: 14px; font-weight: 600; }
+.slip-options { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.slip-preset {
+  font-family: var(--mono); font-size: 13px;
+  padding: 8px 12px; min-height: 40px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.slip-preset:hover { background: var(--soft); color: var(--text); }
+.slip-preset.on { border-color: var(--text); color: var(--text); background: var(--soft); font-weight: 600; }
+.slip-custom { position: relative; display: inline-flex; align-items: center; flex: 1 1 96px; min-width: 96px; }
+.slip-input {
+  /* ⚠ 16px MINIMUM. Below this iOS Safari zooms the page on focus and does not
+     zoom back out, leaving the user scrolled sideways mid-trade. Matches every
+     other .input in the app for exactly this reason. */
+  font-size: 16px; min-height: 40px;
+  padding-right: 26px; width: 100%; font-family: var(--mono);
+}
+.slip-pct {
+  position: absolute; right: 10px; color: var(--muted);
+  font-family: var(--mono); font-size: 13px; pointer-events: none;
+}
+.slip-msg { margin: 9px 0 0; font-size: 13px; }
+.slip-msg-warn { color: var(--warn); }
+.slip-msg-bad { color: var(--neg); }
+.slip-bound { margin-top: 8px; }
+
+/* ── mobile: app chrome (item 2) ──────────────────────────────────────────────
+   The header is sticky with an OPAQUE background and z-index 20, and content
+   passing behind it is correct sticky behaviour, not an overlap bug (padding,
+   z-index and background were all measured and all fine). What is genuinely
+   wrong on a phone is its HEIGHT: at 390px the row wraps and the bar stands
+   113px tall — 13% of the viewport, permanently, on every scroll.
+
+   Tightening the spacing and dropping the decorative brand suffix gets it into
+   one row. Nothing structural changes: no menu, no hidden nav links. */
+@media (max-width: 560px) {
+  .topbar { gap: 10px; padding: 10px 14px; }
+  .brand { font-size: 16px; }
+  /* ⚠ SHORTENED, NOT HIDDEN. This was `display: none`, which bought header height by
+     removing the only network indicator an UNCONNECTED visitor had -- the wallet pill
+     said to cover it does not exist until someone connects, and after 16 September a
+     mainnet deployment sits alongside this one. "Arc Testnet" becomes "TESTNET": most
+     of the width saving, none of the ambiguity about which chain this is. */
+  .brand-sub-full { display: none; }
+  .brand-sub-short { display: inline; }
+  .brand-sub { font-size: 10px; margin-left: 6px; letter-spacing: 0.06em; }
+  .nav { gap: 14px; }
+  .main { padding-top: 18px; }
+}
+
+/* The acknowledgement gate for a wide slippage tolerance (see lib/slippage.ts). */
+.slip-ack {
+  display: flex; align-items: flex-start; gap: 9px;
+  margin-top: 10px; font-size: 13px; color: var(--warn);
+  cursor: pointer;
+}
+.slip-ack input { margin-top: 3px; flex: none; width: 16px; height: 16px; }

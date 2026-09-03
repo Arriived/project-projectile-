@@ -10,6 +10,7 @@
 
 import type { TokenData } from "../../hooks/useCurve";
 import { shortAddress } from "../../lib/format";
+import { AddressText } from "../AddressText";
 import { useT } from "../../i18n";
 import { EXPLORER_URL } from "../../config";
 
@@ -99,10 +100,14 @@ export function TrustPanel({ data }: { data: TokenData }) {
         </dd>
 
         <dt>{t("trust.creator")}</dt>
-        <dd className="mono small">
-          <a href={`${EXPLORER_URL}/address/${curve.creator}`} target="_blank" rel="noreferrer">
-            {curve.creator}
-          </a>
+        <dd className="small">
+          {/* Was a bare <a> with no copy affordance: the only way to get this off a phone
+              was to hand-select 42 characters wrapped over four lines, and on iOS a
+              long-press on a link copies the HREF, not the address. See lib/address.ts. */}
+          <AddressText
+            address={curve.creator}
+            href={`${EXPLORER_URL}/address/${curve.creator}`}
+          />
         </dd>
 
         <dt>{t("trust.mint")}</dt>

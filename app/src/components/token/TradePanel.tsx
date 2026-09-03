@@ -24,6 +24,8 @@ import { useBalances } from "../../hooks/useBalances";
 import { useFees } from "../../hooks/useFees";
 import { useChain } from "../../providers/ChainProvider";
 import { minOutFromQuote, sellAmountForPercent, SELL_PERCENTS } from "../../lib/quotes";
+import { loadSlippageBps, saveSlippageBps, bpsToPctLabel, requiresAcknowledgement } from "../../lib/slippage";
+import { SlippageControl } from "./SlippageControl";
 import { checkAffordability, gasLimitFor, GAS_LIMIT_UNITS_FOR_PRECHECK } from "../../lib/gas";
 import { tradeGate } from "../../lib/curve";
 import { safeText } from "../../lib/format";
@@ -31,7 +33,9 @@ import { useT } from "../../i18n";
 import { useToast } from "../../providers/ToastProvider";
 import { Figure } from "../Figure";
 
-const SLIPPAGE_BPS = 100n; // 1%
+// Was a hardcoded `SLIPPAGE_BPS = 100n`. Now user-selectable; the 1% default lives in
+// lib/slippage.ts. Every use below reads the STATE, and `minOutFromQuote` is called
+// exactly as before -- no quote math changed.
 const BUY_PRESETS = ["1", "5", "25", "100"];
 
 export function TradePanel({ token, data }: { token: Address; data: TokenData }) {
@@ -54,6 +58,13 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
   // clicking and MetaMask appearing, and the double-click window Phase 6 lists as an
   // attack.
   const [submitting, setSubmitting] = useState(false);
+  // Seeded from sessionStorage: the choice follows the user across token pages within a
+  // session and is gone when the tab closes. See lib/slippage.ts for why not localStorage.
+  const [slippageBps, setSlippageBps] = useState<bigint>(() => loadSlippageBps());
+  // ⚠ NOT persisted, and reset whenever the tolerance changes. An acknowledgement carried
+  // across a session (or across a change from 8% to 40%) would acknowledge a number the
+  // user never saw, which is the failure it exists to prevent.
+  const [slippageAck, setSlippageAck] = useState(false);
   const toast = useToast();
 
   const symbol = safeText(data.symbol, 16) || "tokens";
@@ -193,7 +204,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
         )
       : null;
 
-  const minOut = quote ? minOutFromQuote(quote.out, SLIPPAGE_BPS) : 0n;
+  const minOut = quote ? minOutFromQuote(quote.out, slippageBps) : 0n;
 
   const needsUsdcApproval =
     side === "buy" && balances.usdcAllowance6 !== undefined && balances.usdcAllowance6 < amount;
@@ -254,13 +265,15 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           : (fresh as { usdcOutGross: bigint; fee: bigint }).usdcOutGross -
             (fresh as { usdcOutGross: bigint; fee: bigint }).fee;
 
-      const freshMinOut = minOutFromQuote(freshOut, SLIPPAGE_BPS);
+      const freshMinOut = minOutFromQuote(freshOut, slippageBps);
       if (freshMinOut <= 0n) {
         setStatus(t("trade.cannotFill"));
         return;
       }
 
-      // Gas limit from a live estimate x 1.5. Arc's eth_estimateGas returns no margin and
+      // Gas limit from a live estimate x3.0 (gasLimitFor). This comment said "x 1.5" for
+      // weeks, one line above a call that applies x3.0 -- Create.tsx:190 was correct all
+      // along. Arc's eth_estimateGas historically returned no margin and
       // viem passes it through raw, so without this a trade whose state moves between
       // estimate and execution runs out of gas.
       let gas: bigint | undefined;
@@ -459,7 +472,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
             : side === "buy"
               ? `${fmt.tokenExact(minOut)} ${symbol}`
               : `${fmt.usdcExact(minOut)} USDC`}
-          <span className="hint"> {t("trade.atSlippage", { pct: fmt.bps(Number(SLIPPAGE_BPS)) })}</span>
+          <span className="hint"> {t("trade.atSlippage", { pct: bpsToPctLabel(slippageBps) })}</span>
         </dd>
 
         <dt>{t("trade.gasReserve")}</dt>
@@ -480,6 +493,17 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
         </dd>
       </dl>
 
+      <SlippageControl
+        bps={slippageBps}
+        onChange={(v) => {
+          setSlippageBps(v);
+          saveSlippageBps(v);
+          setSlippageAck(false);
+        }}
+        acknowledged={slippageAck}
+        onAcknowledge={setSlippageAck}
+      />
+
       {/* Affordability by ARITHMETIC, before submitting. Never by parsing a revert
           string -- Zero8 changed those on 3 September and a parser fails silently. */}
       {afford && !afford.ok && amount > 0n && (
@@ -496,7 +520,9 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
 
       <button
         className={`btn btn-primary btn-block ${busy ? "btn-busy" : ""}`}
-        disabled={blocked || busy}
+        /* ⚠ A wide tolerance must be acknowledged before it can be sent. The warning
+           alone left the button live, which is advice next to a loaded trigger. */
+        disabled={blocked || busy || (requiresAcknowledgement(slippageBps) && !slippageAck)}
         aria-busy={busy || undefined}
         onClick={submit}
       >
