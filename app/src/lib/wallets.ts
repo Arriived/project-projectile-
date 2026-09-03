@@ -59,8 +59,35 @@ export function isWalletConnect(c: WalletChoice): boolean {
  * announced itself, which is exactly when `window.ethereum` might be contested.
  */
 export function isDiscovered(c: WalletChoice): boolean {
-  if (c.rdns === undefined) return false;
-  return Array.isArray(c.rdns) ? c.rdns.length > 0 : String(c.rdns).length > 0;
+  // Path 1: the connector DECLARES rdns. Some connector factories do.
+  if (c.rdns !== undefined) {
+    const ok = Array.isArray(c.rdns) ? c.rdns.length > 0 : String(c.rdns).length > 0;
+    if (ok) return true;
+  }
+
+  // ⚠ PATH 2 EXISTS BECAUSE PATH 1 ALONE WAS ALWAYS FALSE IN REAL WAGMI, AND THE TESTS
+  // COULD NOT SEE IT.
+  //
+  // wagmi builds an EIP-6963 connector as (createConfig.js, providerDetailToConnector):
+  //
+  //     injected({ target: { ...info, id: info.rdns, provider } })
+  //
+  // and the injected() factory NEVER sets a top-level rdns -- grep it, zero hits. So a
+  // discovered MetaMask arrives as { id: "io.metamask", name: "MetaMask", rdns: undefined }.
+  // Path 1 therefore returned false for EVERY connector, anyDiscovered was never true, and
+  // the generic "Injected" entry was never suppressed. Observed on the live preview:
+  // "Injected / WalletConnect / MetaMask / Phantom" -- the exact list this function exists
+  // to prevent.
+  //
+  // The suite stayed green because its fixtures set rdns by hand, so the doubles carried a
+  // property the real objects do not. Same shape as the four chain-guard rounds that passed
+  // against an injected fake and failed against real MetaMask every time.
+  //
+  // The honest signal in real wagmi is the ID: a discovered connector's id IS the rdns, a
+  // reverse-DNS name that always contains a dot ("io.metamask", "app.phantom"). Every
+  // non-discovered id is a bare camelCase word -- "injected", "walletConnect", "metaMask",
+  // "coinbaseWallet" -- and none contains a dot.
+  return typeof c.id === "string" && c.id.includes(".");
 }
 
 /**

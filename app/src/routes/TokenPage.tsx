@@ -115,32 +115,50 @@ function TokenPageInner({ token }: { token: `0x${string}` }) {
               entirely below the fold. */}
       <PriceAndProgress data={data} />
 
-      {/* 3 — your position, high up, for the reason in rule 9. */}
-      <YourPosition token={token} data={data} />
+      {/* 3 — THE TERMINAL ROW. Chart and trade panel side by side from 1024px up;
+              one stacked column below it, chart first, exactly as before.
 
-      {/* 3 — the chart, above the trade panel, where a trader looks first.
-              Mid-price from reserves, never execution price: adjacent buys and sells
-              at the same reserve level differ 5.3x because of the snipe tax, and
-              charting that draws the fee schedule rather than the market. */}
-      <Suspense fallback={<div className="chart-skeleton" aria-hidden />}>
-        <PriceChart
-          points={candles.points}
-          isFlatLaunch={candles.isFlatLaunch}
-          isHistoryUnchartable={candles.isHistoryUnchartable}
-          isLoading={candles.isLoading}
-        />
-      </Suspense>
-
-      {/* 4 — trade. Closed states explain themselves rather than offering a button
-              that reverts. */}
-      {gate.canBuy || gate.canSell ? (
-        <TradePanel token={token} data={data} />
-      ) : (
-        <div className="card card-closed">
-          <h2 className="card-title">{t("trade.closedTitle")}</h2>
-          <p>{gate.reason}</p>
+              ⚠ THE TRADES FEED AND TRUST PANEL STAY OUTSIDE THIS GRID, ON PURPOSE.
+              CLAUDE.md requires that a per-token comments thread can append beneath the
+              trades feed without restructuring the page. Inside a two-column grid,
+              "beneath the trades feed" would have meant "inside the left column, beside
+              the trade panel" -- a different place, and adding the thread would then have
+              needed the layout rebuilt. Keeping the feed in the full-width run below the
+              grid preserves the property exactly: a thread still appends after it, still
+              full width, still one column. */}
+      <div className="tp-grid">
+        <div className="tp-main">
+          {/* Mid-price from reserves, never execution price: adjacent buys and sells at
+              the same reserve level differ 5.3x because of the snipe tax, and charting
+              that draws the fee schedule rather than the market. */}
+          <Suspense fallback={<div className="chart-skeleton" aria-hidden />}>
+            <PriceChart
+              points={candles.points}
+              candles={candles.candles}
+              isFlatLaunch={candles.isFlatLaunch}
+              isHistoryUnchartable={candles.isHistoryUnchartable}
+              isLoading={candles.isLoading}
+            />
+          </Suspense>
         </div>
-      )}
+
+        <div className="tp-side">
+          {/* Position sits with the trade panel rather than above the chart: on a wide
+              screen they are one task, and rule 9's "high up" is satisfied by being at the
+              top of the column the trader is already looking at. Below 1024px the stack
+              order is unchanged. */}
+          <YourPosition token={token} data={data} />
+
+          {gate.canBuy || gate.canSell ? (
+            <TradePanel token={token} data={data} />
+          ) : (
+            <div className="card card-closed">
+              <h2 className="card-title">{t("trade.closedTitle")}</h2>
+              <p>{gate.reason}</p>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* 5 — trust. Fees per-token, LP recipient, creator disclosure. */}
       <TrustPanel data={data} />

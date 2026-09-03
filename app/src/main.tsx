@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { config } from "./wagmi";
 import { App } from "./App";
 import { ChainProvider } from "./providers/ChainProvider";
+import { ThemeProvider } from "./providers/ThemeProvider";
 import { WalletDiagnostics } from "./diagnostics/WalletDiagnostics";
 import { ToastProvider } from "./providers/ToastProvider";
 import { BrowserRouter } from "react-router-dom";
@@ -41,6 +42,7 @@ const diagnostics =
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
+    <ThemeProvider>
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
         <I18nProvider>
@@ -58,5 +60,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         </I18nProvider>
       </QueryClientProvider>
     </WagmiProvider>
+      </ThemeProvider>
   </React.StrictMode>
 );

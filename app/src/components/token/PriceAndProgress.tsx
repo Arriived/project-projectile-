@@ -79,6 +79,13 @@ export function PriceAndProgress({ data }: { data: TokenData }) {
         </div>
       )}
 
+      {/* ⚠ A BAR AND A PERCENTAGE WITH NO MECHANISM IS A NUMBER NOBODY CAN ACT ON. This
+          says what graduation IS. Written to pass verify:claims rather than around it:
+          Uniswap is named WITHOUT a version (mainnet ships V2; V4 is post-launch via the
+          router timelock) and the LP is described as BURNED, never "locked" -- locked is a
+          different claim needing a locker contract that does not exist. */}
+      {!graduated && <p className="hint grad-note">{t("price.graduationExplainer")}</p>}
+
       {curve.poolBoostEnabled && curve.poolBoost > 0n && (
         <p className="hint">{t("price.poolBoost", { amount: fmt.usdcExact(curve.poolBoost) })}</p>
       )}

@@ -174,6 +174,8 @@ export const en = {
     historyUnavailable: "Earlier trades predate price recording.",
     unavailable: "Price history is unavailable right now.",
     midPriceNote: "Curve mid-price, before fees and snipe tax.",
+    timeframeLabel: "Timeframe",
+    resetZoom: "Reset",
   },
 
   create: {
@@ -304,6 +306,8 @@ export const en = {
     inTheCurve: "In the curve",
     threshold: "Threshold",
     progressLabel: "Progress",
+    graduationExplainer:
+      "At the threshold the curve closes and its liquidity moves to a Uniswap pool. The LP tokens are burned, so the liquidity cannot be withdrawn.",
     graduated: "Graduated.",
     graduatedBody: "Trading has moved to the DEX pool.",
     viewOnExplorer: "View the token on the explorer ↗",
@@ -328,7 +332,8 @@ export const en = {
     atSlippage: "at {pct} slippage",
     slippageLabel: "Max slippage",
     slippageCustom: "Custom",
-    slippageCustomAria: "Custom slippage tolerance, percent",
+    slippageCustomAria: "Custom slippage tolerance, percent",    slippageOpen: "Max slippage {pct} — change",
+
     slippageAck: "I understand a {pct}% floor can fill far below the quote.",
     slippageBound: "Up to {max}%. Above that the trade has no meaningful floor.",
     slippageHigh:

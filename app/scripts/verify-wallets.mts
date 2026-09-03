@@ -190,7 +190,60 @@ const check = (label: string, pass: boolean, detail = "") => {
   );
 }
 
-const total = 14;
+const total = 14 + 7;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ⚠ REAL WAGMI CONNECTOR SHAPES. Everything above this line uses fixtures that set
+// `rdns` by hand -- and real wagmi connectors DO NOT HAVE IT.
+//
+// wagmi builds a discovered connector as `injected({ target: { ...info, id: info.rdns } })`
+// and the injected() factory never assigns a top-level rdns. So the real objects look like
+// the ones below, `isDiscovered` returned false for every one of them, and the generic
+// "Injected" entry was never suppressed. The live preview showed
+// "Injected / WalletConnect / MetaMask / Phantom".
+//
+// The suite was 14/14 green throughout. A fixture that carries a property the real thing
+// lacks is not a test of the real thing -- it is the chain-guard failure again, where four
+// rounds passed against an injected double and failed against MetaMask every time.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Exactly what wagmi produces: no rdns, id IS the reverse-DNS string. */
+const realMetaMask = { uid: "u1", id: "io.metamask", name: "MetaMask" };
+const realPhantom = { uid: "u2", id: "app.phantom", name: "Phantom" };
+const realGeneric = { uid: "u3", id: "injected", name: "Injected" };
+const realWalletConnect = { uid: "u4", id: "walletConnect", name: "WalletConnect" };
+
+check(
+  "W14 a REAL discovered connector (no rdns, id='io.metamask') is recognised as discovered",
+  isDiscovered(realMetaMask),
+  "this returned false before the fix, for every connector wagmi produces"
+);
+check("W15 the REAL generic connector is not mistaken for a discovered one", !isDiscovered(realGeneric));
+check("W16 WalletConnect is not mistaken for a discovered wallet", !isDiscovered(realWalletConnect));
+
+{
+  // MetaMask installed: the observed four-entry list must lose "Injected".
+  const offered = selectWallets([realGeneric, realWalletConnect, realMetaMask, realPhantom]);
+  const names = offered.map((c) => c.name);
+  check(
+    "W17 with real MetaMask+Phantom shapes, the generic Injected entry is dropped",
+    !names.includes("Injected"),
+    `offered: ${names.join(", ")}`
+  );
+  check("W17b the named wallets and WalletConnect all survive", names.includes("MetaMask") && names.includes("Phantom") && names.includes("WalletConnect"));
+}
+
+{
+  // No extension at all: the generic connector is the ONLY way in and must survive.
+  const offered = selectWallets([realGeneric, realWalletConnect]);
+  const names = offered.map((c) => c.name);
+  check(
+    "W18 with NO extension installed, the generic connector is still offered",
+    names.includes("Injected"),
+    `offered: ${names.join(", ")}`
+  );
+}
+
 console.log(`\n${total - failures}/${total} checks passed`);
 // ⚠ process.exitCode, NOT process.exit(). process.exit() tears the event loop down
 // while the console.log lines above may still be flushing, and on Windows that races

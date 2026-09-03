@@ -154,7 +154,7 @@ a:hover { opacity: 0.7; }
 .main { max-width: 1120px; margin: 0 auto; padding: 26px 22px 72px; }
 
 .card {
-  background: #fff;
+  background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: var(--pad);
@@ -192,7 +192,7 @@ a:hover { opacity: 0.7; }
 .wallet-name {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 13px; padding: 4px 10px;
-  border: 1px solid var(--line); border-radius: 999px; background: #fff;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--card);
 }
 .wrong-net { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .wrong-net-label { color: var(--warn); font-size: 13px; }
@@ -204,7 +204,7 @@ a:hover { opacity: 0.7; }
   padding: 4px 9px;
   border-radius: 999px;
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--card);
 }
 .net-pill.ok { color: var(--pos); border-color: #bcd8c6; background: #eef6f0; }
 .net-pill.bad { color: var(--neg); border-color: #e2c0c0; background: #f9eded; }
@@ -263,7 +263,7 @@ a:hover { opacity: 0.7; }
 
 .presets { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .trade-input {
-  width: 100%; padding: 11px; font-size: 17px; background: #fff;
+  width: 100%; padding: 11px; font-size: 17px; background: var(--card);
   border: 1px solid var(--line); border-radius: 8px; color: var(--text);
   font-family: var(--mono); font-weight: 400;
 }
@@ -309,7 +309,7 @@ a:hover { opacity: 0.7; }
 
 .skeleton-card { min-height: 120px; color: var(--muted); }
 .phase-note {
-  color: var(--muted); background: #fff; border: 1px solid var(--line);
+  color: var(--muted); background: var(--card); border: 1px solid var(--line);
   border-radius: var(--radius); padding: 13px 15px; font-size: 14px;
 }
 .phase-note strong { color: var(--text); }
@@ -493,7 +493,7 @@ a:hover { opacity: 0.7; }
 
 .list-search { display: flex; gap: 10px; margin-bottom: 30px; }
 .list-input {
-  flex: 1; padding: 11px 14px; font-size: 15px; background: #fff;
+  flex: 1; padding: 11px 14px; font-size: 15px; background: var(--card);
   border: 1px solid var(--line); border-radius: 8px; color: var(--text);
   font-family: var(--sans);
 }
@@ -511,14 +511,14 @@ a:hover { opacity: 0.7; }
 .list-h { font-size: 22px; display: flex; align-items: baseline; gap: 10px; }
 .list-count {
   font-family: var(--mono); font-size: 12px; font-weight: 400; color: var(--muted);
-  border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; background: #fff;
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; background: var(--card);
 }
 .list-blurb { color: var(--muted); font-size: 14px; margin: 8px 0 18px; max-width: 68ch; }
 .list-empty { padding: 22px 0; }
 .list-note { margin-top: 14px; }
 
 .list-controls { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
-.seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--card); }
 .seg-btn {
   padding: 7px 13px; background: transparent; border: 0;
   border-right: 1px solid var(--line);
@@ -536,7 +536,7 @@ a:hover { opacity: 0.7; }
 }
 
 .tcard {
-  border: 1px solid var(--line); border-radius: var(--radius); background: #fff;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--card);
   overflow: hidden; text-decoration: none; color: var(--text); display: block;
   transition: border-color 0.12s, transform 0.12s;
 }
@@ -600,7 +600,7 @@ a:hover { opacity: 0.7; }
   padding: 16px;
 }
 .modal {
-  background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   width: 100%; max-width: 380px; max-height: calc(100vh - 32px);
   overflow-y: auto; padding: var(--pad);
 }
@@ -628,7 +628,7 @@ a:hover { opacity: 0.7; }
 .input {
   width: 100%; box-sizing: border-box;
   padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius);
-  background: #fff; color: var(--text);
+  background: var(--card); color: var(--text);
   /* 16px minimum: anything smaller triggers iOS zoom-on-focus. */
   font-size: 16px; font-family: inherit;
 }
@@ -705,7 +705,7 @@ textarea.input { resize: vertical; line-height: 1.5; font-size: 16px; }
    page does not jump when lightweight-charts finishes loading. */
 .chart-panel {
   border: 1px solid var(--line); border-radius: var(--radius);
-  background: #fff; padding: var(--pad); margin-bottom: 16px;
+  background: var(--card); padding: var(--pad); margin-bottom: 16px;
 }
 .chart-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .panel-h {
@@ -825,7 +825,7 @@ textarea.input { resize: vertical; line-height: 1.5; font-size: 16px; }
 }
 .toast {
   border: 1px solid var(--line); border-radius: var(--radius);
-  background: #fff; padding: 12px 14px; font-size: 13px; line-height: 1.45;
+  background: var(--card); padding: 12px 14px; font-size: 13px; line-height: 1.45;
   box-shadow: 0 4px 16px rgba(17, 17, 17, 0.08);
   animation: toastin 0.18s ease-out;
 }
@@ -1005,3 +1005,164 @@ code.addr-full {
   cursor: pointer;
 }
 .slip-ack input { margin-top: 3px; flex: none; width: 16px; height: 16px; }
+
+/* ── token page: the terminal row (desktop only) ──────────────────────────────
+   BREAKPOINT 1024px, RATIO 2fr / 1fr with a 340px floor on the panel.
+
+   Why 1024 and not 900 or 1280: the trade panel needs ~340px before its numeric
+   rows (minimum received at full precision, gas reserve, available to trade)
+   start wrapping mid-figure. Below 1024 the chart would be under ~600px, which
+   is narrower than it is today stacked -- a two-column layout that makes the
+   primary element smaller is worse than the stack it replaced.
+
+   `minmax(0, 2fr)` not `2fr`: a bare fr track has min-width:auto, so a wide
+   chart canvas or a long mono figure blows the grid out and produces horizontal
+   page scroll. The 0 floor is what makes the chart column actually shrinkable.
+
+   The page also widens here -- .token-page is capped at 760px for the single
+   column, which would defeat the point. */
+.tp-grid { display: flex; flex-direction: column; gap: 14px; }
+.tp-main, .tp-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+@media (min-width: 1024px) {
+  .token-page { max-width: 1120px; }
+  .tp-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(340px, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+  /* The chart is the primary element on a trading page: it gets the height too,
+     not just the width. 520px keeps chart + panel inside a 900px-tall viewport
+     without scrolling once the header and stat strip are accounted for. */
+  .tp-main .chart-box, .tp-main .chart-skeleton { height: 520px; }
+  /* Sticky so the panel stays reachable while reading a long trades feed. `top`
+     clears the sticky header. */
+  .tp-side { position: sticky; top: 86px; }
+}
+
+/* ── the wallet picker list ───────────────────────────────────────────────────
+   The entries rendered with no spacing and ran together as one string --
+   "InjectedWalletConnectMetaMaskPhantom". Buttons in a column, full width, with
+   the icon and name laid out rather than concatenated. */
+.wallet-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.wallet-list .btn-wallet {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; justify-content: flex-start;
+  padding: 12px 14px; min-height: 48px; font-size: 15px; text-align: left;
+}
+.wallet-list .btn-wallet .wallet-icon { width: 22px; height: 22px; flex: none; }
+.wallet-name-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wallet-hint { font-size: 12px; color: var(--muted); flex: none; }
+
+/* ── compact slippage ─────────────────────────────────────────────────────────
+   The full picker moves behind an affordance; the VALUE stays visible without
+   opening it, because a tolerance the user forgot they changed is how people
+   lose money. */
+.slip-compact { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.slip-trigger {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 13px;
+  padding: 6px 10px; min-height: 32px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: transparent; color: var(--text); cursor: pointer;
+}
+.slip-trigger:hover { background: var(--soft); }
+.slip-trigger-warn { border-color: var(--warn-line); color: var(--warn); background: var(--warn-bg); }
+.slip-pop {
+  margin-top: 10px; padding: 14px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg);
+}
+
+/* ── dark mode ────────────────────────────────────────────────────────────────
+   DERIVED FROM THE LIGHT TOKENS, NOT INVENTED. The light palette is a warm
+   near-neutral (#f3f3f0 is off-white with a hint of yellow, not blue-grey), so
+   the dark one is the same character inverted: a warm near-black, not a cool
+   slate and emphatically not the dark-green-and-lime every competing launchpad
+   uses. Same hue family, inverted lightness, same restraint -- three accent
+   colours only, used sparingly, so the one coloured thing on a page of figures
+   still means something.
+
+     --bg    #f3f3f0  ->  #14140f   warm off-white     -> warm off-black
+     --text  #111111  ->  #ecece6   near-black         -> near-white
+     --muted #777777  ->  #8f8f86   mid grey, both ways
+     --line  #d6d6d1  ->  #2f2f29   hairline, one step from bg either way
+     --soft  #e9e9e5  ->  #1f1f1a   the "slightly off bg" fill
+     card    #ffffff  ->  #1a1a15   one step lighter than bg, as white is one
+                                    step lighter than #f3f3f0
+
+   The three hues are lightened rather than re-picked, because #1f6b3a on a dark
+   ground fails contrast and reads as black:
+
+     --pos   #1f6b3a  ->  #56b077
+     --neg   #a32b2b  ->  #d97070
+     --warn  #8a5a00  ->  #cfa049
+
+   ⚠ [data-theme="dark"] on <html>, not a media query alone -- the toggle has to
+   be able to override the OS preference in both directions. The provider stamps
+   the attribute; prefers-color-scheme only supplies the INITIAL value. */
+:root[data-theme="dark"] {
+  --bg: #14140f;
+  --text: #ecece6;
+  --muted: #8f8f86;
+  --line: #2f2f29;
+  --soft: #1f1f1a;
+  --accent: #ecece6;
+
+  --warn: #cfa049;
+  --warn-bg: #2a2114;
+  --warn-line: #4a3c1f;
+  --pos: #56b077;
+  --neg: #d97070;
+
+  --card: #1a1a15;
+}
+
+/* Light keeps white cards; dark uses the token. Declared for both so nothing
+   depends on a hardcoded #fff surviving a theme switch. */
+:root { --card: #ffffff; }
+.card, .wallet-name, .net-pill, .slip-pop { background: var(--card); }
+
+:root[data-theme="dark"] .btn-primary { color: var(--bg); }
+:root[data-theme="dark"] .token-img,
+:root[data-theme="dark"] .upload-preview { background: var(--soft); }
+
+/* The toggle itself. Sits next to Connect; icon-only, no layout cost. */
+.theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; flex: none; padding: 0;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: transparent; color: var(--muted); cursor: pointer;
+  font-size: 15px; line-height: 1;
+}
+.theme-toggle:hover { color: var(--text); background: var(--soft); }
+
+/* ⚠ prefers-reduced-motion is respected app-wide; the theme change gets a
+   colour transition ONLY where motion is welcome. The global reduced-motion
+   block neutralises animation/transition duration with !important, so this
+   inherits that suppression rather than opting out of it. */
+@media (prefers-reduced-motion: no-preference) {
+  body, .card, .btn, .input { transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
+}
+
+/* ── chart: timeframes and sizing ─────────────────────────────────────────── */
+.chart-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.chart-tfs { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+.chart-tf {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em;
+  padding: 5px 8px; min-height: 28px;
+  border: 1px solid var(--line); border-radius: 6px;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.chart-tf:hover { color: var(--text); background: var(--soft); }
+.chart-tf.on { color: var(--text); border-color: var(--text); background: var(--soft); font-weight: 500; }
+.chart-reset { margin-left: 6px; }
+/* Stacked default; the desktop grid overrides this to 520px. */
+/* ⚠ overflow:hidden IS LOAD-BEARING, NOT TIDINESS. lightweight-charts sizes its own
+   canvas from the container, and the container sizes from its content -- so once the
+   canvas is wider than the column it inflates the box, clientWidth reports the INFLATED
+   width, and the ResizeObserver keeps handing that number back. The chart then never
+   shrinks: at 390px it stayed 668px wide and pushed the whole page into horizontal
+   scroll. Clipping the box breaks the feedback loop so clientWidth is the column width. */
+.chart-box, .chart-skeleton { height: 260px; width: 100%; overflow: hidden; min-width: 0; }
+.chart-note { margin-top: 8px; }

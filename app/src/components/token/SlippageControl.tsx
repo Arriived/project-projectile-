@@ -69,12 +69,45 @@ export function SlippageControl({
     }
   }
 
+  // ⚠ PRESENTATION ONLY. lib/slippage.ts is untouched -- the refusal at and above 50%,
+  // the warning at and above 5%, requiresAcknowledgement, the sessionStorage lifetime and
+  // every threshold are exactly where they were. This moves WHERE the picker renders, not
+  // WHAT it decides. verify:slippage passes unchanged.
+  const [open, setOpen] = useState(false);
+  const needsAck = requiresAcknowledgement(bps);
+
   return (
     <div className="slip">
-      <div className="slip-head">
+      {/* ⚠ THE VALUE IS VISIBLE WITHOUT OPENING THE POPOVER. A tolerance the user forgot
+          they changed is how people lose money and blame the site, so the number sits on
+          the panel itself -- and it is ALSO on the minimum-received line above, which is
+          the one a trader is actually reading when they press Buy. */}
+      <div className="slip-compact">
         <span className="slip-label">{t("trade.slippageLabel")}</span>
-        <span className="slip-current mono">{bpsToPctLabel(bps)}</span>
+        <button
+          type="button"
+          className={`slip-trigger${needsAck ? " slip-trigger-warn" : ""}`}
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          aria-label={t("trade.slippageOpen", { pct: bpsToPctLabel(bps) })}
+        >
+          <span className="mono">{bpsToPctLabel(bps)}</span>
+          <span aria-hidden="true">⚙</span>
+        </button>
       </div>
+
+      {/* The acknowledgement stays OUTSIDE the popover. It gates the trade button, so
+          hiding it behind a click would leave the button disabled with the reason folded
+          away -- a dead control and no explanation. */}
+      {needsAck && (
+        <label className="slip-ack">
+          <input type="checkbox" checked={acknowledged} onChange={(e) => onAcknowledge(e.target.checked)} />
+          <span>{t("trade.slippageAck", { pct: Number(bps) / 100 })}</span>
+        </label>
+      )}
+
+      {open && (
+      <div className="slip-pop">
 
       <div className="slip-options">
         {SLIPPAGE_PRESETS_BPS.map((p) => (
@@ -120,23 +153,14 @@ export function SlippageControl({
         </p>
       )}
 
-      {requiresAcknowledgement(bps) && (
-        // ⚠ The trade button stays disabled until this is ticked -- see TradePanel. A
-        // warning next to a live button is advice; this is a decision.
-        <label className="slip-ack">
-          <input
-            type="checkbox"
-            checked={acknowledged}
-            onChange={(e) => onAcknowledge(e.target.checked)}
-          />
-          <span>{t("trade.slippageAck", { pct: Number(bps) / 100 })}</span>
-        </label>
-      )}
+      
 
       {/* Stated once, plainly, rather than only appearing at the moment of refusal. */}
       <p className="hint slip-bound">
         {t("trade.slippageBound", { max: Number(SLIPPAGE_MAX_BPS) / 100 })}
       </p>
+      </div>
+      )}
     </div>
   );
 }

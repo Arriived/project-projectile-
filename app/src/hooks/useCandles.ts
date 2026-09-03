@@ -26,6 +26,134 @@ import { SUPABASE_URL, SUPABASE_ANON_KEY } from "../config";
 /** A lightweight-charts line point. `time` is a UNIX second. */
 export type PricePoint = { time: number; value: number };
 
+/** One OHLC bucket. Times are UNIX seconds, matching PricePoint. */
+export type Candle = { time: number; open: number; high: number; low: number; close: number };
+
+/**
+ * The timeframes offered. `token_candles_1m` is the FLOOR -- 1m is the finest bucket the
+ * view produces and everything coarser is aggregated from it here.
+ *
+ * ⚠ NO SUB-MINUTE OPTION. That would need another migration and a re-derivation of candle
+ * logic, and it is not authorised. The floor is a data property, not a UI choice.
+ */
+export const TIMEFRAMES = [
+  { id: "1M", seconds: 60 },
+  { id: "5M", seconds: 300 },
+  { id: "1H", seconds: 3600 },
+  { id: "6H", seconds: 21600 },
+  { id: "1D", seconds: 86400 },
+  { id: "ALL", seconds: 0 },
+] as const;
+
+export type TimeframeId = (typeof TIMEFRAMES)[number]["id"];
+
+/**
+ * Aggregate 1-minute candles into a coarser bucket.
+ *
+ * Open is the FIRST bucket's open, close the LAST bucket's close, high/low the extremes --
+ * the only correct way to merge OHLC. Averaging any of them would invent a price that
+ * never existed.
+ */
+export function aggregateCandles(candles: Candle[], bucketSeconds: number): Candle[] {
+  if (bucketSeconds <= 60 || candles.length === 0) return candles;
+  const sorted = [...candles].sort((a, b) => a.time - b.time);
+  const out: Candle[] = [];
+  let cur: Candle | null = null;
+  let curKey = -1;
+  for (const c of sorted) {
+    const key = Math.floor(c.time / bucketSeconds) * bucketSeconds;
+    if (cur === null || key !== curKey) {
+      if (cur) out.push(cur);
+      cur = { time: key, open: c.open, high: c.high, low: c.low, close: c.close };
+      curKey = key;
+    } else {
+      cur.high = Math.max(cur.high, c.high);
+      cur.low = Math.min(cur.low, c.low);
+      cur.close = c.close;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+/**
+ * Fill buckets with no trade by carrying the last close forward as a flat candle.
+ *
+ * ── ⚠ WHY CARRY FORWARD RATHER THAN LEAVE A GAP ──────────────────────────────
+ *
+ * On a bonding curve the price is a PURE FUNCTION OF RESERVES, and reserves change only
+ * when someone trades. So between two trades the price is not unknown -- it is exactly
+ * constant, and we know it. Carrying the close forward is arithmetic, not interpolation,
+ * and a flat candle there is a true statement.
+ *
+ * A genuine gap would claim "we do not know", which is false. Compressing the axis to
+ * trade-time was rejected outright: it would make three trades spread over a week look
+ * identical to three trades in a minute, and "is this token alive" is the single question
+ * a launchpad chart has to answer honestly.
+ *
+ * ⚠ This does NOT make sparse data look busy, and it is not meant to. The mitigation for
+ * a sea of flat candles is the TIMEFRAME, not the fill: the same three trades that are
+ * hundreds of doji at 1M are a handful of real candles at 6H. That is why the default
+ * timeframe is chosen from the data span rather than pinned at 1M.
+ */
+export function forwardFillCandles(
+  candles: Candle[],
+  untilSeconds: number,
+  bucketSeconds: number,
+  maxCandles = 600
+): Candle[] {
+  if (candles.length === 0) return [];
+  const sorted = [...candles].sort((a, b) => a.time - b.time);
+  const start = sorted[0].time;
+  const end = Math.max(untilSeconds, sorted[sorted.length - 1].time);
+  const span = end - start;
+  // Widen the step rather than truncate the range: a chart that silently drops its own
+  // history is the same class of lie as a stale volume window.
+  const step = Math.max(bucketSeconds, Math.ceil(span / maxCandles / bucketSeconds) * bucketSeconds);
+
+  const out: Candle[] = [];
+  let idx = 0;
+  let last = sorted[0].open;
+  for (let t = Math.floor(start / step) * step; t <= end; t += step) {
+    let bucket: Candle | null = null;
+    while (idx < sorted.length && sorted[idx].time < t + step) {
+      const c = sorted[idx];
+      bucket = bucket
+        ? { time: t, open: bucket.open, high: Math.max(bucket.high, c.high), low: Math.min(bucket.low, c.low), close: c.close }
+        : { time: t, open: c.open, high: c.high, low: c.low, close: c.close };
+      idx++;
+    }
+    if (bucket) {
+      out.push(bucket);
+      last = bucket.close;
+    } else {
+      // No trade in this bucket: a flat candle at the carried price. Honest, and visually
+      // quiet rather than absent.
+      out.push({ time: t, open: last, high: last, low: last, close: last });
+    }
+  }
+  return out;
+}
+
+/**
+ * The finest timeframe whose filled series is not mostly empty.
+ *
+ * With three trades over two days, 1M produces ~2900 candles of which 3 have bodies. That
+ * reads as a broken feed. Picking the first timeframe where traded buckets are a
+ * meaningful share of the total shows the same data as a chart rather than as noise.
+ */
+export function defaultTimeframe(candles: Candle[], nowSeconds: number): TimeframeId {
+  if (candles.length === 0) return "1H";
+  const first = Math.min(...candles.map((c) => c.time));
+  const span = Math.max(60, nowSeconds - first);
+  for (const tf of TIMEFRAMES) {
+    if (tf.seconds === 0) continue;
+    const buckets = span / tf.seconds;
+    if (buckets <= 180) return tf.id;
+  }
+  return "1D";
+}
+
 type CandleRow = {
   bucket: string;
   open: number | string;
@@ -76,6 +204,8 @@ export function forwardFill(
 
 export type CandleResult = {
   points: PricePoint[];
+  /** Raw 1-minute OHLC, unfilled. The chart aggregates and fills per timeframe. */
+  candles: Candle[];
   /** The token has NEVER traded. The flat line is its launch price and that is the truth. */
   isFlatLaunch: boolean;
   /**
@@ -110,7 +240,7 @@ export function useCandles(
     enabled: ready,
     refetchInterval: 30_000,
     staleTime: 15_000,
-    queryFn: async (): Promise<{ points: PricePoint[]; hasTrades: boolean }> => {
+    queryFn: async (): Promise<{ points: PricePoint[]; candles: Candle[]; hasTrades: boolean }> => {
       const res = await fetch(
         `${SUPABASE_URL}/rest/v1/token_candles_1m` +
           `?select=bucket,open,high,low,close,trade_count` +
@@ -124,6 +254,16 @@ export function useCandles(
       );
       if (!res.ok) throw new Error(`candles ${res.status}`);
       const rows = (await res.json()) as CandleRow[];
+      // ⚠ The OHLC was ALREADY being fetched and thrown away -- the select has carried
+      // open/high/low since 004 and only `close` reached the chart. Candlesticks were a
+      // series change, not a data change.
+      const candleRows: Candle[] = rows.map((r) => ({
+        time: Math.floor(new Date(r.bucket).getTime() / 1000),
+        open: Number(r.open),
+        high: Number(r.high),
+        low: Number(r.low),
+        close: Number(r.close),
+      }));
 
       // Whether ANY trade exists, chartable or not. One extra request, and it is what
       // separates "nobody has traded this" from "we cannot chart what happened".
@@ -147,6 +287,7 @@ export function useCandles(
       }
 
       return {
+        candles: candleRows,
         points: rows.map((r) => ({
           time: Math.floor(new Date(r.bucket).getTime() / 1000),
           value: Number(r.close),
@@ -168,6 +309,7 @@ export function useCandles(
   if (traded.length === 0) {
     if (launchPrice === undefined || createdAtSeconds === undefined) {
       return {
+        candles: [],
         points: [],
         isFlatLaunch: false,
         isHistoryUnchartable: false,
@@ -176,6 +318,7 @@ export function useCandles(
       };
     }
     return {
+      candles: [],
       points: forwardFill([{ time: createdAtSeconds, value: launchPrice }], now),
       isFlatLaunch: !hasTrades,
       isHistoryUnchartable: hasTrades,
@@ -193,6 +336,7 @@ export function useCandles(
       : traded;
 
   return {
+    candles: q.data?.candles ?? [],
     points: forwardFill(seeded, now),
     isFlatLaunch: false,
     isHistoryUnchartable: false,

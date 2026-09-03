@@ -5,6 +5,7 @@
 
 import { Routes, Route, Link, Navigate, useLocation } from "react-router-dom";
 import { WalletBar } from "./components/WalletBar";
+import { useTheme } from "./providers/ThemeProvider";
 import { TokenPage } from "./routes/TokenPage";
 import { About } from "./routes/About";
 import { Create } from "./routes/Create";
@@ -57,6 +58,7 @@ export function App() {
             {t("common.about")}
           </Link>
         </nav>
+        <ThemeToggle />
         <WalletBar />
       </header>
 
@@ -86,3 +88,25 @@ export function App() {
     </div>
   );
 }
+
+/**
+ * Light/dark toggle, beside Connect.
+ *
+ * Icon-only and 34px so it costs no header height -- the bar is already 61px on mobile and
+ * that was hard-won. aria-label rather than a visible word for the same reason.
+ */
+function ThemeToggle() {
+  const { theme, toggle } = useTheme();
+  return (
+    <button
+      type="button"
+      className="theme-toggle"
+      onClick={toggle}
+      aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+      title={theme === "dark" ? "Light" : "Dark"}
+    >
+      {theme === "dark" ? "☀" : "☾"}
+    </button>
+  );
+}
+
