@@ -5,11 +5,16 @@
   "scripts": {
     "start": "node src/index.js",
     "verify:liveness": "node scripts/verify-liveness.js",
-    "backfill": "node scripts/backfill-block-time.js"
+    "backfill": "node scripts/backfill-block-time.js",
+    "verify:health": "node scripts/verify-health.js",
+    "verify": "node scripts/verify-liveness.js && node scripts/verify-health.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "dotenv": "^16.4.5",
     "ethers": "^6.17.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
   }
 }

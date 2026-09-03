@@ -1,0 +1,33 @@
+# Build context for the indexer image.
+#
+# ⚠ THE FIRST ENTRY IS THE ONE THAT MATTERS. .env holds SUPABASE_SERVICE_ROLE_KEY, which
+# bypasses RLS entirely. A key baked into an image layer is in the image forever -- deleting
+# it in a later layer does not remove it, and anyone who can pull the image can read it.
+# Secrets come from the host's secret store at runtime, never from the build context.
+.env
+.env.*
+!.env.example
+
+# Installed inside the image by `npm ci` against the lockfile. Copying a host node_modules
+# would ship Windows-resolved binaries into a Linux image and defeat the point of `ci`.
+node_modules/
+
+# Nothing outside indexer/ belongs here. The Dockerfile is built with indexer/ as its
+# context, so app/, contracts/, artifacts/ and cache/ are already out of scope -- these
+# lines are kept as an explicit statement in case the context is ever widened to the repo
+# root, which is a change that would otherwise silently multiply the image size.
+../app/
+../contracts/
+../artifacts/
+../cache/
+../out/
+../node_modules/
+
+# Local-only noise.
+*.log
+npm-debug.log*
+.DS_Store
+.git/
+.gitignore
+Dockerfile
+.dockerignore

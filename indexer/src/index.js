@@ -6,6 +6,7 @@ const { createClient } = require("@supabase/supabase-js");
 const factoryAbi = require("./generated/lfx1Abi.json");
 const { fetchAndSanitizeMetadata } = require("./metadata");
 const { getLastProcessedBlock, saveCheckpoint } = require("./recovery");
+const { startHealthServer, startHeartbeat } = require("./health");
 
 // Curve.state values, mirrored from Ballista.sol's CurveState enum. This replaced the
 // old `graduated` bool: a curve that has crossed its threshold but not yet completed
@@ -53,7 +54,12 @@ const {
   FACTORY_DEPLOY_BLOCK,
 } = process.env;
 
-for (const [key, val] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FACTORY_RPC_URL, FACTORY_ADDRESS })) {
+// ⚠ FACTORY_DEPLOY_BLOCK IS IN THIS LOOP NOW. It was destructured above but omitted here,
+// so a missing value fell through silently and the indexer started from the wrong place on
+// a fresh host -- a silent wrong-start, which is the class of failure this project keeps
+// finding. On a laptop with a populated .env it never bit; on a container with secrets set
+// one at a time it is exactly what happens.
+for (const [key, val] of Object.entries({ SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FACTORY_RPC_URL, FACTORY_ADDRESS, FACTORY_DEPLOY_BLOCK })) {
   if (!val) {
     console.error(`Missing required env var: ${key}. Check .env against .env.example.`);
     process.exit(1);
@@ -524,61 +530,15 @@ const LIVE_POLL_MS = 5000;
  */
 const MAX_CONSECUTIVE_POLL_FAILURES = 5;
 
-/**
- * ── THE LIVENESS ASSERTION ───────────────────────────────────────────────
- *
- * How far the chain head may run ahead of our checkpoint before we treat the indexer as
- * silently dead.
- *
- * ⚠ MEASURED AGAINST THE HEAD, NEVER AGAINST WALL-CLOCK TIME, and that distinction is the
- * entire point. On a timer, a quiet chain and a dead indexer are indistinguishable -- both
- * look like "no new rows for N minutes", so a timer either fires constantly on a quiet
- * chain or is set so loose it never fires at all. Against the head they are opposites:
- *
- *   head moving, checkpoint moving    -> healthy
- *   head still,  checkpoint still     -> quiet chain, perfectly fine
- *   head moving, checkpoint STILL     -> silently dead. This is the signature.
- *
- * That comparison catches every silent-death variant, including ones nobody has thought
- * of yet, because it does not care WHY the checkpoint stopped -- only that the chain
- * advanced and we did not.
- *
- * At ~0.48s blocks this is roughly 8 minutes of ground lost before it fires.
- */
-const MAX_HEAD_LAG_BLOCKS = 1000;
-
-/** Consecutive liveness violations tolerated before exiting, to ride out one bad poll. */
-const MAX_LIVENESS_STRIKES = 3;
-
-/**
- * The liveness rule, as a PURE function so it can be red-proved without a chain.
- *
- * Takes where we reached, where the chain is, and how many strikes are already standing;
- * returns the new strike count and whether to die. No I/O, no clock.
- *
- * `reached === null` means the checkpoint could not be read at all, which is treated as
- * infinitely behind rather than as fine -- an unreadable checkpoint is not evidence of
- * health.
- */
-function livenessVerdict({
-  reached,
-  head,
-  strikes,
-  maxLag = MAX_HEAD_LAG_BLOCKS,
-  maxStrikes = MAX_LIVENESS_STRIKES,
-}) {
-  const lag = reached === null ? Infinity : head - reached;
-
-  if (lag <= maxLag) {
-    // Only a poll that actually KEPT UP clears the strikes. Clearing on any successful
-    // poll would let a permanently-lagging indexer alternate strike/reset forever and
-    // never reach the limit -- alive, behind, and silent, which is the bug.
-    return { lag, strikes: 0, fatal: false };
-  }
-
-  const next = strikes + 1;
-  return { lag, strikes: next, fatal: next >= maxStrikes };
-}
+// ⚠ THE LIVENESS RULE NOW LIVES IN ./liveness.js, AND THAT IS THE POINT. The polling loop
+// below, the /health endpoint and the outbound heartbeat all have to answer the same
+// question, and three copies of the answer is a guarantee they drift. It is re-exported at
+// the bottom of this file so scripts/verify-liveness.js imports from where it always did.
+const {
+  livenessVerdict,
+  MAX_HEAD_LAG_BLOCKS,
+  MAX_LIVENESS_STRIKES,
+} = require("./liveness");
 
 /**
  * Poll forward forever. Never returns; exits the process on an unrecoverable condition.
@@ -669,6 +629,17 @@ process.on("unhandledRejection", (err) => {
 });
 
 async function main() {
+  // ⚠ STARTED BEFORE catchUp(), NOT AFTER. A fresh host can have hours of historical
+  // backfill ahead of it, and catchUp() does not return until it is done. Starting the
+  // endpoint afterwards would leave the platform health check unanswered for that whole
+  // window and it would kill the machine mid-backfill, forever, in a loop.
+  //
+  // During backfill /health correctly reports UNHEALTHY (the checkpoint really is far
+  // behind the head) -- which is why the deploy runbook says to widen the platform grace
+  // period for a first deploy rather than to weaken the threshold.
+  startHealthServer({ supabase, provider, getLastProcessedBlock });
+  startHeartbeat({ supabase, provider, getLastProcessedBlock });
+
   await catchUp();
   // AWAITED. watchLive never returns normally -- it polls forever and calls
   // process.exit(1) on an unrecoverable condition. Leaving it un-awaited meant main()

@@ -69,6 +69,17 @@ export function slippageBlocks(issue: SlippageIssue | null): boolean {
  * mis-fill on a common accidental one.
  */
 export function requiresAcknowledgement(bps: bigint): boolean {
+  // ⚠ STRICTLY ABOVE, deliberately -- this does NOT match the warn boundary above, and the
+  // difference is intentional rather than the off-by-one it resembles.
+  //
+  // 5% is a PRESET: the interface offers it as a button. Gating a value the UI itself
+  // presents as a sanctioned choice behind a confirmation checkbox is scolding the user for
+  // taking the option we gave them, and it trains people to tick the box without reading.
+  //
+  // A typed 5 still WARNS (see parseSlippagePct) because it might be a typo for 0.5. The
+  // two thresholds are the same number serving two different instruments: information at
+  // the boundary, friction beyond it. If the presets ever change, revisit this pair
+  // together -- they are coupled by intent even though they are not coupled by value.
   return bps > SLIPPAGE_WARN_ABOVE_BPS;
 }
 
@@ -102,7 +113,11 @@ export function parseSlippagePct(raw: string): { bps: bigint | null; issue: Slip
   // Zero is allowed through as a value but is hostile in practice -- it demands the exact
   // quoted output and reverts on any movement. Treated as usable rather than refused
   // because it fails SAFELY (the trade reverts; nothing is lost but gas).
-  if (bps > SLIPPAGE_WARN_ABOVE_BPS) {
+  // ⚠ >=, NOT >. Typing ` 5 ` when you meant ` 0.5 ` is the same stray-zero typo the refuse
+  // boundary was fixed for, and it was landing EXACTLY on the threshold -- so it produced
+  // no issue at all, not even a warning. That is worse than the 50% case, which at least
+  // warned. Leaving one boundary correct and one wrong is worse than having fixed neither.
+  if (bps >= SLIPPAGE_WARN_ABOVE_BPS) {
     return { bps, issue: { kind: "high", pct: Number(bps) / 100 } };
   }
   return { bps, issue: null };

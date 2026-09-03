@@ -42,8 +42,19 @@ check("S5  refuse above 50%", SLIPPAGE_MAX_BPS === 5_000n);
   check("S7  a warning does not block", !slippageBlocks(issue));
 }
 {
+  // ⚠ S8 PREVIOUSLY ASSERTED THE BUG. It read "exactly 5% does NOT warn (the boundary is
+  // 'above')" and passed -- pinning the off-by-one in place. A typed 5, which is the
+  // stray-zero typo for 0.5, produced no issue at all: silently worse than the 50% case,
+  // which at least warned. The assertion is inverted, not deleted, so the diff shows the
+  // behaviour changed rather than a check quietly disappearing.
   const { bps, issue } = parseSlippagePct("5");
-  check("S8  exactly 5% does NOT warn (the boundary is 'above')", bps === 500n && issue === null);
+  check("S8  exactly 5% WARNS (0.5 -> 5 is the same stray zero as 5 -> 50)",
+    bps === 500n && issue?.kind === "high", `issue=${issue?.kind ?? "none"}`);
+  check("S8b 5% still yields a usable value — a warning is information, not a block", bps === 500n);
+}
+{
+  const { bps, issue } = parseSlippagePct("4.99");
+  check("S8c just below the threshold does NOT warn", bps === 499n && issue === null);
 }
 
 // S9-S12. ⚠ THE REFUSAL IS TESTED AS BEHAVIOUR: a refused value must yield NO bps, so a

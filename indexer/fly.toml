@@ -1,0 +1,118 @@
+# Fly.io config for the indexer.
+#
+# ⚠ THIS IS A LONG-LIVED STATEFUL POLLER, NOT A WEB SERVICE. Almost every Fly default is
+# tuned for stateless HTTP services that scale horizontally, and almost every one of those
+# defaults is wrong here. The three that would actively cause the bug this project has
+# already hit are called out below.
+#
+# Nothing here deploys. `fly launch` will want to rewrite this file -- do not let it.
+
+app = "ballista-indexer"
+primary_region = "iad"          # near the Supabase project; change to match yours
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # Non-secret only. Everything sensitive is a Fly secret -- see the list at the bottom.
+  HEALTH_PORT = "8080"
+
+# ── ⚠ DEPLOY STRATEGY: THE MOST IMPORTANT LINE IN THIS FILE ───────────────────
+#
+# `immediate` stops the old machine BEFORE starting the new one. Fly's default is a rolling
+# deploy, which briefly runs both — and two indexers is a bug this project has already
+# observed, not a theoretical one:
+#
+#   Each instance catches up from wherever IT started and writes its own cursor, so the
+#   SLOWER one overwrites the faster one and the checkpoint goes BACKWARDS. Observed:
+#   59782875 written, then 59776875 written over it.
+#
+# `saveCheckpoint` is monotonic so nothing corrupts — it refuses to lower the checkpoint —
+# but the indexer then appears to make no progress while working hard, and the liveness
+# check eventually (correctly) kills it with the cause invisible. A rolling deploy
+# reproduces exactly that, on every deploy, for the length of the overlap.
+#
+# The cost is a real gap in indexing during the swap. That is the correct trade: a gap
+# self-heals on the next poll because catch-up resumes from the checkpoint, whereas an
+# overlap produces a confusing stall.
+[deploy]
+  strategy = "immediate"
+
+# ── ⚠ EXACTLY ONE MACHINE ─────────────────────────────────────────────────────
+#
+# Pinned in three independent places, because any ONE of them left at a default brings a
+# second instance back:
+#
+#   1. auto_stop_machines = false  — no scale-to-zero. A stopped indexer is a stalled
+#      checkpoint, and the whole point of this service is that it never stops.
+#   2. auto_start_machines = false — Fly must not start a machine in response to traffic.
+#      This is not a request-driven service; the only traffic is the health check.
+#   3. min_machines_count = 1      — with a matching `fly scale count 1`. Fly will not
+#      create a second machine on its own, but a `fly deploy` against a app that already
+#      has two will keep two. Verify with `fly status` after every deploy — the runbook
+#      has the exact command.
+#
+# There is deliberately no [[services]] block with a concurrency limit: concurrency-based
+# autoscaling is the mechanism that would spawn a second machine, so it is absent rather
+# than configured conservatively.
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_count = 1
+  processes = ["app"]
+
+  # ── ⚠ HEALTH CHECK ON /health, NOT ON "IS THE PROCESS UP" ───────────────────
+  #
+  # The 29-hour outage was a process that NEVER CRASHED. It was alive, serving, and
+  # indexing nothing. Restart-on-crash would not have fired once in 29 hours, and neither
+  # would a TCP check on this port — the socket was fine.
+  #
+  # /health compares the checkpoint against the chain head and returns 503 when the chain
+  # advanced and we did not, so the platform restarts on the condition that actually
+  # matters. See src/health.js and RUNBOOK.md "Is the indexer alive?".
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    protocol = "http"
+    interval = "30s"
+    timeout = "10s"
+
+    # ⚠ GRACE PERIOD IS DELIBERATELY LONG, AND THIS IS THE ONE TO ADJUST ON A FIRST DEPLOY.
+    #
+    # /health reports UNHEALTHY during historical backfill, and it is RIGHT to: the
+    # checkpoint genuinely is thousands of blocks behind the head. On a fresh host with a
+    # deploy-block-to-now backfill ahead of it, that state can last a long time.
+    #
+    # If the grace period is shorter than the backfill, Fly kills the machine mid-backfill,
+    # the replacement starts the same backfill, and it never finishes — a restart loop that
+    # looks like a crash loop but is the health check working correctly against a machine
+    # that needs more time.
+    #
+    # ⚠ WIDEN THIS, NEVER WEAKEN THE THRESHOLD. Raising MAX_HEAD_LAG_BLOCKS to "fix" a
+    # first deploy would blind the check permanently to save one afternoon.
+    grace_period = "30m"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+# ── SECRETS: set these with `fly secrets set`, NAMES ONLY ─────────────────────
+#
+#   fly secrets set SUPABASE_URL=...
+#   fly secrets set SUPABASE_SERVICE_ROLE_KEY=...
+#   fly secrets set FACTORY_RPC_URL=...
+#   fly secrets set FACTORY_ADDRESS=...
+#   fly secrets set FACTORY_DEPLOY_BLOCK=...
+#   fly secrets set HEARTBEAT_URL=...            # optional; omit and no heartbeat is sent
+#
+# ⚠ ALL FIVE OF THE FIRST GROUP ARE VALIDATED AT STARTUP and the process exits if any is
+# missing. FACTORY_DEPLOY_BLOCK was added to that validation in this change — it was
+# destructured but not checked, so on a fresh host a missing value fell through silently
+# and the indexer started from the wrong place. A silent wrong-start on a brand-new
+# deployment is the worst possible time for it.
+#
+# ⚠ SUPABASE_SERVICE_ROLE_KEY BYPASSES RLS. It is the one credential here that can write.
+# It belongs in Fly's secret store and nowhere else — not in this file, not in the image
+# (see .dockerignore), not in a shell history.

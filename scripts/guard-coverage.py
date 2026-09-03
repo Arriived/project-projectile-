@@ -30,6 +30,7 @@ import atexit
 import io
 import json
 import os
+import datetime
 import re
 import signal
 import subprocess
@@ -115,13 +116,57 @@ def main():
              for i, l in enumerate(lines)
              for m in [re.search(r"if \(!\(.*\)\) revert (\w+)\(", l)] if m]
 
+    # ── provenance ────────────────────────────────────────────────────────────
+    #
+    # A record of a run with no way to know WHICH run is not evidence. This file carried
+    # only mutation results -- no commit, no timestamp, no source path -- so the four
+    # surviving line numbers could not be checked against any particular version of the
+    # contract. A human added a _meta header once and the next run of THIS SCRIPT wiped it,
+    # which is why the script writes it rather than the human.
+    #
+    # ⚠ THE HEADER IS EXCLUDED FROM THE RESUME COUNT BELOW. `done` counts recorded SITES,
+    # and counting the header as a site would silently skip the first mutation on every
+    # resumed run -- a gap in the sweep that nothing would report.
+    def _meta_record():
+        try:
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL
+            ).decode().strip()
+        except Exception:
+            commit = "unknown"
+        try:
+            dirty = bool(subprocess.check_output(
+                ["git", "status", "--porcelain", "--", SRC], stderr=subprocess.DEVNULL
+            ).decode().strip())
+        except Exception:
+            dirty = None
+        return {
+            "_meta": "provenance for this sweep -- see CLAUDE.md section 5",
+            "sweep_commit": commit,
+            "source_file": SRC,
+            "source_dirty_at_start": dirty,
+            "recorded_at": datetime.datetime.now(datetime.timezone.utc)
+                .replace(microsecond=0).isoformat(),
+            "tool": "scripts/guard-coverage.py",
+            "warning": "line numbers are valid ONLY against source_file at sweep_commit; "
+                       "re-read the file rather than trusting them if the contract has moved",
+        }
+
     done = 0
     if os.path.exists(OUT):
-        done = sum(1 for _ in io.open(OUT, encoding="utf-8"))
+        # Count only real site records. The _meta line is provenance, not a result.
+        done = sum(
+            1 for line in io.open(OUT, encoding="utf-8")
+            if line.strip() and '"_meta"' not in line
+        )
         print("resuming: %d sites already recorded" % done, flush=True)
 
     print("guard sites: %d" % len(sites), flush=True)
     fh = io.open(OUT, "a", encoding="utf-8")
+    if done == 0:
+        # Fresh sweep: stamp it. On a resume the existing header already describes the run.
+        fh.write(json.dumps(_meta_record()) + "\n")
+        fh.flush()
     try:
         for n, s in enumerate(sites, 1):
             if n <= done:

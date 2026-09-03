@@ -252,6 +252,29 @@ BEGIN;
     sql += `-- not the SELECT. Recover from the dashboard or a pg_dump and add here.\n`;
   }
 
+  // ── applied-state stamp ─────────────────────────────────────────────────────
+  //
+  // ⚠ EMITTED BY THE GENERATOR, NOT ADDED BY HAND. A human appended this stamp to
+  // 000_base_schema.sql once and the next run of THIS SCRIPT silently removed it -- the
+  // file is regenerated wholesale, so anything hand-added to it is temporary by
+  // construction. The failure mode is silent UNDER-REPORTING in the migration record:
+  // schema_migrations simply never learns that 000 was applied, which is the exact gap
+  // migration 005 was created to close.
+  //
+  // Guarded with to_regclass so 000 can be applied before 005 exists (005 creates the
+  // table). An unguarded INSERT would make the base schema fail on any database that has
+  // not reached 005 -- turning a bookkeeping convenience into a hard ordering dependency.
+  sql += `
+-- ── applied-state stamp ───────────────────────────────────────────────────
+do $
+begin
+  if to_regclass('public.schema_migrations') is not null then
+    insert into public.schema_migrations (version) values ('000')
+    on conflict (version) do nothing;
+  end if;
+end $;
+`;
+
   fs.writeFileSync(OUT, sql);
   console.log(`wrote ${path.relative(path.join(__dirname, "..", ".."), OUT)}`);
   console.log(`  tables reconstructed: ${TABLES.join(", ")}`);
