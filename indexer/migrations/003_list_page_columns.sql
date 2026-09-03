@@ -326,3 +326,17 @@ GRANT SELECT ON public.tokens_with_volume TO anon, authenticated;
 -- Then restore the view from 000_base_schema.sql and re-run its GRANT. Dropping the
 -- columns without restoring the view leaves a view referencing columns that no longer
 -- exist; Postgres will refuse the DROP COLUMN until the view is dropped first.
+
+-- ── applied-state stamp ──────────────────────────────────────────────────────
+--
+-- ⚠ GUARDED with to_regclass, so this file can be applied in ANY order relative to
+-- 005 (which creates the table). An unguarded INSERT would make every migration below
+-- 005 fail on a database that has not reached 005 yet -- turning a tracking convenience
+-- into a hard ordering dependency, which is the opposite of what it is for.
+DO $$
+BEGIN
+  IF to_regclass('public.schema_migrations') IS NOT NULL THEN
+    INSERT INTO public.schema_migrations (version) VALUES ('003')
+    ON CONFLICT (version) DO NOTHING;
+  END IF;
+END $$;

@@ -194,3 +194,17 @@ REVOKE ALL ON public.indexer_state FROM anon, authenticated;
 --
 -- Expect the token rows. An empty array means anon cannot read the underlying tables and
 -- the frontend will show an empty list with no error.
+
+-- ── applied-state stamp ──────────────────────────────────────────────────────
+--
+-- ⚠ GUARDED with to_regclass, so this file can be applied in ANY order relative to
+-- 005 (which creates the table). An unguarded INSERT would make every migration below
+-- 005 fail on a database that has not reached 005 yet -- turning a tracking convenience
+-- into a hard ordering dependency, which is the opposite of what it is for.
+DO $$
+BEGIN
+  IF to_regclass('public.schema_migrations') IS NOT NULL THEN
+    INSERT INTO public.schema_migrations (version) VALUES ('000')
+    ON CONFLICT (version) DO NOTHING;
+  END IF;
+END $$;

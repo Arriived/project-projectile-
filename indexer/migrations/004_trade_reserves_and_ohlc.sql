@@ -173,3 +173,17 @@ GRANT SELECT ON public.token_candles_1m TO anon, authenticated;
 --
 -- The indexer writes both columns. Dropping them without reverting src/index.js makes
 -- every subsequent trade insert fail on the missing column rather than degrade.
+
+-- ── applied-state stamp ──────────────────────────────────────────────────────
+--
+-- ⚠ GUARDED with to_regclass, so this file can be applied in ANY order relative to
+-- 005 (which creates the table). An unguarded INSERT would make every migration below
+-- 005 fail on a database that has not reached 005 yet -- turning a tracking convenience
+-- into a hard ordering dependency, which is the opposite of what it is for.
+DO $$
+BEGIN
+  IF to_regclass('public.schema_migrations') IS NOT NULL THEN
+    INSERT INTO public.schema_migrations (version) VALUES ('004')
+    ON CONFLICT (version) DO NOTHING;
+  END IF;
+END $$;

@@ -300,4 +300,12 @@ console.log("\n── sell percentages ──");
 
 const total = 44;
 console.log(`\n${total - failures}/${total} checks passed`);
-if (failures) process.exit(1);
+// ⚠ process.exitCode, NOT process.exit(). process.exit() tears the event loop down
+// while the console.log lines above may still be flushing, and on Windows that races
+// libuv into "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)" and an exit code
+// of 127 -- a GREEN suite reported as a failed build, intermittently. Measured before
+// the fix: verify:slippage 0/127/127/127/127/0, verify:upload 0/127/0/0/0/127.
+// A gate that fails randomly trains a human to re-run until green, which is how a real
+// failure gets dismissed under pressure. Setting exitCode lets node exit naturally once
+// stdout has drained.
+if (failures) process.exitCode = 1;

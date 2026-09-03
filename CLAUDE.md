@@ -485,12 +485,54 @@ Verify Arc/Circle claims against `docs.arc.io` and `developers.circle.com`, neve
 | Block timestamps non-decreasing, not strictly increasing | Confirmed. Hence `allowBlocksWithSameTimestamp: true`. Sub-second blocks share a timestamp; use block number for ordering. |
 | Base fee paid to the beneficiary, not burned | Confirmed. |
 | Blob txs rejected; `BLOBHASH` 0; `BLOBBASEFEE` 1; EIP-4788 empty | Confirmed. We touch none of them. |
-| **Mainnet chainId 5042** | **UNSOURCED — MUST VERIFY.** From an unreliable secondary source. Circle documents **only testnet 5042002**. Do not put 5042 in the frontend, deploy config or anywhere else until confirmed. |
+| **Mainnet chainId 5042** | ✅ **PRIMARY-SOURCED — corrected 3 September 2026.** Previously recorded here as an unverified secondary-source claim. It is not: `MAINNET_CHAIN_ID = 5042` appears in `circlefin/arc-node`, `crates/shared/src/chain_ids.rs`, and v0.7.0's breaking-changes entry refers in prose to "mainnet (chain id `5042`)". Testnet remains `5042002`. Still do not hardcode it in the frontend — §10's fetch-and-verify-at-runtime rule is about deployment discipline, not about doubt over the number. |
 
 ## Zero8 — Arc Testnet, 3 September 2026, 15:00 UTC
 
-`BREAKING_CHANGES.md` confirms **no consensus-affecting behaviour changes**: it is
-node-operator config and CLI. The contract is unaffected and R15 stands.
+⚠ **THIS SECTION PREVIOUSLY SAID ZERO8 HAD "no consensus-affecting behaviour changes".
+THAT WAS WRONG, AND THE ERROR IS INSTRUCTIVE — corrected 3 September 2026.**
+
+Circle's own description (Arc House blog, `arc-testnet-v080-hardfork-2026-08-28`) is a
+**protocol-correctness upgrade that updates gas accounting and state-clearing semantics at
+the execution layer, without introducing new developer-facing APIs.** The old wording read
+"no new developer-facing APIs" as "nothing changes for us". **Gas accounting is not an API
+surface.** Every gas figure in this repo was invalidated by it, and nothing said so.
+
+⚠ **`BREAKING_CHANGES.md` IS NOT A LOCAL FILE AND CANNOT ANSWER THIS QUESTION.** It is
+`https://github.com/circlefin/arc-node/blob/main/BREAKING_CHANGES.md`. It has **no v0.8.0
+entry**, and by its own scope statement it never will have a useful one: every entry is
+tagged `[CLI]`, `[Config]` or `[Format]` and split between "For Validators" and "For Node
+Operators". It is a node-operator changelog. **There is no published description of what
+Zero8 changed for dapps, so measurement is the only source of truth** — see the
+re-measurement below and `scripts/measure-gas-post-zero8.js`.
+
+**MEASURED AFTER ACTIVATION, 3 September 2026 15:50 UTC** (activation was 15:00 UTC), on
+the live deployment:
+
+| | pre-Zero8 (recorded) | post-Zero8 (measured) |
+|---|---|---|
+| buy `eth_estimateGas` | 143,576 | **178,560** |
+| buy actual `gasUsed` | 194,372 | **167,436** |
+| actual / estimate | **1.354** — estimate 26% BELOW actual | **0.938** — estimate 6.6% ABOVE actual |
+| sell actual | 119,254 | 114,418 |
+| first-time approve | 47,110 | 46,463 |
+| exit (sell + approve) | 166,364 | **160,881** |
+
+⚠ **THE 26% ESTIMATOR SHORTFALL IS GONE AND INVERTED.** Every operation now estimates at
+or above actual (ratios 0.886–0.992). That shortfall was the ENTIRE stated justification
+for `GAS_LIMIT_MULTIPLIER_X10 = 30n`, so **the reason recorded in §11.5 is now obsolete
+even though the value is still defensible** — see §11.5.
+
+`scripts/smoke-r15.js` re-run post-Zero8: **14/14 passing.** The state-based assertions
+survived, which is exactly what they were rewritten for.
+
+⚠ **The revert text did NOT change.** This section predicted revm 38's `OutOfFunds`
+replacing `insufficient funds for gas * price + value`. Measured post-Zero8, the text is
+**still `insufficient funds for gas * price + value`**. The codes-first rule (§11.18) is
+unaffected and still correct — but the specific prediction was wrong, and nothing in the
+repo depended on either string.
+
+The contract is unaffected and R15 stands.
 
 **One thing reaches us, and only as a string.** The reth 2.2 / revm 38 upgrade changes the
 insufficient-balance error text — `insufficient funds for gas * price + value` becomes
@@ -847,8 +889,24 @@ The first thing tracking it exposed: the survivor line numbers in the table abov
 `if (!(...)) revert` statements; the doc's numbers pointed at a variable assignment and two
 closing braces, which are not guard sites at all. Corrected above.
 
-⚠ **The line numbers are only meaningful against the commit the sweep RAN on.** R12 and R17
-landed after it, so a future edit to `LFX1.sol` will silently invalidate them without
+⚠ **THIS PREVIOUSLY CLAIMED R12 AND R17 LANDED AFTER THE SWEEP. IT IS BACKWARDS —
+corrected 3 September 2026 by reconstruction, since the file records no commit.**
+
+Reading those four line numbers at each contract-touching commit settles it:
+
+| commit | L391 | L415 | L533 | L554 |
+|---|---|---|---|---|
+| `08be890` (pre-R12) | blank | assignment | blank | assignment |
+| `7ffd720` (R12) | `_ceilDiv` assignment | blank | `_ceilDiv` assignment | blank |
+| `dceebc0` (R17) | **guard** | **guard** | **guard** | **guard** |
+| HEAD | **guard** | **guard** | **guard** | **guard** |
+
+So **the sweep ran at or after `dceebc0` (R17), not before it.** `git diff dceebc0..HEAD --
+contracts/LFX1.sol` is empty, so the recorded numbers are valid at HEAD — but by luck
+rather than by record.
+
+⚠ **The line numbers are only meaningful against the commit the sweep RAN on**, so a future
+edit to `LFX1.sol` will silently invalidate them without
 invalidating the score. Re-read the file rather than trusting the numbers if the contract
 has moved.
 
@@ -930,7 +988,14 @@ command** or the hook is inert. Verified to actually block: with a lease present
 - Prefer restructuring over compiler flags (stack-too-deep → extract a function, never `viaIR`).
 - **Never claim it is bulletproof.** State what was tested, what was found, and what would still worry you with real money on it.
 - Arc's `eth_estimateGas` returns **no margin** — always send with headroom. This will hit the frontend.
-- Arc RPC requires `batchMaxCount: 1` in every raw ethers.js provider config.
+- Arc RPC: keep `batchMaxCount: 1` in raw ethers.js provider config — but ⚠ **the stated
+  reason was wrong and there is now a real number (corrected 3 September 2026).** Since
+  arc-node **v0.7.2**, `--arc.rpc.max-batch-entries` defaults to **100**, and an oversized
+  JSON-RPC batch is rejected with **`-32600`** before any per-entry handler runs. So Arc
+  does not reject batching as such; it caps it, and the cap is 100, not 1. **Multicall3 is
+  a different mechanism entirely** — one `eth_call` — and is unaffected by this limit.
+  The conservative setting is kept because viem defaults batching off anyway and nothing
+  has re-measured behaviour under load, not because batching fails.
   **⚠ WAS TRUE, NOW UNVERIFIED — keep the setting, distrust the reason.** Measured
   29 August 2026: a hand-rolled 2-request JSON-RPC batch to `https://rpc.testnet.arc.io`
   returned **HTTP 200 with both results** (`eth_chainId` → `0x4cef52`, `eth_blockNumber`),
@@ -1270,7 +1335,10 @@ reverted**. Quotes come from `quoteBuy`/`quoteSell` on the contract — §1.3.
 
     **Both files were parsed with the real PostgreSQL grammar** (`pgsql-parser`,
     libpg-query WASM) before applying — 003 is 9 statements preserving all 24 pre-existing
-    columns, 004 is 8. `003_ROLLBACK.sql` restores the previous view and its grants, with
+    columns, 004 is 8. `rollbacks/003_list_page_columns.ROLLBACK.sql` (moved out of the numbered
+    sequence 3 September 2026 — as `003_ROLLBACK.sql` it sorted BEFORE
+    `003_list_page_columns.sql`, so "apply everything in order" ran the rollback first)
+    restores the previous view and its grants, with
     the body extracted programmatically from `000_base_schema.sql` rather than retyped and
     proven column-for-column against the live view.
   - **The schema is now reproducible from the repo.** It was not: the base tables lived only
@@ -1630,16 +1698,36 @@ difference. PRICE MOVE was chosen because its misreading is the safe one: read a
 Both from real receipts (`app/scripts/measure-gas.mts`), not chosen. The old frontend sent a
 hardcoded 600,000 limit against a buy that consumed 194,372.
 
-**Limit = `estimate × 3.0`** (`GAS_LIMIT_MULTIPLIER_X10 = 30n`). Raised from 1.5 because 1.5
-was thinner than it reads: `estimateGas` returned **143,576** against **194,372** actually
-consumed — the estimate came in **26% BELOW reality**, so the ratio to cover is already
-1.354 and x1.5 leaves ~11% real headroom, not 50%. No measured buy triggered a
-**graduation**, which does strictly more work than anything in the sample. The asymmetry is
-total: unused gas is refunded, so an oversized limit costs a slightly higher balance bar;
-an undersized one fails the most important transaction in the product.
+**Limit = `estimate × 3.0`** (`GAS_LIMIT_MULTIPLIER_X10 = 30n`).
+
+⚠ **THE ORIGINAL JUSTIFICATION NO LONGER HOLDS — re-measured 3 September 2026, post-Zero8.**
+It was raised from 1.5 because `estimateGas` returned **143,576** against **194,372**
+consumed — the estimate came in **26% BELOW reality**, so the ratio to cover was 1.354 and
+x1.5 left ~11% real headroom, not 50%.
+
+**Zero8 changed gas accounting and that shortfall is gone and inverted.** Measured on the
+live deployment: buy estimate **178,560**, actual **167,436** — ratio **0.938**, i.e. the
+estimate now sits 6.6% ABOVE actual. Every operation measured the same way (0.886–0.992).
+
+**The value is kept at ×3.0 anyway, on the reason that survives:** no measured buy has ever
+triggered a **graduation**, which does strictly more work than anything in the sample — it
+seeds a pool, moves the LP, and writes the one-way state transition. The asymmetry is also
+unchanged: unused gas is refunded, so an oversized limit costs only a slightly higher
+balance bar, while an undersized one fails the most important transaction in the product.
+
+⚠ **Do not now "optimise" this down to ×1.5 citing the new ratios.** One sample per
+operation, taken 50 minutes after a hard fork, is not a basis for shaving headroom off the
+graduating buy. What changed is the ARGUMENT, not the conclusion — and the old argument
+must not be quoted again, because it is no longer true.
 
 **Reserve = 249,546 units**, sized on the **EXIT**, not on the limit. Worst observed sell
-**119,254** + first-time approve **47,110** = 166,364, plus 50%. It is the exit because
+**119,254** + first-time approve **47,110** = 166,364, plus 50%.
+
+✅ **Still correct post-Zero8, re-measured 3 September 2026.** The exit now costs
+**160,881** (sell 114,418 + first approve 46,463), so 249,546 covers it with **1.55x**
+margin — slightly more conservative than when it was set. No change needed.
+
+It is sized on the exit because
 that is R15's actual failure — a holder with 471 trillion tokens and 0.0016 USDC who could
 not afford to sell. And the exit is **two** transactions for a first-time seller:
 `sell()` takes tokens via `safeTransferFrom` (`LFX1.sol:577`), so an approve must land
