@@ -93,15 +93,14 @@ export function TokenCard({
         {degraded ? (
           <div className="tcard-figs hint">{t("common.unavailable")}</div>
         ) : token.graduated ? (
+          // ⚠ SAME REASON AS THE TOKEN PAGE, PLUS ONE MORE. Both figures came from the
+          // frozen virtual reserves, so both were a final curve price rather than a market
+          // price -- and they were the IDENTICAL number, which is doubly wrong once a token
+          // graduates: the 193M LP reserve becomes tradeable at that point, so market cap
+          // and FDV genuinely diverge. Showing one number twice implied they had been
+          // computed and agreed.
           <div className="tcard-figs">
-            <span>
-              {t("list.marketCap")} <Approx />
-              {fmt.usdcCompact(mcap)}
-            </span>
-            <span className="hint">
-              {t("list.fdv")} <Approx />
-              {fmt.usdcCompact(mcap)}
-            </span>
+            <span className="hint">{t("list.marketCapGraduated")}</span>
           </div>
         ) : (
           <>

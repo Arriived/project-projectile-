@@ -34,12 +34,32 @@ export function PriceAndProgress({ data }: { data: TokenData }) {
           and the grid re-flows. Nothing is rendered for it now: a dash or a placeholder
           would be a claim the data cannot back. */}
       <div className="stat-strip">
+        {/* ⚠ NO MARKET CAP ONCE GRADUATED, AND NO NUMBER IN ITS PLACE.
+            `graduate()` zeroes tokenReserves and realUsdcReserves (LFX1.sol:677-678) but
+            NOT the virtual reserves, and marketCapUsdc6 divides the virtual pair. So this
+            figure freezes at the final curve price and never moves again, while the real
+            price is whatever the pool says.
+
+            The value is REMOVED rather than relabelled. A number sitting in the market-cap
+            slot, in the same type, beside live figures, is read as a market cap however it
+            is captioned -- the same way the "~" marker fails to stop people acting on
+            indexer figures. There is nothing to misread if there is no number.
+
+            The real fix is reading the pool price, which is a feature and deliberately not
+            done here. Until then the page says where the price lives instead of guessing
+            at it. */}
         <div className="stat">
           <div className="stat-label">{t("price.marketCap")}</div>
-          <div className="stat-value">{mcap === undefined ? "…" : `${fmt.usdcCompact(mcap)} USDC`}</div>
+          {graduated ? (
+            <div className="stat-note">{t("price.marketCapGraduated")}</div>
+          ) : (
+            <div className="stat-value">{mcap === undefined ? "…" : `${fmt.usdcCompact(mcap)} USDC`}</div>
+          )}
         </div>
         <div className="stat">
           <div className="stat-label">{t("price.inTheCurve")}</div>
+          {/* Genuinely zero after graduation -- the contract zeroes it -- so the figure is
+              true and is left alone. The graduated note below explains where it went. */}
           <div className="stat-value">{`${fmt.usdcCompact(curve.realUsdcReserves)} USDC`}</div>
         </div>
         <div className="stat">

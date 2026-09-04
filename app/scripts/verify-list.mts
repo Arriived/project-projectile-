@@ -31,6 +31,7 @@ import {
   type ListToken,
 } from "../src/lib/tokenList.ts";
 import { formatUsdcCompact } from "../src/i18n/format.ts";
+import { readFileSync } from "node:fs";
 
 let failures = 0;
 const check = (label: string, pass: boolean, detail = "") => {
@@ -275,7 +276,103 @@ console.log("\n── compact market cap ──");
   );
 }
 
-const total = 39;
+
+console.log("\n── graduated: no stale market cap, and no invented one ──");
+// ⚠ SOURCE-TEXT CHECKS, AND THE WEAKNESS IS SPECIFIC. This repo has no DOM test runner and
+// adding one is out of scope, so these read the components rather than rendering them.
+// They prove the graduated branch does not FORMAT a market cap; they do not prove what a
+// browser paints. The rendering was verified by driving the state directly and
+// screenshotting it -- static tracing is what missed this bug in the first place.
+//
+// They are written to assert the exact thing that broke: graduate() zeroes tokenReserves
+// and realUsdcReserves (LFX1.sol:677-678) but NOT the virtual pair, and both market-cap
+// helpers divide the virtual pair -- so the figure freezes at the final curve price and
+// never moves again while the real price lives in the pool.
+const priceSrc = readFileSync(new URL("../src/components/token/PriceAndProgress.tsx", import.meta.url), "utf8");
+const cardSrc = readFileSync(new URL("../src/components/list/TokenCard.tsx", import.meta.url), "utf8");
+const listSrc = readFileSync(new URL("../src/routes/TokenList.tsx", import.meta.url), "utf8");
+
+// Strip comments first: every one of these files EXPLAINS the rule in prose that contains
+// the very strings being searched for. A checker that reads its own documentation is the
+// defect CLAUDE.md section 11.7 records for verify:claims.
+const strip = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+const price = strip(priceSrc);
+const card = strip(cardSrc);
+const list = strip(listSrc);
+
+check(
+  "G1  the token page gates its market-cap figure on graduated",
+  /graduated \?[\s\S]{0,200}marketCapGraduated/.test(price),
+  "the value must not render once the curve has closed"
+);
+/**
+ * The THEN branch of `<cond> ? ( … ) : (` — the graduated case only.
+ *
+ * ⚠ SLICING THE BRANCH IS THE WHOLE POINT. The first version of G2/G3 searched a fixed
+ * window after `graduated ?` and went red against CORRECT code, because it matched the
+ * `usdcCompact(mcap)` sitting in the ELSE branch — which is exactly where that call
+ * belongs. A check that cannot tell the two branches apart is asserting the wrong thing,
+ * and it would have been "fixed" by putting the number back.
+ */
+function thenBranch(src: string, cond: string): string {
+  const start = src.indexOf(cond);
+  if (start < 0) return "";
+  const from = src.indexOf("(", start + cond.length);
+  if (from < 0) return "";
+  let depth = 0;
+  for (let i = from; i < src.length; i++) {
+    if (src[i] === "(") depth++;
+    else if (src[i] === ")") {
+      depth--;
+      if (depth === 0) return src.slice(from + 1, i);
+    }
+  }
+  return "";
+}
+
+const priceGrad = thenBranch(price, "graduated ?");
+const cardGrad = thenBranch(card, "token.graduated ?");
+
+check(
+  "G2  the token page's GRADUATED branch renders no formatted market cap",
+  priceGrad.length > 0 && !/usdcCompact/.test(priceGrad) && /marketCapGraduated/.test(priceGrad),
+  "a number in the market-cap slot is read as a market cap however it is captioned"
+);
+check(
+  "G2b the LIVE branch still renders one, so this suppressed the right case",
+  /usdcCompact\(mcap\)/.test(price)
+);
+check(
+  "G3  the list card's GRADUATED branch renders no figure either",
+  cardGrad.length > 0 && !/usdcCompact/.test(cardGrad) && /marketCapGraduated/.test(cardGrad)
+);
+check(
+  "G4  the graduated card no longer prints FDV equal to market cap",
+  !/token\.graduated \?[\s\S]{0,300}list\.fdv/.test(card),
+  "after graduation the LP reserve becomes tradeable, so the two genuinely diverge"
+);
+
+console.log("\n── loading: a count is a claim ──");
+// ⚠ AN EMPTY LIST AND A FAILED QUERY MUST NOT LOOK THE SAME. Both counts rendered a
+// literal 0 while the query was still in flight, and the Graduated section additionally
+// rendered "None yet". Launch day legitimately looks empty, so a 0 shown before the data
+// arrives is indistinguishable from the real thing.
+check(
+  "G5  the graduated count is suppressed while loading",
+  /isLoading \? "—" : graduated\.length/.test(list),
+  "a dash is 'not known yet'; a 0 is an assertion"
+);
+check(
+  "G6  the explore count is suppressed while loading",
+  /isLoading \? "—" : live\.length/.test(list)
+);
+check(
+  "G7  the graduated empty line is behind the loading gate",
+  /isLoading \?[\s\S]{0,400}graduated\.length === 0 \?[\s\S]{0,120}graduatedEmpty/.test(list),
+  "'None yet' is a claim about data that has not arrived"
+);
+
+const total = 39 + 8;
 console.log(`\n${total - failures}/${total} checks passed`);
 // ⚠ process.exitCode, NOT process.exit(). process.exit() tears the event loop down
 // while the console.log lines above may still be flushing, and on Windows that races

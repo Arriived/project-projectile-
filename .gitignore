@@ -26,3 +26,5 @@ app/tsconfig.tsbuildinfo
 
 .vercel
 .env.*.local
+
+.env*.tmp

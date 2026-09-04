@@ -110,15 +110,35 @@ export function TokenList() {
         </div>
       )}
 
-      {/* GRADUATED — above live, and kept at zero. */}
+      {/* GRADUATED — above live, and kept at zero.
+
+          ⚠ THE COUNT AND THE EMPTY LINE ARE BOTH CLAIMS, AND NEITHER IS TRUE WHILE LOADING.
+          This section rendered "0" and "None yet — the first curve to reach its threshold
+          appears here" unconditionally, while Explore below correctly showed skeletons. On
+          a cold load, and for the ~15 seconds the chain fallback takes when the indexer is
+          unreachable, the page stated as fact something it had not yet been told.
+
+          That is the single most repeated trap in this project: an empty list and a failed
+          query look identical, and launch day legitimately looks empty. The count is
+          suppressed until the data has actually arrived rather than defaulted to zero --
+          a dash is honestly "not known yet"; a 0 is an assertion. */}
       <section className="list-section">
         <div className="list-head">
           <h2 className="list-h">
-            {t("list.graduatedHeading")} <span className="list-count">{graduated.length}</span>
+            {t("list.graduatedHeading")}{" "}
+            <span className="list-count">{isLoading ? "—" : graduated.length}</span>
           </h2>
         </div>
 
-        {graduated.length === 0 ? (
+        {isLoading ? (
+          <div className="tgrid">
+            {/* Matches Explore's treatment, so the two sections cannot disagree about
+                whether the page is still loading. */}
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div className="tcard tcard-skel" key={i} aria-hidden />
+            ))}
+          </div>
+        ) : graduated.length === 0 ? (
           <p className="hint list-empty">{t("list.graduatedEmpty")}</p>
         ) : (
           <>
@@ -140,7 +160,12 @@ export function TokenList() {
       <section className="list-section">
         <div className="list-head">
           <h2 className="list-h">
-            {t("list.exploreHeading")} <span className="list-count">{live.length}</span>
+            {t("list.exploreHeading")}{" "}
+            {/* ⚠ SAME CLAIM AS THE GRADUATED COUNT. The grid below already showed skeletons
+                while loading, but this heading still read "Explore 0" -- so the page was
+                simultaneously saying "still loading" and "there are none". A dash says the
+                one true thing: not known yet. */}
+            <span className="list-count">{isLoading ? "—" : live.length}</span>
           </h2>
         </div>
 

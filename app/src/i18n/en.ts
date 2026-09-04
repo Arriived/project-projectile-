@@ -127,6 +127,7 @@ export const en = {
     approxTooltip:
       "Approximate. This figure comes from the indexer, which rounds large numbers before the browser sees them. The token page reads the chain directly.",
     fdv: "FDV",
+    marketCapGraduated: "Price now comes from the pool",
     noTokens: "No tokens have been launched yet.",
     noTokensCta: "Launch the first one",
     noMatches: "Nothing matches “{query}”.",
@@ -316,6 +317,7 @@ export const en = {
       "At the threshold the curve closes and its liquidity moves to a Uniswap pool. The LP tokens are burned, so the liquidity cannot be withdrawn.",
     graduated: "Graduated.",
     graduatedBody: "Trading has moved to the DEX pool.",
+    marketCapGraduated: "Price now comes from the pool",
     viewOnExplorer: "View the token on the explorer ↗",
     poolBoost:
       "Pool boost: {amount} USDC will be added to the pool at graduation. It does not count toward the threshold above, and no holder receives it — it makes the pool deeper.",

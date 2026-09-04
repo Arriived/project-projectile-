@@ -1172,3 +1172,8 @@ code.addr-full {
   margin: 12px 0 0; font-size: 14px; line-height: 1.5; color: var(--muted);
   overflow-wrap: anywhere;
 }
+
+/* A stat slot that carries a sentence instead of a figure — used where a number would be
+   stale or invented (a graduated token's market cap). Deliberately NOT .stat-value: it
+   must not inherit the mono figure type, or it reads as data. */
+.stat-note { font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.35; }
