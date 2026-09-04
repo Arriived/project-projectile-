@@ -25,6 +25,7 @@ import {
 import { sellNetOut, minOutFromQuote, minOutForOfferedAmount, impactPct, quoteDivergencePct, sellAmountForPercent, SELL_PERCENTS } from "../src/lib/quotes.ts";
 import { tradeGate, graduationProgressBps, CurveState } from "../src/lib/curve.ts";
 import { snipeSchedule } from "../src/lib/snipe.ts";
+import { formatUsdcExact } from "../src/i18n/format.ts";
 
 let failures = 0;
 const check = (label: string, pass: boolean, detail = "") => {
@@ -298,7 +299,29 @@ console.log("\n── sell percentages ──");
   check("S8  the offered percents end at 100", SELL_PERCENTS[SELL_PERCENTS.length - 1] === 100);
 }
 
-const total = 44;
+const total = 44 + 7;
+
+console.log("\n── sub-cent USDC on the paths a user acts on ──");
+// ⚠ formatUsdcExact IS THE FORMATTER FOR VALUES THE USER ACTS ON -- the slippage floor,
+// the settled amount, available-to-trade. At dp=2 it rendered every sub-cent value as
+// "0.00", i.e. a real non-zero balance shown as nothing, on exactly those lines.
+//
+// It matters more here than on a normal exchange: launch prices are ~2.5e-6 USDC per
+// token, so ordinary small sells settle sub-cent. And R15 is literally this case -- a
+// holder left with 0.0016 USDC who could not afford to sell.
+//
+// The fixtures below are REAL magnitudes from this deployment, not round placeholders:
+// 1600 is R15's stranded holder, 6200 is the gas reserve at Arc's fee floor.
+check("TF1  R15's 0.0016 USDC does NOT render as 0.00", formatUsdcExact("en", 1600n) === "0.0016", formatUsdcExact("en", 1600n));
+check("TF2  one 6dp unit renders its real value", formatUsdcExact("en", 1n) === "0.000001", formatUsdcExact("en", 1n));
+check("TF3  a non-zero balance never formats to a zero string", formatUsdcExact("en", 1600n) !== "0.00" && formatUsdcExact("en", 1n) !== "0.00");
+check("TF4  exactly zero still renders 0.00", formatUsdcExact("en", 0n) === "0.00", formatUsdcExact("en", 0n));
+// Values at or above a cent must be untouched by the fix, or this trades one wrong
+// rendering for another.
+check("TF5  0.01 is unchanged", formatUsdcExact("en", 10_000n) === "0.01");
+check("TF6  246.78 is unchanged", formatUsdcExact("en", 246_778_295n) === "246.78");
+check("TF7  8,000.00 keeps its grouping and 2dp", formatUsdcExact("en", 8_000_000_000n) === "8,000.00");
+
 console.log(`\n${total - failures}/${total} checks passed`);
 // ⚠ process.exitCode, NOT process.exit(). process.exit() tears the event loop down
 // while the console.log lines above may still be flushing, and on Windows that races

@@ -77,7 +77,23 @@ for (const [label, raw] of [
 {
   // The observed 400: a single junk character reaching the gateway as `/ipfs/x`.
   const m = parseTokenMetadata("x");
-  check("M13 a bare junk string is not treated as an ipfs CID path", resolveMediaUri(m.image) === null || !(resolveMediaUri(m.image) ?? "").endsWith("/ipfs/x"), String(resolveMediaUri(m.image)));
+  // ⚠ THIS CHECK COULD NOT GO RED, AND THAT IS WHY IT IS WRITTEN THIS WAY NOW.
+  //
+  // It originally read `resolveMediaUri(m.image) === null || !(…).endsWith("/ipfs/x")` --
+  // an escape hatch so wide that a resolver returning "https://evil.example/" satisfied
+  // it. Tightening it to just the first disjunct did not help: `parseTokenMetadata("x")`
+  // returns `{}`, so `m.image` is undefined and `resolveMediaUri(undefined)` short-circuits
+  // on its first guard. The resolver's allowlist was never reached, so mutating the
+  // resolver left the check GREEN. It was a tautology restating M12.
+  //
+  // Proven, not assumed: making the resolver append any bare string to the gateway path
+  // did not fail it. Same defect class as S8 asserting the off-by-one it was meant to
+  // catch -- a check that cannot fail is not evidence.
+  //
+  // Now it feeds the RESOLVER directly, which is where the scheme allowlist lives and the
+  // only place this behaviour can actually change.
+  check("M13 a bare junk string produces no URL from the resolver", resolveMediaUri("x") === null, String(resolveMediaUri("x")));
+  check("M13a the parser also declines it, so it never reaches the resolver", m.image === undefined);
 }
 
 // ⚠ M13b IS A LIVE VALUE, NOT A HYPOTHETICAL. Three tokens on the deployed indexer store

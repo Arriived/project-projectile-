@@ -120,6 +120,30 @@ export function canBatchLaunchBuy(input: {
  *
  * Unknown shapes return false. A capability we cannot read is not a capability we have.
  */
+/**
+ * ── ⚠ MEASURED 4 SEPTEMBER 2026: NO WALLET REPORTS ARC. KEEP THIS PATH ANYWAY. ──
+ *
+ * Against a real wallet on Arc Testnet, connected, on the deployed preview:
+ *
+ *   await window.ethereum.request({ method: "wallet_getCapabilities", params: [account] })
+ *   -> { 0x1: {...}, 0x2105: {...}, 0x279f: {...}, 0x38: {...}, 0x89: {...} }
+ *      = Ethereum 1, Base 8453, Monad 10143, BNB 56, Polygon 137
+ *
+ * Arc Testnet is 5042002 = 0x4CEF52 and is ABSENT. Arc mainnet is 5042 = 0x13B2 and should
+ * be assumed absent too: the list is per-chain and curated, and Arc mainnet does not exist
+ * until 16 September.
+ *
+ * ⚠ THE BLOCKER IS NOT THE CHAIN. Arc supports EIP-7702 -- Arc's own docs say 7702,
+ * CREATE2 and EIP-2935 all behave as on Ethereum (CLAUDE.md section 9.1). What is missing
+ * is per-wallet, per-chain work: each wallet deploys its own delegation contract and then
+ * curates the chain into this list. Nobody has done that for Arc, and no amount of
+ * frontend work can.
+ *
+ * So this returns false today and the control stays hidden. THAT IS CORRECT AND THE GATE
+ * MUST STAY: sequential execution would create the token, then fail creatorLaunchBuy
+ * outside the ~3s window, destroying the allocation with no retry. Keeping the path costs
+ * nothing and it starts working the day any wallet adds Arc, with no code change.
+ */
 export function supportsAtomicBatch(caps: unknown, chainId: number): boolean {
   if (caps === null || typeof caps !== "object") return false;
   const perChain = (caps as Record<string, unknown>)[String(chainId)] as

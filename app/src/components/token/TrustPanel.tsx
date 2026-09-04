@@ -75,7 +75,10 @@ export function TrustPanel({ data }: { data: TokenData }) {
           {creatorBps === null ? (
             <>…</>
           ) : creatorBps === 0 ? (
-            <>{t("trust.creatorBoughtNone")}</>
+            <>
+              {t("trust.creatorBoughtNone")}
+              <span className="hint"> {t("trust.creatorBoughtNoneNote")}</span>
+            </>
           ) : (
             <strong>{t("trust.creatorBoughtPct", { pct: fmt.pct(creatorBps / 100) })}</strong>
           )}

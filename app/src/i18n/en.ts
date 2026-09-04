@@ -397,7 +397,19 @@ export const en = {
     sellFee: "Sell fee",
     ofItToCreator: "({pct} of it to the creator)",
     creatorBought: "Creator bought at launch",
-    creatorBoughtNone: "Nothing — the creator did not use their launch allocation.",
+    // ⚠ STATES THE FACT, NOT A MOTIVE. This read "the creator did not use their launch
+    // allocation", which implies a decision. Measured 4 September 2026: no wallet exposes
+    // EIP-5792 atomic batching on Arc, and the ordinary flow needs three sequential
+    // signatures inside a ~3 second window -- so on this chain today the allocation is
+    // unreachable, and every token reads the same regardless of what its creator wanted.
+    //
+    // The contract stores an AMOUNT and nothing else. It cannot tell "chose not to" from
+    // "could not", so neither can this copy, and the note below says so rather than
+    // guessing. Not phrased as a virtue either -- a short window is a design choice, not
+    // an achievement to advertise.
+    creatorBoughtNone: "None taken.",
+    creatorBoughtNoneNote:
+      "The launch allocation can only be claimed in the first seconds after creation. The contract records the amount, not whether the creator chose not to use it or was unable to.",
     creatorBoughtPct: "{pct} of curve supply",
     // The cap limits only the PRIVILEGED path; nothing stops a second address. Disclosure
     // is the protection, not the cap.

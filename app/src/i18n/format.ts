@@ -72,9 +72,29 @@ const USDC_COMPACT_FLOOR = 10_000;
  * rounding it UP would display a floor the contract will not meet.
  */
 export function formatUsdcExact(locale: Locale, usdc6: bigint, dp = 2): string {
-  return nf(locale, { minimumFractionDigits: dp, maximumFractionDigits: dp }).format(
-    Number(formatUnits(usdc6, USDC_ERC20_DECIMALS))
-  );
+  const n = Number(formatUnits(usdc6, USDC_ERC20_DECIMALS));
+
+  // ⚠ A SUB-CENT VALUE MUST NOT RENDER AS "0.00". This is the formatter documented for
+  // anything the user ACTS on -- the slippage floor, the settled amount, available to
+  // trade -- and at dp=2 every one of those showed a real non-zero balance as zero.
+  //
+  // It matters here more than on a normal exchange because launch prices are ~2.5e-6 USDC
+  // per token, so ordinary small sells genuinely settle sub-cent. And R15 is precisely
+  // this case: a holder left with 0.0016 USDC who could not afford to sell saw
+  // "0.00 USDC available", which reads as "you have nothing" rather than "you have
+  // something, but not enough for gas".
+  //
+  // The COMPACT formatter below already did this correctly, which made the pair backwards:
+  // the display figure was precise and the actionable one rounded to zero. Same rule, same
+  // 8dp ceiling, applied to both.
+  //
+  // Only values below one cent take this branch, so every figure that was already correct
+  // renders byte-identically.
+  if (n !== 0 && Math.abs(n) < 0.01) {
+    return nf(locale, { minimumFractionDigits: dp, maximumFractionDigits: 8 }).format(n);
+  }
+
+  return nf(locale, { minimumFractionDigits: dp, maximumFractionDigits: dp }).format(n);
 }
 
 /**
