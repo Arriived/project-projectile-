@@ -83,9 +83,35 @@ FROM (VALUES
 ) AS p(obj,priv)
 
 UNION ALL
+-- ── 6b. the VIEWS carry SELECT and nothing else ──────────────────────────────
+--
+-- Supabase grants INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER by default on every new
+-- object in public. Migration 000 revokes those on the base TABLES; the views were created
+-- afterwards and kept all six until 007. Neither view is auto-updatable (GROUP BY, window
+-- functions) so it was not exploitable -- but the grant layer is meant to be the first
+-- barrier, and the next view might be a simple one.
+--
+-- ⚠ BOTH DIRECTIONS ARE ASSERTED. Checking only that the writes are gone would pass on a
+-- database where SELECT was revoked too -- which returns zero rows with NO ERROR and looks
+-- exactly like launch day.
+SELECT 'view grant: anon CAN SELECT ' || v,
+       has_table_privilege('anon', 'public.' || v, 'SELECT')
+FROM unnest(ARRAY['tokens_with_volume','token_candles_1m']) AS v
+
+UNION ALL
+SELECT 'view grant: anon CANNOT ' || p.priv || ' ' || p.obj,
+       NOT has_table_privilege('anon', 'public.' || p.obj, p.priv)
+FROM (VALUES
+  ('tokens_with_volume','INSERT'),('tokens_with_volume','UPDATE'),('tokens_with_volume','DELETE'),
+  ('tokens_with_volume','TRUNCATE'),('tokens_with_volume','REFERENCES'),('tokens_with_volume','TRIGGER'),
+  ('token_candles_1m','INSERT'),('token_candles_1m','UPDATE'),('token_candles_1m','DELETE'),
+  ('token_candles_1m','TRUNCATE'),('token_candles_1m','REFERENCES'),('token_candles_1m','TRIGGER')
+) AS p(obj,priv)
+
+UNION ALL
 -- ── 7. applied-state ─────────────────────────────────────────────────────────
 SELECT 'migration recorded: ' || v,
        EXISTS (SELECT 1 FROM public.schema_migrations WHERE version = v)
-FROM unnest(ARRAY['000','001','002','003','004','005']) AS v
+FROM unnest(ARRAY['000','001','002','003','004','005','006','007']) AS v
 
 ORDER BY 2, 1;   -- FALSE rows sort first, so any failure is at the top.

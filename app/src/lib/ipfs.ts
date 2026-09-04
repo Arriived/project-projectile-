@@ -58,6 +58,20 @@ export function resolveMediaUri(uri: string | undefined | null): string | null {
     // `ipfs://<cid>/<path>` and the legacy `ipfs://ipfs/<cid>` both appear in the wild.
     const rest = trimmed.slice(7).replace(/^ipfs\//, "");
     if (!rest) return null;
+
+    // ⚠ THE PATH MUST LOOK LIKE A CID. Three live tokens store literally `ipfs://x` -- a
+    // valid scheme wrapped around a junk path -- and that produced the observed
+    // `.../ipfs/x` 400 on every page that rendered them. A scheme check alone cannot catch
+    // it: "x" is a perfectly well-formed URI path.
+    //
+    // Checked by SHAPE, not by decoding: a CIDv0 is 46 base58 characters starting `Qm`, a
+    // CIDv1 is ~59 base32 characters starting `b`. Anything shorter than 46 is neither.
+    // Deliberately a floor rather than a full parse -- this is a "do not ask the gateway
+    // for obvious garbage" guard, and rejecting a genuine CID because a future version is
+    // encoded differently would be our bug rather than the creator's.
+    const cid = rest.split("/")[0];
+    if (cid.length < 46 || !/^[A-Za-z0-9]+$/.test(cid)) return null;
+
     return `https://${gatewayHost()}/ipfs/${rest}`;
   }
 

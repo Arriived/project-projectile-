@@ -7,6 +7,7 @@
 
 import { useState } from "react";
 import { resolveMediaUri } from "../../lib/ipfs";
+import { parseTokenMetadata } from "../../lib/metadata";
 
 // Gateway resolution and the scheme allowlist moved to lib/ipfs.ts when the create flow
 // started PRODUCING ipfs:// URIs (lib/upload.ts). Two copies of a security allowlist is
@@ -25,7 +26,15 @@ export function TokenImage({
   square?: boolean;
 }) {
   const [failed, setFailed] = useState(false);
-  const src = resolveMediaUri(uri);
+  // ⚠ PARSE FIRST. `uri` is the raw metadata_uri field, and the create flow packs image,
+  // description and socials into an inline JSON document there -- so handing it straight to
+  // the gateway asked for `ipfs://{"image":...}` and rendered the placeholder on tokens
+  // whose image was uploaded and pinned perfectly well.
+  //
+  // Fixed HERE rather than at each call site because this component is used by both the
+  // token page and the list card: one parse, both surfaces, and no way to add a third
+  // caller that forgets.
+  const src = resolveMediaUri(parseTokenMetadata(uri).image);
 
   const style = square
     ? { width: "100%", aspectRatio: "1 / 1" }

@@ -213,7 +213,11 @@ export const en = {
     previewSymbol: "TICKER",
     previewThreshold: "Graduates at",
     previewSnipe: "Snipe tax decays over",
-    previewSnipeValue: "{seconds}s",
+    previewSnipeValue: "{seconds}s",    launchBuy: "Buy at launch (optional)",
+    launchBuyPlaceholder: "Amount in USDC",
+    launchBuyHint:
+      "Bought in the same transaction as the launch, untaxed, up to {pct}% of curve supply. This is a cap on this privileged buy only — it does not limit how much you can hold.",
+
     poolBoost: "Send my creator fees into the pool instead",
     poolBoostNote: "Deepens the pool at graduation by roughly 1-4%.",
     poolBoostTip:
@@ -296,6 +300,8 @@ export const en = {
     addDeclined: "Not added — your balance is unaffected.",
     addFailed: "The wallet refused the request — tap for details.",
     added: "Added.",
+    addUnconfirmed:
+      "Your wallet did not confirm the token was added. If no prompt appeared, add it manually using the contract address above.",
     addUnsupported: "Your wallet doesn’t support one-click adding — use the address above.",
     readFromChain:
       "Balances are read from {chain} directly, so they are correct even while your wallet is on another network.",

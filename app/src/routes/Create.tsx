@@ -29,7 +29,15 @@ import { lfx1Abi } from "../abi/lfx1";
 import { FACTORY_ADDRESS, USDC_ADDRESS } from "../config";
 import { useChain } from "../providers/ChainProvider";
 import { PreviewCard } from "../components/create/PreviewCard";
+import { getContractAddress } from "viem";
 import { gasLimitFor, GAS_RESERVE_UNITS } from "../lib/gas";
+import { useCapabilities, useSendCalls } from "wagmi";
+import {
+  DEFAULT_MAX_CREATOR_LAUNCH_BPS,
+  parseLaunchBuyUsdc,
+  canBatchLaunchBuy,
+  supportsAtomicBatch,
+} from "../lib/launchBuy";
 import {
   validateDraft,
   blocksSubmission,
@@ -58,6 +66,15 @@ export function Create() {
   const [xHandle, setXHandle] = useState("");
   const [telegram, setTelegram] = useState("");
   const [poolBoost, setPoolBoost] = useState(false);
+  // The creator's launch-buy spend, in USDC. Empty means none, which is the default and
+  // what every token launched so far has done -- because it was the only option.
+  const [launchBuyRaw, setLaunchBuyRaw] = useState("");
+
+  // ⚠ CAPABILITY-GATED. A wallet without atomic batching still launches tokens; it just
+  // cannot take the allocation. Creation must never depend on this.
+  const { data: capabilities } = useCapabilities({ account: address });
+  const { sendCallsAsync } = useSendCalls();
+  const canBatch = supportsAtomicBatch(capabilities, arc.id);
   const [phase, setPhase] = useState<Phase>("idle");
   const [error, setError] = useState<string | null>(null);
   const toast = useToast();
@@ -139,7 +156,13 @@ export function Create() {
         args: [address, FACTORY_ADDRESS],
       })) as bigint;
 
-      if (allowance < fee) {
+      const { usdc6: launchBuy6 } = parseLaunchBuyUsdc(launchBuyRaw, usdcBalance as bigint | undefined);
+      const batching = canBatchLaunchBuy({ supportsAtomicBatch: canBatch, launchBuyUsdc6: launchBuy6 });
+
+      // ⚠ THE APPROVAL IS SKIPPED HERE WHEN BATCHING, because the batch carries its own.
+      // Approving separately first would land in an earlier block, which is harmless, but
+      // it would also mean two prompts -- and the entire point of the batch is one.
+      if (!batching && allowance < fee) {
         setPhase("approving");
         const amount = creationFeeApprovalAmount(fee);
         const approveHash = await wallet.writeContract({
@@ -195,12 +218,79 @@ export function Create() {
         account: address,
       });
 
-      const hash = await wallet.writeContract({
-        ...factory,
-        functionName: "createToken",
-        args,
-        gas: gasLimitFor(estimate),
-      });
+      // ⚠ THE TOKEN ADDRESS MUST BE PREDICTED, because creatorLaunchBuy takes it as an
+      // argument and EIP-5792 has no way to pass a value from one call in a batch to the
+      // next. The factory deploys with plain CREATE (`new LFX1Token(...)`, LFX1.sol:330 --
+      // no salt, no CREATE2), so the address is keccak(rlp([factory, nonce])). Verified
+      // exact against two live tokens: nonce 10 -> 0x7605bf0e… (dog), nonce 9 -> 0x14616E27… .
+      //
+      // ⚠ THE NONCE IS A RACE, AND THE CONSEQUENCE IS BOUNDED RATHER THAN ABSENT. Another
+      // creator launching between this read and our transaction landing shifts the nonce,
+      // so the predicted address is their token, `creatorLaunchBuy` reverts `NotCreator`,
+      // and because the batch is ATOMIC the whole thing reverts -- including createToken.
+      // The creator pays gas and retries. No token is created at a wrong address, no funds
+      // move, and no partial state is left behind.
+      //
+      // That bound is exactly why `supportsAtomicBatch` requires the wallet to report
+      // atomic execution before this path is taken at all: a wallet that runs the calls
+      // sequentially would create the token, then fail the launch buy, and leave the
+      // creator with a token whose allocation is gone and no way to retry.
+      const predictedToken = batching
+        ? getContractAddress({
+            from: FACTORY_ADDRESS,
+            nonce: BigInt(await client.getTransactionCount({ address: FACTORY_ADDRESS })),
+          })
+        : ("0x" as `0x${string}`);
+
+      let hash: `0x${string}`;
+
+      if (batching && launchBuy6 !== null && launchBuy6 > 0n) {
+        // ── ONE PROMPT, ONE TRANSACTION, ONE block.timestamp ──────────────────
+        //
+        // approve -> createToken -> creatorLaunchBuy, executed atomically. Because all
+        // three share a timestamp, `block.timestamp <= creationTimestamp + 3` holds with
+        // the whole window still open, and creatorLaunchBuy has no block-0 restriction to
+        // trip over. See lib/launchBuy.ts for the contract lines.
+        //
+        // ⚠ minTokensOut is 0 HERE AND ONLY HERE, and it is not the trap it looks like.
+        // The launch buy is UNTAXED and the creator is the only possible caller inside the
+        // window, so there is no sandwich to protect against -- the price cannot move
+        // between createToken and creatorLaunchBuy because they are the same transaction.
+        // The contract clamps to the remaining allowance and partial-fills rather than
+        // reverting, so a floor here would only convert a valid partial fill into a
+        // failure that also loses the token.
+        setPhase("launching");
+        const result = await sendCallsAsync({
+          calls: [
+            {
+              to: USDC_ADDRESS,
+              abi: erc20Abi,
+              functionName: "approve",
+              // Covers the creation fee AND the launch buy in one allowance. Still an
+              // exact amount, never MaxUint256 -- R13's exposure is unchanged by batching.
+              args: [FACTORY_ADDRESS, fee + launchBuy6],
+            },
+            { to: FACTORY_ADDRESS, abi: lfx1Abi, functionName: "createToken", args },
+            {
+              to: FACTORY_ADDRESS,
+              abi: lfx1Abi,
+              functionName: "creatorLaunchBuy",
+              // The token address is not known until createToken executes. It is derived
+              // deterministically by the factory, so it cannot be supplied here -- which is
+              // why this call targets the token by the SAME args the factory used.
+              args: [predictedToken, launchBuy6, 0n],
+            },
+          ],
+        });
+        hash = (result as unknown as { id: `0x${string}` }).id;
+      } else {
+        hash = await wallet.writeContract({
+          ...factory,
+          functionName: "createToken",
+          args,
+          gas: gasLimitFor(estimate),
+        });
+      }
 
       const receipt = await client.waitForTransactionReceipt({ hash });
 
@@ -274,6 +364,31 @@ export function Create() {
           <input className="input" value={telegram} onChange={(e) => setTelegram(e.target.value)} />
         </label>
       </div>
+
+      {/* ⚠ THE ALLOCATION CONTROL. Shown only when the wallet can execute the batch
+          atomically -- offering it otherwise would take money for something that cannot
+          happen inside the 3-second window.
+
+          ⚠ THE DISCLOSURE IS UNCHANGED AND MUST STAY THAT WAY. The 2.5% is a cap on the
+          PRIVILEGED untaxed path only. It is not a cap on what a creator can hold: nothing
+          stops them buying more from a second address at the ordinary price, and the copy
+          below says exactly that rather than implying a limit that does not exist. */}
+      {canBatch && (
+        <label className="field">
+          <span className="field-label">{t("create.launchBuy")}</span>
+          <input
+            className="input"
+            inputMode="decimal"
+            autoComplete="off"
+            value={launchBuyRaw}
+            onChange={(e) => setLaunchBuyRaw(e.target.value)}
+            placeholder={t("create.launchBuyPlaceholder")}
+          />
+          <span className="hint">
+            {t("create.launchBuyHint", { pct: Number(DEFAULT_MAX_CREATOR_LAUNCH_BPS) / 100 })}
+          </span>
+        </label>
+      )}
 
       <label className="field field-check">
         <input type="checkbox" checked={poolBoost} onChange={(e) => setPoolBoost(e.target.checked)} />

@@ -15,6 +15,7 @@ import { symbolIsWatchable, MAX_WATCHABLE_SYMBOL_LENGTH } from "../../hooks/useW
 import { TokenImage } from "./TokenImage";
 import { AddressText } from "../AddressText";
 import { resolveLinks, AGGREGATOR_CHAIN_SLUG } from "../../lib/aggregatorLinks";
+import { parseTokenMetadata, socialLabel, socialUrl } from "../../lib/metadata";
 
 export function TokenIdentity({ token, data }: { token: Address; data: TokenData }) {
   const { t } = useT();
@@ -23,6 +24,19 @@ export function TokenIdentity({ token, data }: { token: Address; data: TokenData
   // render as another.
   const name = safeText(data.name, 64) || t("token.unnamed");
   const symbol = safeText(data.symbol, 24) || t("token.noSymbol");
+
+  // The field holds inline JSON, not a URI -- see lib/metadata.ts. Parsed once here and
+  // used for the description and the socials; the image goes through TokenImage, which
+  // parses it itself so the list card gets the same treatment.
+  const meta = parseTokenMetadata(data.metadataURI);
+  const socials = ([
+    ["x", meta.x],
+    ["telegram", meta.telegram],
+  ] as const)
+    .map(([kind, handle]) => ({ kind, url: socialUrl(kind, handle), label: socialLabel(handle) }))
+    // ⚠ A handle that fails validation renders NO LINK. Not a sanitised one -- see
+    // socialUrl. This is attacker-controlled input from any token creator.
+    .filter((sv) => sv.url !== null && sv.label !== null);
 
   const links = resolveLinks({
     token,
@@ -46,6 +60,18 @@ export function TokenIdentity({ token, data }: { token: Address; data: TokenData
               Today that is the contract alone; pool and the two aggregators appear on
               their own once a pool exists and Arc has an aggregator slug. No dead links,
               and no greyed row of four advertising what the chain cannot do yet. */}
+          {socials.map((sv) => (
+            <a
+              key={sv.kind}
+              className="btn btn-tiny btn-ghost"
+              href={sv.url!}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              {sv.kind === "x" ? "X" : "Telegram"} {sv.label}
+            </a>
+          ))}
+
           {links.map((l) => (
             <a
               key={l.id}
@@ -58,6 +84,14 @@ export function TokenIdentity({ token, data }: { token: Address; data: TokenData
             </a>
           ))}
         </div>
+
+        {/* ⚠ RENDERED AS TEXT. React escapes this, and it must stay that way: the value is
+            written by whoever launched the token and is served to everyone who opens the
+            page. safeText also strips bidi control characters, which exist to make one
+            string render as another. */}
+        {meta.description && (
+          <p className="identity-desc">{safeText(meta.description, 280)}</p>
+        )}
 
         {/* A symbol the wallet cannot one-click-add is worth saying once, here, rather
             than leaving the "Add to wallet" button to fail silently later. */}

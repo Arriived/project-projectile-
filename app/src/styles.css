@@ -1166,3 +1166,9 @@ code.addr-full {
    scroll. Clipping the box breaks the feedback loop so clientWidth is the column width. */
 .chart-box, .chart-skeleton { height: 260px; width: 100%; overflow: hidden; min-width: 0; }
 .chart-note { margin-top: 8px; }
+
+/* Token description from metadata. Plain text, never HTML — creator-written and on chain. */
+.identity-desc {
+  margin: 12px 0 0; font-size: 14px; line-height: 1.5; color: var(--muted);
+  overflow-wrap: anywhere;
+}

@@ -90,6 +90,11 @@ export function YourPosition({ token, data }: { token: Address; data: TokenData 
             </details>
           )}
           {state === "added" && <span className="hint">{t("position.added")}</span>}
+          {/* ⚠ Distinct from BOTH "added" and "failed". The wallet took the request and
+              said nothing -- claiming success there is what made this silent. */}
+          {state === "unconfirmed" && (
+            <span className="hint">{t("position.addUnconfirmed")}</span>
+          )}
           {state === "unsupported" && (
             <span className="hint">{t("position.addUnsupported")}</span>
           )}

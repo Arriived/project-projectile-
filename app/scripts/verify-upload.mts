@@ -129,22 +129,30 @@ check(
 console.log("\nupload — what goes on chain");
 
 // U17. A gateway hostname written on chain is a permanent dependency on one domain.
-check("U17 an upload yields an ipfs:// URI, not a gateway URL", cidToTokenUri("bafyTEST") === "ipfs://bafyTEST");
+// ⚠ A REAL CIDv1, NOT A PLACEHOLDER. These fixtures said "bafyTEST" -- 8 characters, a
+// string no CID can ever be -- and they passed only because resolveMediaUri did not yet
+// check that the path could be a CID. When it started checking (three live tokens store
+// literally `ipfs://x`, producing a real 400), U18 and U25 went red against CORRECT code.
+//
+// That is the third fixture in this repo found carrying a property the real object lacks,
+// after the wagmi rdns connector doubles and the chain-guard injected provider. The value
+// below is the actual CID of the live `dog` token.
+check("U17 an upload yields an ipfs:// URI, not a gateway URL", cidToTokenUri("bafkreihh3qfwu5rdzie7zfdfjoc3onnyw3oxgodmyueuujrlnigufl4noq") === "ipfs://bafkreihh3qfwu5rdzie7zfdfjoc3onnyw3oxgodmyueuujrlnigufl4noq");
 check(
   "U17b cidToTokenUri never emits an http(s) URL",
-  !/https?:/.test(cidToTokenUri("bafyTEST"))
+  !/https?:/.test(cidToTokenUri("bafkreihh3qfwu5rdzie7zfdfjoc3onnyw3oxgodmyueuujrlnigufl4noq"))
 );
 
 console.log("\nupload — the render-side scheme allowlist");
 
-check("U18 ipfs:// resolves through a gateway", (resolveMediaUri("ipfs://bafyTEST") ?? "").endsWith("/ipfs/bafyTEST"));
+check("U18 ipfs:// resolves through a gateway", (resolveMediaUri("ipfs://bafkreihh3qfwu5rdzie7zfdfjoc3onnyw3oxgodmyueuujrlnigufl4noq") ?? "").endsWith("/ipfs/bafkreihh3qfwu5rdzie7zfdfjoc3onnyw3oxgodmyueuujrlnigufl4noq"));
 check("U19 https: passes through unchanged", resolveMediaUri("https://x.test/a.png") === "https://x.test/a.png");
 check("U20 javascript: is refused", resolveMediaUri("javascript:alert(1)") === null);
 check("U21 blob: is refused", resolveMediaUri("blob:https://x.test/abc") === null);
 check("U22 data:text/html is refused", resolveMediaUri("data:text/html,<script>") === null);
 check("U23 data:image is allowed", resolveMediaUri("data:image/png;base64,AAAA") !== null);
 check("U24 a bare string is refused", resolveMediaUri("not-a-url") === null);
-check("U25 legacy ipfs://ipfs/<cid> is normalised", (resolveMediaUri("ipfs://ipfs/bafyTEST") ?? "").endsWith("/ipfs/bafyTEST"));
+check("U25 legacy ipfs://ipfs/<cid> is normalised", (resolveMediaUri("ipfs://ipfs/bafkreihh3qfwu5rdzie7zfdfjoc3onnyw3oxgodmyueuujrlnigufl4noq") ?? "").endsWith("/ipfs/bafkreihh3qfwu5rdzie7zfdfjoc3onnyw3oxgodmyueuujrlnigufl4noq"));
 
 console.log("\ndeploy — the routing and build settings this feature depends on");
 

@@ -28,7 +28,29 @@ export const MAX_WATCHABLE_SYMBOL_LENGTH = 11;
  * balance dropped, nothing arrived, and the UI said the same quiet thing it says when
  * someone simply clicks no.
  */
-export type WatchState = "idle" | "pending" | "added" | "declined" | "failed" | "unsupported";
+export type WatchState =
+  | "idle"
+  | "pending"
+  | "added"
+  | "declined"
+  | "failed"
+  | "unsupported"
+  /**
+   * ⚠ THE FOURTH FAILURE MODE, AND THE ONE THE OTHER THREE COULD NOT SEE.
+   *
+   * The split into declined/failed/unsupported fixed a `catch {}` that reported every
+   * error as "declined". It did not help here, because THIS IS NOT AN ERROR: the request
+   * resolves, nothing throws, and no prompt appears.
+   *
+   * EIP-747 specifies `true` on success. The old line was
+   * `resolved === false ? "declined" : "added"`, so `undefined`, `null` and any other
+   * non-false value were reported as ADDED -- a success claim over a no-op. The button
+   * appeared to do nothing and said nothing was wrong, because as far as the app was
+   * concerned nothing was.
+   *
+   * Reported honestly instead: the wallet took the request and did not confirm it.
+   */
+  | "unconfirmed";
 
 /**
  * What actually happened on the last attempt, for diagnosis.
@@ -93,10 +115,17 @@ export function useWatchAsset() {
 
         const resolved = await provider.request({ method: "wallet_watchAsset", params });
 
-        // The return value is NOT a source of truth (MetaMask/core #880 -- its behaviour
-        // when the token is already tracked is unspecified). Treated as a hint for the
-        // label only; nothing is gated on it.
-        const outcome: WatchState = resolved === false ? "declined" : "added";
+        // ⚠ ONLY `true` IS SUCCESS. EIP-747 specifies a boolean true when the asset was
+        // added; `false` is an explicit decline. Everything else -- undefined, null, a
+        // resolved promise carrying nothing -- is the wallet acknowledging the call
+        // WITHOUT confirming it did anything, and the previous code called that "added".
+        //
+        // That is how a button came to produce no prompt and no error: it was reporting
+        // success. Nothing is gated on this value (MetaMask/core #880 leaves the
+        // already-tracked case unspecified), but the LABEL must not claim more than the
+        // wallet said.
+        const outcome: WatchState =
+          resolved === true ? "added" : resolved === false ? "declined" : "unconfirmed";
         setState(outcome);
         setAttempt({ params, providerInfo, resolved, outcome });
       } catch (e) {
