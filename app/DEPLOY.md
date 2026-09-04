@@ -1,7 +1,13 @@
 # Deploying `app/` to Vercel
 
-**Preview deployments only.** Nothing here points at the production domain.
-`ballista.trading` keeps serving the old landing page until the operator says otherwise.
+⚠ **SUPERSEDED — THIS IS LIVE IN PRODUCTION.** This line read "Preview deployments only.
+Nothing here points at the production domain." That was true until 4 September 2026 and is
+no longer. **`https://ballista.trading` now serves this app**, verified HTTP 200 at the time
+of writing, along with `ballista.vercel.app`. The old landing page is gone from the apex.
+
+See **"The live production deployment"** at the foot of this file for what is actually
+configured. The rest of the document — the rewrite, the env-var rules, the safety grep — is
+unchanged and still applies; only the "preview only" framing was wrong.
 
 ## ⚠ THIS IS NO LONGER A PURELY STATIC BUILD
 
@@ -137,3 +143,92 @@ origin as the app. Asserted by `verify:upload` U30.
 2. `<meta name="google-site-verification" content="HVHUslal_…">` in `index.html`
 
 Keep both. Losing either does not warn you.
+
+
+---
+
+## The live production deployment (recorded 4 September 2026)
+
+Verified from this machine at the time of writing.
+
+| | |
+|---|---|
+| production URL | `https://ballista.trading` — **HTTP 200** |
+| alias | `https://ballista.vercel.app` — **HTTP 200** |
+| Vercel project | `ballista` under `moadadas-projects` |
+| Root Directory | **`app`** |
+
+⚠ **Root Directory must stay `app`.** The repo root is a Hardhat project; building from
+there produces contracts, not a site.
+
+⚠ **`vercel.json` lives at `app/vercel.json` and is read RELATIVE TO THE ROOT DIRECTORY.**
+A copy at the repo root would be ignored silently.
+
+⚠ **A project's FIRST deployment always goes to production**, whatever flags are passed.
+Every subsequent one is a preview unless `--prod` is given. Do not assume a first
+`vercel deploy` is safe because you did not ask for production.
+
+Verified live: `https://ballista.trading/google3af9e8ceff8d4db2.html` returns the
+verification string, **not** the app shell — so the SPA rewrite's dot-exclusion is working
+in production, not just in the check.
+
+### Environment variables — five, names only
+
+Set in **Production**, and the same five again scoped to **Preview**:
+
+| name | kind |
+|---|---|
+| `VITE_SUPABASE_URL` | Config |
+| `VITE_SUPABASE_ANON_KEY` | Config |
+| `VITE_WALLETCONNECT_PROJECT_ID` | Config |
+| `VITE_PINATA_GATEWAY` | Config |
+| `PINATA_JWT` | **Secret** |
+
+⚠ **`PINATA_JWT` IS STORED AS A SECRET, SO `vercel env pull` CANNOT RETRIEVE IT.** It writes
+the literal string `[SENSITIVE]` in its place. **The only copy is outside Vercel.** Losing it
+means re-issuing the key at Pinata, not recovering it from the platform.
+
+### Two CLI traps that cost real time
+
+⚠ **The Vercel CLI truncates long values pasted at its prompt.** A long secret entered
+interactively is silently cut short, and the failure surfaces later as an upstream auth
+error rather than as a paste problem. **Long secrets go in through the dashboard.**
+
+⚠ **Piping a value to stdin makes the CLI's interactive confirmations unanswerable** — it
+consumes the pipe as the answer and hangs or picks wrong. There is no clean scripted path
+for a long secret; use the dashboard.
+
+### ⚠ `vercel env pull` writes more than your variables — do not round-trip it
+
+The file it produces also contains **Vercel system variables**: `VERCEL`, `VERCEL_ENV`,
+`VERCEL_OIDC_TOKEN`, `VERCEL_GIT_*`, and Turbo/NX settings (`TURBO_CACHE`, `NX_DAEMON`, …).
+
+**Never paste that whole file back into the dashboard.** Setting `VERCEL_ENV=preview` in
+Production is actively wrong, and `VERCEL_OIDC_TOKEN` is a live credential. Only the four
+`VITE_` lines are yours.
+
+### ⚠ A near-miss worth keeping
+
+`.env.production.tmp` and `.env.production.tmp.txt` were both created at the **repo root**
+during this session, both containing real secrets (`PINATA_JWT`, `VERCEL_OIDC_TOKEN`, the
+Supabase anon key). `.gitignore` matched **neither** until `.env*.tmp` was added.
+
+⚠ **`.env*.tmp` STILL DOES NOT MATCH THE `.txt` VARIANT.** Verified with
+`git check-ignore` at the time of writing:
+
+```
+.env.production.tmp        IGNORED
+.env.production.tmp.txt    NOT IGNORED     <- a git add -A would stage secrets
+```
+
+Both files have since been deleted, so nothing is exposed today. The pattern gap is real
+and unfixed.
+
+### Deployment Protection is OFF
+
+"Require Log In" was turned **off** so `curl` checks and phone testing would work, and it is
+**still off**. That is why the health and verification checks above can be run at all.
+
+⚠ **Reconsider before mainnet.** An open preview surface is also an open surface for anyone
+who finds the URL, and a wallet extension has already flagged the `*.vercel.app` host as
+phishing (see CLAUDE.md).

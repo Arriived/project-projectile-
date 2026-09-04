@@ -15,7 +15,7 @@
 | indexer | Code is fixed and correct (§11.11) but ⚠ **runs on a laptop and nothing supervises it.** Live mode now polls `eth_getLogs`; it must never go back to a subscription. |
 | database | Migrations **000 + 001 + 002 + 003 + 004 all applied.** RLS re-verified with the **anon** key: **11/11**. View returns **5 rows / 34 columns**, `trades` **13 rows** (13 with `block_time`, 3 with reserve snapshots), `token_candles_1m` **3 candles**. |
 | frontend | **BUILT, and the create flow SHIPS — now with image upload.** React + Vite + wagmi + viem in `app/`. `/`, `/t/:address`, `/about`, `/create`. Price chart, toasts, focus states, Pinata uploads. ⚠ **No longer a purely static build**: `app/api/sign-upload.ts` is a serverless function (§11.17). Entry bundle **228.37 kB gzip**; the chart is a **55.20 kB lazy chunk** loaded only on a token page. |
-| ⚠ deployment | **Nothing is deployed anywhere.** Vercel preview config exists (`app/vercel.json`, `app/DEPLOY.md`) and has never been run. |
+| ✅ deployment | **LIVE IN PRODUCTION — this row said "nothing is deployed anywhere" until 4 September 2026.** Frontend at **`https://ballista.trading`** (Vercel project `ballista`, Root Directory `app`); indexer at **`https://ballista-indexer.fly.dev/health`** (Fly app `ballista-indexer`, one machine, `iad`). Both verified HTTP 200 this session. Full detail in `app/DEPLOY.md` and `indexer/RUNBOOK.md` — **read those before touching either**, they carry traps that cost real deploys. |
 
 **That HEAD is stale the moment anything is committed on top of it.** It records where
 this file was last updated, not where you are. `git rev-parse --short HEAD` is ground
@@ -30,8 +30,12 @@ the indexer, click through with a real wallet, and write migration 003. All thre
 003 and 004 are applied, and **all three write paths are proven on real MetaMask (§11.15)**
 — which closes the item every prior session had to record as unproven.
 
-**The project is now feature-complete and operationally unstarted.** That is the shape of
-the remaining risk, and it is not the shape it had before.
+⚠ **SUPERSEDED AGAIN, 4 September 2026. IT IS NOW DEPLOYED.** This section said the project
+was "feature-complete and operationally unstarted". Both the frontend and the indexer are
+live in production and healthy — see the deployment row above.
+
+**The ranked resume point is now §12 at the foot of this file. Read that, not the numbered
+list below**, which is kept only because items 2-4 in it are still open.
 
 **1. DEPLOY IT SOMEWHERE. STILL THE TOP ITEM — the deploy has NOT been run.**
 Everything around it is now checked rather than merely written: `app/DEPLOY.md` carries
@@ -1883,7 +1887,7 @@ operational gaps are now the project's real risk rather than the code.
 
 | item | state |
 |---|---|
-| **NOTHING IS DEPLOYED ANYWHERE** | Still the largest gap. `app/vercel.json` and `app/DEPLOY.md` exist and have **never been run**. No hosting, no domain, no preview URL. **What changed 2 September:** the config is now checked rather than merely written — the safety grep was run on real build output (74 files, one JWT, `role: anon`, zero `service_role`, zero source maps), the favicon set is present and dimension-verified, and the SPA rewrite's two exclusions are asserted at build time and red-proved. The deploy itself remains un-run. |
+| ~~NOTHING IS DEPLOYED ANYWHERE~~ → **DEPLOYED 4 September 2026** | Frontend on Vercel at `ballista.trading`, indexer on Fly at `ballista-indexer`. See `app/DEPLOY.md` and `indexer/RUNBOOK.md`. **The pre-deploy note is kept below because its CHECKS are still the ones that matter — read it as history, not as current state.** *(Historical, 2 September:)* the config is now checked rather than merely written — the safety grep was run on real build output (74 files, one JWT, `role: anon`, zero `service_role`, zero source maps), the favicon set is present and dimension-verified, and the SPA rewrite's two exclusions are asserted at build time and red-proved. The deploy itself remains un-run. |
 | **No runbook, no rollback plan, no user docs** | None exist. Not started, not scheduled. Mainnet is 16 September. |
 | **The indexer runs on a laptop** | No host, no supervisor, no external alerting. The code is correct and fails loudly now (§11.11), but a process that dies on a closed laptop is still dark. The liveness check is head-relative and exits(1); nothing restarts it. |
 | **Mobile: FIRST PASS DONE, unproven on real hardware** | ⚠ *This row read "never tested — not once". Corrected 2 September 2026.* All four routes were driven at **375×812** and MEASURED rather than eyeballed: **zero horizontal overflow on `/`, `/about`, `/create` and `/t/:address`**. The card grid and trade panel — the two surfaces this row predicted would break — do not. `.input` was already 16px/44px, so iOS zoom-on-focus was largely handled before this session. **Exactly one regression found and fixed, my own**: the new `.upload-uri` at 12px was the single text field on `/create` that would have triggered Safari's zoom-and-stay-zoomed. **Still open:** six pre-existing controls sit under the 44px touch floor (nav links 22px, Connect 40px), and **nothing has been opened on a real handset** — an emulated viewport tests layout and nothing else: not touch latency, not the on-screen keyboard resizing the viewport, and not a wallet's in-app webview, which is where most memecoin trading actually happens. |
@@ -2368,3 +2372,201 @@ rebuild may cause a contract change. `scripts/verify-frontend-txshapes.js` must 
 because it is the check that proves the rebuild lost nothing.
 
 `REACT_REBUILD.md` holds the spec, the phase plan, and the twenty-one known traps.
+
+
+---
+
+# 12. THE RESUME POINT — written 4 September 2026, HEAD `866e08d`
+
+⚠ **APPENDED, NOT A REWRITE.** Everything above this line is untouched. This file has lost
+three sections to a rewrite before (commit `2d92cfe` dropped the fee structure, the snipe
+tax table and "Other mechanics"; they were restored later). **Append and amend. Never
+rewrite.**
+
+Everything in this section was **verified against the repo, the chain, the live database or
+a live HTTP request** at the time of writing, except where marked UNVERIFIED. The section
+ends with an explicit list of what could not be checked.
+
+## 12.1 It is deployed. That is new.
+
+| | |
+|---|---|
+| frontend | `https://ballista.trading` — HTTP 200, verified |
+| alias | `https://ballista.vercel.app` — HTTP 200, verified |
+| indexer | `https://ballista-indexer.fly.dev/health` — `healthy: true`, lag **1 block**, verified |
+
+**`app/DEPLOY.md` and `indexer/RUNBOOK.md` carry the operational detail and the traps.
+Read them before touching a deploy.** The three that cost the most time:
+
+* The Fly deploy command in the runbook **was wrong** and is now corrected. The build
+  context is a **positional argument** (`flyctl deploy indexer …`), and **`--ha=false` is
+  required** — it defaults to true and overrides `fly.toml`, which is how Fly created two
+  indexers on the first deploy despite one being pinned in three places.
+* A Vercel project's **first** deployment always goes to production, whatever flags say.
+* `PINATA_JWT` is a Vercel **Secret**, so `vercel env pull` returns `[SENSITIVE]`. **The
+  only copy is outside Vercel.**
+
+## 12.2 The quote goes stale after a trade — ⚠ OPEN BUG, REPRODUCED ON PRODUCTION
+
+**This is the most serious open defect in the product and it is not fixed.**
+
+Reproduced on `ballista.trading`. After a sell that nearly emptied a curve, a second sell
+**34 seconds later** displayed:
+
+```
+In the curve:       0.000001 USDC
+Estimated receive:  0.000001 USDC
+Minimum received:   0.000001 USDC
+```
+
+It **settled at 6.08 USDC** — wrong by roughly six orders of magnitude.
+
+Re-tested against a settled curve: estimate 4.90, settled 4.90, exact. **The quote math is
+correct. This is staleness.** Verified in source: `app/src/hooks/useQuote.ts` sets
+`QUOTE_POLL_HOT_MS = 1_000` while the curve is inside the snipe window and
+`QUOTE_POLL_COLD_MS = 30_000` after it — so **for up to 30 seconds after any trade the panel
+quotes against reserves that have moved.**
+
+⚠ **The slippage floor protected the user** — the trade could not execute below what was
+shown. The harm is a confident wrong number that a person would act on, not a loss.
+
+A fix probably means invalidating the quote on an observed `Trade` event rather than waiting
+for the next poll. **Not attempted.**
+
+## 12.3 Arc facts confirmed from primary sources this session
+
+* **`--rpc.gascap` default dropped 50M → 30M in arc-node v0.7.2.** Not previously recorded.
+* ⚠ **arc-node v0.7.0 switched address rendering to `0x`-prefixed lowercase hex and states
+  EIP-55 checksums are not used.** The app normalises case on both sides everywhere it
+  compares (verified). The **indexer** uses raw PostgREST `.eq()` against checksummed
+  strings and the database holds checksummed values — **self-consistent today**, so nothing
+  is broken. It is a latent mismatch the day any write comes from a raw log topic.
+
+## 12.4 The creator launch buy is unreachable in practice — measured, not assumed
+
+The EIP-5792 batch **does** reach the launch window; the mechanism is sound and the code is
+correct. Two facts make it work, and the second is easy to miss:
+
+* One atomic transaction has one `block.timestamp`, so `createToken` sets
+  `creationTimestamp = t` and `creatorLaunchBuy` tests `t <= t + window`.
+* ⚠ **`creatorLaunchBuy` has NO `creationBlock` restriction** where `buy()` and `sell()`
+  both do — re-verified this session, **zero** `creationBlock` references in its body. That
+  exemption is deliberate and without it a same-block batch would revert.
+
+The token address is predicted from `keccak(rlp([factory, nonce]))` because the factory
+uses plain `CREATE`. **Verified exact against two live tokens.** The nonce race is bounded
+by atomicity: another launch shifts the nonce, `creatorLaunchBuy` reverts `NotCreator`, and
+the whole batch reverts including `createToken` — the creator pays gas and retries.
+
+⚠ **But no wallet offers it on Arc.** Measured against a real wallet on Arc Testnet,
+`wallet_getCapabilities` returned Ethereum, Base, Monad, BNB and Polygon. **Arc
+(`0x4CEF52`) was absent.** So the control is correctly hidden and the allocation cannot be
+taken today. ⚠ **It could not be established which wallet answered** — Phantom wins
+`window.ethereum` in a two-extension environment. **Unresolved.**
+
+The blocker is **not** the chain: Arc supports EIP-7702. It is per-wallet, per-chain
+delegation deployment, which no frontend change can affect.
+
+## 12.5 Graduation gas has NEVER been measured
+
+⚠ **This is the largest unmeasured number in the product, and it is the transaction that
+moves the entire pot.** Not before Zero8, not after. Measuring it needs 8,000 USDC of buys
+to cross the threshold and the test wallet holds ~200.
+
+It is also the whole remaining justification for `GAS_LIMIT_MULTIPLIER_X10 = 30n` (verified
+still `30n` in `app/src/lib/gas.ts:31`): the 26% estimator shortfall that originally
+justified ×3.0 is gone post-Zero8, and what survives is that no measured buy has ever
+triggered a graduation, which does strictly more work.
+
+**How to measure it:** deploy a throwaway factory with a tiny graduation threshold, buy
+across it, record the receipt.
+
+## 12.6 ⚠ Three patterns promoted to rules — each has now bitten more than once
+
+**RULE: fixtures use real-shaped values, never placeholder strings.**
+Three fixtures have been found carrying properties the real object lacks — the wagmi `rdns`
+connector doubles (real wagmi never sets `rdns`; discovered connectors carry `id =
+"io.metamask"`), the chain-guard injected provider, and `bafyTEST` as a CID (8 characters;
+no CID can be). Each passed while the real thing failed. **A fixture that cannot occur in
+production is not a test of production.**
+
+**RULE: mutate the thing the check asserts about, not something upstream of it.**
+Two checks have been found asserting the bug. `S8` read *"exactly 5% does NOT warn"* and
+passed, pinning an off-by-one in place. `M13` **could not go red at all** — the input never
+reached the code under test, so mutating the resolver left it green. **A check that cannot
+fail is not evidence.** Prove the red, do not assume it.
+
+**RULE: strip comments before a checker reads source.**
+The self-matching-comment trap has fired **three times** — `verify:claims` matching
+`/Uniswap\s*v/i` against its own explanatory prose, and twice since. Each checker
+rediscovered the fix independently. ⚠ **Proposed, not built: a shared `stripComments()`
+helper** in a common module rather than a fourth private copy.
+
+## 12.7 Confirmed-open items — all verified this session
+
+| item | state |
+|---|---|
+| Stale quote after a trade | **OPEN**, §12.2, reproduced on production |
+| Graduation gas unmeasured | **OPEN**, §12.5 |
+| `.env.example` omits `MAINNET_RPC_URL` | confirmed — `.env` defines it and `hardhat.config.js` reads it |
+| `frontend/` still tracked | **4 files**, holds a committed ten-year `role: anon` Supabase JWT at `terminal.html:418`. Public by design, but §7C says delete the directory and it never happened |
+| `ballista project.zip` | confirmed **tracked**, 43 KB binary at the repo root |
+| `app/api/` outside the TS project | `app/tsconfig.json` has `"include": ["src"]`, so `tsc -b` **never type-checks the serverless function** |
+| No `engines` / `.nvmrc` at the repo root | confirmed absent. `verify:*` needs Node ≥22. ⚠ The **indexer's** floor is Supabase's own `engines: >=22.0.0`, not `--experimental-strip-types` |
+| Explore sort ranks graduated tokens by a stale market cap | reported, **deliberately not changed** |
+| Reown project ID not allowlisted | `api.web3modal.org/…/project-limits` 403, `pulse.walletconnect.org/batch` 400. Config, not code |
+| ⚠ Wallet extension flagged the `*.vercel.app` preview as phishing | **not yet tested on `ballista.trading`.** Blockaid / MetaMask / Phantom review takes days and could not start until the domain served the app — which it now does |
+| zh-Hans translation | ⚠ **7 of 330 keys** (counted this session — the figure "239" in circulation is stale). `SHIPPED_LOCALES = ["en"]`, so it is reported, not enforced; moving it to shipped turns on a hard gate |
+| `.gitignore` gap | ⚠ `.env*.tmp` matches `.env.production.tmp` but **NOT** `.env.production.tmp.txt` — verified with `git check-ignore`. Both files existed at the repo root with real secrets and are now deleted. **The pattern gap is real and unfixed.** |
+
+## 12.8 What to do next, ranked
+
+1. **Terms of Use and Privacy Policy.** Moad is sourcing the documents. **Do not write legal
+   text.** The gate mechanism is buildable once they exist.
+2. **The contract deployment runbook. It does not exist.** Needs: constructor arguments with
+   values, router address, treasury address, who signs, in what order, what is verified
+   between steps, and rollback. ⚠ Pre-flight must `eth_getCode` **every** address and abort
+   on empty — **and the probe must first be validated against three known-good addresses**,
+   because a probe that returns empty for everything proves nothing.
+3. **Measure graduation gas** (§12.5).
+4. ⚠ **Multicall3 on Arc mainnet — cannot be checked before the 16th.** If viem's `arc`
+   entry declares the canonical address and mainnet has no code there, **every read on every
+   page fails** and it looks like an RPC outage. Belongs in the pre-flight, with an
+   env-driven kill switch for batching.
+5. **The stale-quote bug** (§12.2).
+6. **Registrar hardening:** lock, WHOIS privacy, 2FA at Porkbun, and a second domain at a
+   different registrar.
+7. **Regenerate the Healthchecks.io ping URL before mainnet** — it is a credential and has
+   been pasted into a terminal.
+8. **A second Goldsky Edge key** for launch-day bursts; per-IP tiers are per key.
+9. **zh-Hans** needs a translator, not a session.
+
+**Provider decision is MADE — do not reopen it.** Goldsky Edge at launch, our own indexer,
+Turbo in October as a resilience layer. ⚠ **Edge passes filter methods through to the node**,
+so `eth_newFilter` will return `-32603` on mainnet exactly as on testnet and **the polling
+design stays correct**. The `getLogs` range cap on Arc mainnet is **still unanswered** —
+default 20K, heavier chains 1K; Goldsky has the question with engineering.
+
+## 12.9 ⚠ What this section could NOT verify
+
+Recorded as gaps rather than guesses, because this file has carried three conflicting commit
+hashes at once and an unmarked guess is worse than an admitted hole.
+
+* **Which wallet answered `wallet_getCapabilities`.** Phantom wins `window.ethereum`. The
+  measurement stands; the attribution does not. Disambiguate with
+  `window.ethereum.isMetaMask` / `.isPhantom` / `.providers?.length`.
+* **The Vercel dashboard state** — environment-variable scopes, Secret-vs-Config kinds, and
+  Deployment Protection being off. Taken from the operator's report; there is no CLI
+  read-back for a Secret, by design. **Not independently verified from this machine.**
+* **The Fly secret list and the Healthchecks.io configuration.** Same reason — reported, not
+  read back.
+* **`schema_migrations` contents.** `anon` is correctly denied (verified: HTTP 401), and
+  there is no Postgres connection string anywhere in the repo, so the table could not be
+  read from here. ⚠ **Reported and NOT verified: it holds 000–007, and 000–005 were
+  backfilled by hand in one statement — so `applied_at` for those is when they were
+  STAMPED, not when they were applied. Do not read that column as a timeline.**
+* **That migrations 006 and 007 were actually applied.** Their *effects* were verified — both
+  views return rows to `anon` and refuse `INSERT` — but the stamp rows themselves were not
+  read.
+* **The 828 MB upload figure and the flyctl trap details.** Reported by the operator from
+  the deploy session. `flyctl v0.4.97` **was** confirmed on this machine.

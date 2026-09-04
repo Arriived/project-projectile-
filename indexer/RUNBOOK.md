@@ -113,9 +113,35 @@ fresh host with secrets set one at a time it is exactly what happens.
 
 ### Deploy
 
+⚠ **THE COMMAND BELOW IS THE ONE THAT WORKS. The obvious one does not.** Run from the
+**repo root**:
+
 ```
-fly deploy --config indexer/fly.toml --dockerfile indexer/Dockerfile
+flyctl deploy indexer --config fly.toml --dockerfile Dockerfile --app ballista-indexer --ha=false
 ```
+
+Three things were learned by doing, and each cost a failed deploy:
+
+1. **`indexer` is a POSITIONAL argument — the build context, not a flag.** It also makes
+   `--config` and `--dockerfile` relative to that directory, which is why they are bare
+   filenames here. Running `flyctl deploy` from the repo root without it uploads the whole
+   repo (**828 MB** observed) and then fails on `COPY src/`, because there is no `src/` at
+   the root.
+
+2. **`--build-context` does not exist** on flyctl v0.4.97 (the version this was done with).
+   Do not reach for it.
+
+3. ⚠ **`--ha=false` IS REQUIRED, and `fly.toml` cannot express it.** `--ha` defaults to
+   **true** and OVERRIDES the config. `fly.toml` pins one machine in three places
+   (`auto_stop_machines`, `auto_start_machines`, `min_machines_count`) and Fly created **two
+   machines anyway** on the first deploy. Two indexers fight over the checkpoint — see the
+   note below. Recovered with `flyctl scale count 1`.
+
+⚠ **Fly silently lowers `grace_period`.** `fly.toml` asks for `30m`; the deploy prints a
+warning and applies **1 minute**. The 30 minutes exists because `/health` correctly reports
+unhealthy during historical backfill, so a long first backfill on a fresh host can be killed
+mid-flight. Watch the deploy output for that warning, and if a first deploy loops, that is
+the cause — widen it at the platform, never raise `MAX_HEAD_LAG_BLOCKS`.
 
 ⚠ **`strategy = "immediate"` is not a preference.** It stops the old machine before
 starting the new one. Fly's default rolling deploy briefly runs two indexers, and two
@@ -228,3 +254,47 @@ cheerfully forever.
 
 If `HEARTBEAT_URL` is unset the indexer runs normally and logs that once. Monitoring must
 never be able to prevent the service from starting.
+
+
+## The live deployment (recorded 4 September 2026)
+
+Verified from this machine at the time of writing, not recalled.
+
+| | |
+|---|---|
+| app | `ballista-indexer` |
+| region | `iad` |
+| size | `shared-cpu-1x`, 512 MB |
+| machines | **one** — confirm after every deploy, see above |
+| health | `https://ballista-indexer.fly.dev/health` |
+
+Health at the time of writing: `healthy: true`, head `60470202`, checkpoint `60470201`,
+**lag 1 block**.
+
+### Secrets actually set (names only)
+
+The five the indexer validates at startup, plus `HEARTBEAT_URL`:
+
+```
+SUPABASE_URL  SUPABASE_SERVICE_ROLE_KEY  FACTORY_RPC_URL
+FACTORY_ADDRESS  FACTORY_DEPLOY_BLOCK  HEARTBEAT_URL
+```
+
+### Observed on the first production run
+
+Worth keeping because it is what a healthy cold start looks like:
+
+* backfilled **~37,883 blocks in about 90 seconds**
+* **suppressed the heartbeat while behind** — logged
+  `heartbeat SUPPRESSED — lag 37883 blocks` — which is the dead-man's switch working, not a
+  fault
+* then reported healthy at **3 blocks behind**
+
+### External monitoring
+
+**Healthchecks.io**, check named `ballista indexer`: 5-minute period, 5-minute grace.
+
+⚠ **THE PING URL IS A CREDENTIAL.** Anyone holding it can keep the check green while the
+indexer is dead — which is precisely the failure the heartbeat exists to detect, re-created
+one layer up. It has been pasted into a terminal and lives in Fly secrets.
+**Regenerate it before mainnet.**
