@@ -20,6 +20,7 @@
 // Run: npm run verify:address
 
 import { readFileSync } from "node:fs";
+import { stripComments } from "./lib/strip-comments.mts";
 import {
   ADDRESS_LENGTH,
   EXACT_ADDRESS_RE,
@@ -107,7 +108,7 @@ const cssRaw = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8
 // That is the same defect CLAUDE.md §11.7 records for verify:claims, where /Uniswap\s*v/i
 // matched the string "NO UNISWAP VERSION" in the checker's own copy. A checker must read
 // the rules, never the prose about the rules.
-const css = cssRaw.replace(/\/\*[\s\S]*?\*\//g, "");
+const css = stripComments(cssRaw);
 // ⚠ `.addr-full`, not `.addr`. A pre-existing `.addr` rule (13px muted) styles the
 // truncated wallet address in WalletBar, and a full-address class named `.addr` would
 // silently restyle it. The regexes must name the specific class or they will happily

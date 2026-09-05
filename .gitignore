@@ -1,6 +1,4 @@
 ﻿node_modules/
-.env
-.env.local
 artifacts-manual/
 artifacts/
 cache/
@@ -25,8 +23,20 @@ app/dist/
 app/tsconfig.tsbuildinfo
 
 .vercel
-.env.*.local
 
-.env*.tmp
-
-.env*.tmp.txt
+# ⚠ ONE PATTERN, NOT A LIST OF THE VARIANTS WE HAPPEN TO HAVE CREATED.
+#
+# This replaced `.env`, `.env.local`, `.env.*.local`, `.env*.tmp` and `.env*.tmp.txt`.
+# That list was assembled one incident at a time and still missed everything it had not
+# yet been bitten by: `.env.production.tmp.bak`, `.env.prod.backup`, `.env.production.txt`
+# and `.env.local.tmp.json` were all verified UNIGNORED with `git check-ignore` while the
+# list looked comprehensive.
+#
+# The list also produced a documentation failure worth remembering: `.env*.tmp.txt` was
+# added in commit dc7e083, in the SAME commit whose prose stated the gap was "real and
+# unfixed" -- written from an earlier measurement and never re-measured.
+#
+# `.env*` matches the whole class, including variants nobody has invented yet. The
+# negation keeps the one file that must stay tracked.
+.env*
+!.env.example

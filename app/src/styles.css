@@ -261,6 +261,54 @@ a:hover { opacity: 0.7; }
 .tab.on { color: var(--text); border-color: var(--accent); background: var(--soft); font-weight: 600; }
 .tab:disabled { opacity: 0.4; cursor: not-allowed; }
 
+/* ── buy is green, sell is red ─────────────────────────────────────────────────
+   Only --pos and --neg, which already exist and are already theme-paired. No new
+   hue, and specifically nothing moved toward the lime green every competing
+   launchpad uses -- being unlike them is recorded as an asset, not an accident.
+
+   ⚠ COLOUR IS NEVER THE ONLY SIGNAL. `.tab.on` keeps all three of its existing
+   colour-independent cues -- font-weight 600, the --soft background, and a border
+   where inactive tabs have a faint one -- and gains a 2px underline bar. Desaturate
+   the page completely and the active tab is still the bold one, on a lighter ground,
+   with a bar under it. The colour is confirmation, not information.
+   `aria-selected` carries the same fact to assistive tech.
+
+   ⚠ CONTRAST IS MEASURED, NOT ASSUMED, and the reason `color: var(--bg)` works for
+   BOTH themes is that the tokens already encode the inversion: --pos is DARK on a
+   light ground and LIGHT on a dark one, while --bg does the opposite. A single
+   declaration therefore lands the right way up in both:
+       light buy  #f3f3f0 on #1f6b3a  5.86:1     dark buy  #111111 on #56b077  7.08:1
+       light sell #f3f3f0 on #a32b2b  6.43:1     dark sell #111111 on #d97070  5.85:1
+   All AA or better. Picking white or near-black outright fails half of these --
+   white on #56b077 is 2.67:1 and near-black on #a32b2b is 2.64:1. */
+
+.tab-buy.on  { color: var(--pos); border-color: var(--pos); }
+.tab-sell.on { color: var(--neg); border-color: var(--neg); }
+.tab.on { position: relative; }
+.tab-buy.on::after,
+.tab-sell.on::after {
+  content: ""; position: absolute; left: 22%; right: 22%; bottom: -1px;
+  height: 2px; border-radius: 2px; background: currentColor;
+}
+
+/* Presets follow the active side. Outline rather than fill: four solid green pills
+   above the amount box would out-shout the primary action, and the figures are what
+   the panel is for. */
+.presets-buy  .btn-tiny { color: var(--pos); border-color: var(--pos); }
+.presets-sell .btn-tiny { color: var(--neg); border-color: var(--neg); }
+.presets-buy  .btn-tiny:hover:not(:disabled),
+.presets-sell .btn-tiny:hover:not(:disabled) { background: var(--soft); }
+.presets-buy  .btn-tiny:disabled,
+.presets-sell .btn-tiny:disabled { color: var(--muted); border-color: var(--line); }
+
+/* The primary action takes the side's colour as a solid fill. */
+.btn-buy  { background: var(--pos); border-color: var(--pos); color: var(--bg); }
+.btn-sell { background: var(--neg); border-color: var(--neg); color: var(--bg); }
+/* ⚠ Override .btn-primary:hover, which hardcodes #000 -- on a green fill that reads
+   as "disabled", and in dark mode it is nearly invisible against the ground. */
+.btn-buy:hover:not(:disabled)  { background: var(--pos); border-color: var(--pos); filter: brightness(1.08); }
+.btn-sell:hover:not(:disabled) { background: var(--neg); border-color: var(--neg); filter: brightness(1.08); }
+
 .presets { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
 .trade-input {
   width: 100%; padding: 11px; font-size: 17px; background: var(--card);
@@ -1077,18 +1125,21 @@ code.addr-full {
 /* ── dark mode ────────────────────────────────────────────────────────────────
    DERIVED FROM THE LIGHT TOKENS, NOT INVENTED. The light palette is a warm
    near-neutral (#f3f3f0 is off-white with a hint of yellow, not blue-grey), so
-   the dark one is the same character inverted: a warm near-black, not a cool
-   slate and emphatically not the dark-green-and-lime every competing launchpad
-   uses. Same hue family, inverted lightness, same restraint -- three accent
-   colours only, used sparingly, so the one coloured thing on a page of figures
-   still means something.
+   the dark one is NEUTRAL -- this table once described an inverted WARM ramp
+   (#14140f/#ecece6/#8f8f86/#2f2f29/#1f1f1a/#1a1a15) and that is no longer what
+   ships: at #14140f the channels are R20 G20 B15, a 5-point red-over-blue bias
+   that reads brown-black. Every dark value below now has R = G = B exactly, and
+   --bg is the light theme's --text exactly -- neutral by construction, not by
+     taste. Still emphatically NOT the dark-green-and-lime every competing
+     launchpad uses, and still three accent colours only. `verify:theme` asserts
+     the neutrality and the light/dark pairing.
 
-     --bg    #f3f3f0  ->  #14140f   warm off-white     -> warm off-black
-     --text  #111111  ->  #ecece6   near-black         -> near-white
-     --muted #777777  ->  #8f8f86   mid grey, both ways
-     --line  #d6d6d1  ->  #2f2f29   hairline, one step from bg either way
-     --soft  #e9e9e5  ->  #1f1f1a   the "slightly off bg" fill
-     card    #ffffff  ->  #1a1a15   one step lighter than bg, as white is one
+     --bg    #f3f3f0  ->  #111111   warm off-white     -> NEUTRAL near-black
+     --text  #111111  ->  #ededed   near-black         -> near-white
+     --muted #777777  ->  #8f8f8f   mid grey, both ways
+     --line  #d6d6d1  ->  #2e2e2e   hairline, one step from bg either way
+     --soft  #e9e9e5  ->  #1e1e1e   the "slightly off bg" fill
+     card    #ffffff  ->  #191919   one step lighter than bg, as white is one
                                     step lighter than #f3f3f0
 
    The three hues are lightened rather than re-picked, because #1f6b3a on a dark
@@ -1102,12 +1153,32 @@ code.addr-full {
    be able to override the OS preference in both directions. The provider stamps
    the attribute; prefers-color-scheme only supplies the INITIAL value. */
 :root[data-theme="dark"] {
-  --bg: #14140f;
-  --text: #ecece6;
-  --muted: #8f8f86;
-  --line: #2f2f29;
-  --soft: #1f1f1a;
-  --accent: #ecece6;
+  /* ⚠ NEUTRAL, NOT INVERTED-WARM. These were derived by inverting the warm off-white
+     ground (#f3f3f0), which is a principled derivation that produced a bad result: at
+     #14140f the channels are R20 G20 B15, a 5-point red-over-blue bias that reads as
+     brown-black rather than as dark. Warmth that flatters a near-white page does not
+     survive inversion -- on a light ground it is a tint on something bright, on a dark
+     ground it is the whole impression.
+
+     Every value below has R = G = B exactly, so there is no hue to drift. Nothing is
+     tinted toward green either: the dark-green launchpad look is the template every
+     competitor uses, and being unlike them is recorded as an asset (CLAUDE.md
+     positioning).
+
+     --bg is the light theme's --text exactly. That is not a coincidence and it is worth
+     keeping: it makes the pair neutral BY CONSTRUCTION rather than by taste.
+
+     Contrast was measured, not assumed, and improves on every pair:
+       text on bg     15.58 -> 16.13   muted on bg   5.67 -> 5.84
+       --pos on bg     6.93 -> 7.08 (AA -> AAA)   --neg on bg   5.72 -> 5.85
+     ⚠ PriceChart's PALETTE.dark mirrors --line/--muted and must move with these; the
+     chart library cannot read CSS variables. */
+  --bg: #111111;
+  --text: #ededed;
+  --muted: #8f8f8f;
+  --line: #2e2e2e;
+  --soft: #1e1e1e;
+  --accent: #ededed;
 
   --warn: #cfa049;
   --warn-bg: #2a2114;
@@ -1115,7 +1186,7 @@ code.addr-full {
   --pos: #56b077;
   --neg: #d97070;
 
-  --card: #1a1a15;
+  --card: #191919;
 }
 
 /* Light keeps white cards; dark uses the token. Declared for both so nothing
@@ -1177,3 +1248,30 @@ code.addr-full {
    stale or invented (a graduated token's market cap). Deliberately NOT .stat-value: it
    must not inherit the mono figure type, or it reads as data. */
 .stat-note { font-size: 13px; color: var(--muted); margin-top: 3px; line-height: 1.35; }
+
+/* ── wallet picker: badges and the icon fallback ───────────────────────────────
+   The picker showed a bare name per row. It now shows what KIND of entry each is,
+   because "MetaMask" and "WalletConnect" are not the same kind of choice and the
+   difference decides whether a tap opens an extension or a QR code.
+
+   ⚠ The badge text is derived from EIP-6963 discovery in lib/wallets.ts, never from
+   the wallet's name. Phantom wins window.ethereum on a two-extension machine, so a
+   name-based rule would confidently mislabel the generic entry. */
+.wallet-name { flex: 1 1 auto; text-align: left; }
+.wallet-badge {
+  flex: none; font-family: var(--mono); font-size: 10px; letter-spacing: .04em;
+  text-transform: uppercase; padding: 2px 6px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted);
+}
+/* Installed is the only one that earns a colour: it is the reassuring case, and --pos
+   already means "good" everywhere else on the page. */
+.wallet-badge-installed { color: var(--pos); border-color: var(--pos); }
+/* ⚠ Unknown is deliberately NOT coloured as a warning. It is not an error -- an older
+   wallet that predates EIP-6963 is legitimate -- it is merely unidentified. */
+.wallet-badge-unknown { color: var(--warn); border-color: var(--warn-line); }
+
+.wallet-icon-fallback {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--soft); border: 1px solid var(--line); border-radius: 6px;
+  font-family: var(--mono); font-size: 10px; color: var(--muted);
+}

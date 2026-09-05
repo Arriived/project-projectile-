@@ -10,7 +10,7 @@
     "typecheck": "tsc -b --noEmit",
     "verify:chain": "node --experimental-strip-types scripts/verify-chain.mts",
     "verify:guard": "node --experimental-strip-types scripts/verify-guard.mts",
-    "verify": "npm run verify:chain && npm run verify:guard && npm run verify:wallets && npm run verify:trade && npm run verify:list && npm run verify:i18n && npm run verify:claims && npm run verify:create && npm run verify:upload && npm run verify:address && npm run verify:slippage && npm run verify:metadata && npm run verify:launchbuy",
+    "verify": "node --experimental-strip-types scripts/verify-all.mts",
     "verify:wallets": "node --experimental-strip-types scripts/verify-wallets.mts",
     "measure:gas": "node --experimental-strip-types scripts/measure-gas.mts",
     "verify:trade": "node --experimental-strip-types scripts/verify-trade.mts",
@@ -22,7 +22,10 @@
     "verify:address": "node --experimental-strip-types scripts/verify-address.mts",
     "verify:slippage": "node --experimental-strip-types scripts/verify-slippage.mts",
     "verify:metadata": "node --experimental-strip-types scripts/verify-metadata.mts",
-    "verify:launchbuy": "node --experimental-strip-types scripts/verify-launchbuy.mts"
+    "verify:launchbuy": "node --experimental-strip-types scripts/verify-launchbuy.mts",
+    "verify:quotefresh": "node --experimental-strip-types scripts/verify-quote-freshness.mts",
+    "verify:strip": "node --experimental-strip-types scripts/verify-strip-comments.mts",
+    "verify:theme": "node --experimental-strip-types scripts/verify-theme.mts"
   },
   "dependencies": {
     "@metamask/connect-evm": "^2.1.1",

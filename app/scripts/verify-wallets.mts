@@ -28,6 +28,8 @@ import {
   isDiscovered,
   GENERIC_INJECTED_ID,
   WALLETCONNECT_ID,
+  walletBadge,
+  walletInitials,
   type WalletChoice,
 } from "../src/lib/wallets.ts";
 
@@ -245,6 +247,74 @@ check("W16 WalletConnect is not mistaken for a discovered wallet", !isDiscovered
 }
 
 console.log(`\n${total - failures}/${total} checks passed`);
+
+// ══ THE PICKER'S BADGES ══════════════════════════════════════════════════════════════
+//
+// ⚠ THE BADGE COMES FROM DISCOVERY, NEVER FROM THE NAME. Phantom wins window.ethereum on
+// a two-extension machine, so the generic entry may BE Phantom while carrying the name
+// "Injected". Badging it "Installed" would assert an identity we do not have, which is the
+// failure this entire connector path exists to prevent.
+console.log("\nthe picker's badges — derived from discovery, never from the name");
+
+// ⚠ REAL-SHAPED FIXTURES. wagmi's injected() never sets a top-level rdns, so a discovered
+// MetaMask genuinely arrives as { id: "io.metamask", rdns: undefined }. A fixture that set
+// rdns here would be testing an object that cannot occur in production — CLAUDE.md §12.6,
+// and the exact mistake W10-W13 were written to correct.
+const dMetaMask: WalletChoice = { uid: "1", id: "io.metamask", name: "MetaMask" };
+const dPhantom: WalletChoice = { uid: "2", id: "app.phantom", name: "Phantom" };
+const gInjected: WalletChoice = { uid: "3", id: "injected", name: "Injected" };
+const wcEntry: WalletChoice = { uid: "4", id: "walletConnect", name: "WalletConnect" };
+
+check("W19 a discovered wallet is badged INSTALLED", walletBadge(dMetaMask) === "installed");
+check("W19b every discovered wallet, not just MetaMask", walletBadge(dPhantom) === "installed");
+check("W20 WalletConnect is badged QR, not installed", walletBadge(wcEntry) === "qr");
+check(
+  "W21 ⚠ the generic entry is NOT badged installed — we cannot say which wallet it is",
+  walletBadge(gInjected) === "unknown"
+);
+check(
+  "W22 ⚠ a connector NAMED MetaMask but not discovered is still unknown (no name rule)",
+  walletBadge({ uid: "5", id: "injected", name: "MetaMask" }) === "unknown"
+);
+
+console.log("\nthe icon fallback — wallet-supplied text, stripped and clipped");
+check("W23 initials come from the name", walletInitials("MetaMask") === "ME");
+check("W24 punctuation and whitespace are stripped", walletInitials("  Rainbow!  ") === "RA");
+check("W25 a symbol-only name still yields something", walletInitials("!!!") === "?");
+
+// ⚠ A wallet's `name` is supplied by the extension and is therefore attacker-influenced:
+// any extension may announce itself with any name. It is rendered as text content, never
+// as markup or a URL, and this pins that nothing dangerous can survive the clip.
+for (const hostile of ['<img src=x onerror=alert(1)>', '"><script>alert(1)</script>', "javascript:alert(1)"]) {
+  const out = walletInitials(hostile);
+  check(
+    "W26 a hostile wallet name yields at most 2 harmless characters",
+    Array.from(out).length <= 2 && !/[<>"'/:;=()]/.test(out),
+    JSON.stringify(hostile.slice(0, 24)) + " -> " + JSON.stringify(out)
+  );
+}
+
+// ⚠ Array.from, not slice. A non-BMP character is a surrogate PAIR, and slice(0, 2) can
+// cut one in half and emit a lone surrogate, which renders as a replacement glyph.
+//
+// ⚠ THE FIXTURE IS "A𝐁Wallet", NOT AN EMOJI, AND THE DIFFERENCE IS THE WHOLE CHECK.
+// The first version used "🦊🌈Wallet" and could NOT go red: emoji are category So, so
+// `replace(/[^\p{L}\p{N}]/gu, "")` strips them BEFORE any slicing happens — cleaned
+// becomes "Wallet" and the surrogate path is never reached. Swapping Array.from for
+// slice left it green, which is precisely CLAUDE.md §12.6's M13 rule: mutate the thing
+// the check asserts about, and if the mutation survives, suspect the fixture.
+//
+// U+1D401 MATHEMATICAL BOLD CAPITAL B is category Lu, so it SURVIVES the strip and is
+// still a surrogate pair. With one BMP letter ahead of it, slice(0, 2) lands exactly on
+// the boundary: "A" + a lone high surrogate. Array.from does not.
+const nonBmpInitials = walletInitials("A\u{1D401}Wallet");
+const hasLoneSurrogate = Array.from(nonBmpInitials).some((ch) => {
+  const c = ch.charCodeAt(0);
+  return ch.length === 1 && c >= 0xd800 && c <= 0xdfff;
+});
+check("W27 a non-BMP name is never split into a lone surrogate", !hasLoneSurrogate, JSON.stringify(nonBmpInitials));
+
+
 // ⚠ process.exitCode, NOT process.exit(). process.exit() tears the event loop down
 // while the console.log lines above may still be flushing, and on Windows that races
 // libuv into "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)" and an exit code

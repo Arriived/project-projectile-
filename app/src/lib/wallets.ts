@@ -143,3 +143,44 @@ export function walletLabel(
   if (isGenericInjected(c)) return unidentified(c.name);
   return c.name;
 }
+
+/**
+ * What kind of entry this is, for the badge next to its name.
+ *
+ * ⚠ THE BADGE IS DERIVED FROM `isDiscovered`, NOT FROM A NAME OR AN ICON. A wallet is
+ * "installed" exactly when it announced itself over EIP-6963 — that is what discovery
+ * means, and it is the same signal the dedupe rule turns on. Guessing from the name
+ * ("does it say MetaMask?") would be wrong on the one machine that matters: Phantom wins
+ * `window.ethereum` in a two-extension environment, so the generic entry named "Injected"
+ * may BE Phantom, and a name-based rule would label it MetaMask or mark it installed when
+ * we do not know what it is.
+ *
+ *   "installed"  discovered over EIP-6963. A real extension, present right now, and we
+ *                are bound to ITS provider object rather than to contested window.ethereum.
+ *   "qr"         WalletConnect. Not installed, not an extension — it pairs by QR or deep
+ *                link, and on a phone it is the ONLY path a user has.
+ *   "unknown"    the generic injected fallback. Something is at window.ethereum but it did
+ *                not announce itself, so we cannot say WHICH wallet it is. Deliberately not
+ *                labelled "installed": that would assert an identity we do not have.
+ */
+export type WalletBadge = "installed" | "qr" | "unknown";
+
+export function walletBadge(c: WalletChoice): WalletBadge {
+  if (isWalletConnect(c)) return "qr";
+  if (isDiscovered(c)) return "installed";
+  return "unknown";
+}
+
+/**
+ * A one- or two-character stand-in when a wallet ships no icon.
+ *
+ * ⚠ Built from the NAME, which is wallet-supplied and therefore attacker-influenced in
+ * principle: any extension may announce itself with any `name`. It is rendered as text
+ * content, never as markup or a URL, and clipped to two characters, so the worst a hostile
+ * name can do here is show two odd glyphs. Uses Array.from rather than slice so an emoji
+ * or a non-BMP character is not cut in half into a lone surrogate.
+ */
+export function walletInitials(name: string): string {
+  const cleaned = name.replace(/[^\p{L}\p{N}]/gu, "");
+  return Array.from(cleaned).slice(0, 2).join("").toUpperCase() || "?";
+}

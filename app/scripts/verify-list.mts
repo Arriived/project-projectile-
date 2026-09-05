@@ -11,6 +11,7 @@
 //   d) mark "24h" available in WINDOW_AVAILABILITY         -> L9 fails
 //   e) drop address matching from matchesSearch            -> L6 fails
 
+import { stripComments } from "./lib/strip-comments.mts";
 import {
   DEFAULT_SORT,
   DEFAULT_WINDOW,
@@ -295,7 +296,7 @@ const listSrc = readFileSync(new URL("../src/routes/TokenList.tsx", import.meta.
 // Strip comments first: every one of these files EXPLAINS the rule in prose that contains
 // the very strings being searched for. A checker that reads its own documentation is the
 // defect CLAUDE.md section 11.7 records for verify:claims.
-const strip = (t: string) => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "").replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+const strip = stripComments;
 const price = strip(priceSrc);
 const card = strip(cardSrc);
 const list = strip(listSrc);

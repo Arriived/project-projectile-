@@ -3,6 +3,7 @@
 // The token page is at /t/:address and is DEEP-LINKABLE. A launchpad whose token pages
 // are not shareable URLs is broken -- sharing a token is the primary way anyone arrives.
 
+import { Logo } from "./components/Logo";
 import { Routes, Route, Link, Navigate, useLocation } from "react-router-dom";
 import { WalletBar } from "./components/WalletBar";
 import { useTheme } from "./providers/ThemeProvider";
@@ -27,8 +28,12 @@ export function App() {
   return (
     <div className="page">
       <header className="topbar">
-        <Link to="/" className="brand">
-          Ballista{" "}
+        {/* ⚠ THE MARK REPLACES THE WORDMARK, AND THE NETWORK LABEL BESIDE IT DOES NOT
+            CHANGE. `aria-label` carries the name the word used to supply, so the link
+            still has an accessible name; Logo is aria-hidden so the control has exactly
+            one. See components/Logo.tsx for why this is inline SVG rather than a raster. */}
+        <Link to="/" className="brand" aria-label="Ballista">
+          <Logo size={22} />
           {/* ⚠ THE NETWORK INDICATOR MUST SURVIVE THE MOBILE BREAKPOINT. It was hidden
               outright at <=560px to recover header height, on the reasoning that the
               wallet pill already states the network -- but that pill only exists once a

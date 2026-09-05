@@ -25,6 +25,7 @@
 // updating row expectations to match broken behaviour.
 
 import { readFileSync } from "node:fs";
+import { stripComments } from "./lib/strip-comments.mts";
 import { resolveArcGuard, shouldAutoPromptSwitch, MAX_PROBE_AGE_MS } from "../src/lib/arcGuard.ts";
 
 const ARC = 5042002;
@@ -286,7 +287,7 @@ const hookSrc = readFileSync(new URL("../src/hooks/useArcGuard.ts", import.meta.
 // Comments are stripped before asserting: this file's own prose names `useChainId()`
 // several times while explaining why it must not be used, and a checker that reads its
 // own documentation is the defect CLAUDE.md §11.7 records for verify:claims.
-const hookCode = hookSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const hookCode = stripComments(hookSrc);
 
 check(
   "W1  the guard reads useAccount().chainId — the CONNECTION's chain",

@@ -214,7 +214,8 @@ export const en = {
     previewSymbol: "TICKER",
     previewThreshold: "Graduates at",
     previewSnipe: "Snipe tax decays over",
-    previewSnipeValue: "{seconds}s",    launchBuy: "Buy at launch (optional)",
+    previewSnipeValue: "{seconds}s",
+    launchBuy: "Buy at launch (optional)",
     launchBuyPlaceholder: "Amount in USDC",
     launchBuyHint:
       "Bought in the same transaction as the launch, untaxed, up to {pct}% of curve supply. This is a cap on this privileged buy only — it does not limit how much you can hold.",
@@ -251,6 +252,12 @@ export const en = {
     connect: "Connect",
     pickerTitle: "Connect a wallet",
     pickerClose: "Close",
+    badgeInstalled: "Installed",
+    badgeQr: "QR / mobile",
+    // Deliberately not "Installed": something is at window.ethereum but we cannot say
+    // which wallet it is, and claiming an identity we do not have is the failure this
+    // whole connector path exists to prevent.
+    badgeUnknown: "Unidentified",
     pickerHint: "Browsing needs no wallet. You only need one to trade.",
   },
 
@@ -340,7 +347,8 @@ export const en = {
     atSlippage: "at {pct} slippage",
     slippageLabel: "Max slippage",
     slippageCustom: "Custom",
-    slippageCustomAria: "Custom slippage tolerance, percent",    slippageOpen: "Max slippage {pct} — change",
+    slippageCustomAria: "Custom slippage tolerance, percent",
+    slippageOpen: "Max slippage {pct} — change",
 
     slippageAck: "I understand a {pct}% floor can fill far below the quote.",
     slippageBound: "Up to {max}%. Above that the trade has no meaningful floor.",

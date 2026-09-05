@@ -57,14 +57,28 @@ import {
  * there, it must change here -- there is no way to make lightweight-charts read a
  * custom property.
  */
+// ⚠ THESE MIRROR styles.css AND MUST BE CHANGED IN THE SAME COMMIT AS THE TOKENS.
+//
+// lightweight-charts cannot read CSS custom properties -- it takes concrete colour
+// strings at construction -- so the palette is duplicated here by necessity. The
+// duplication is the hazard: change --line or --muted in styles.css alone and the chart
+// keeps drawing the old theme against the new page, which looks like a rendering bug
+// rather than a stale constant.
+//
+// Mapping, so the correspondence is checkable rather than remembered:
+//   text          <- --muted     grid, border  <- --line
+//   up            <- --pos       down          <- --neg
+//
+// `verify:theme` asserts this correspondence against the real styles.css and fails if the
+// two drift.
 const PALETTE = {
   light: {
     text: "#777777", grid: "#e9e9e5", border: "#d6d6d1",
     up: "#1f6b3a", down: "#a32b2b", flat: "#777777",
   },
   dark: {
-    text: "#8f8f86", grid: "#2f2f29", border: "#2f2f29",
-    up: "#56b077", down: "#d97070", flat: "#8f8f86",
+    text: "#8f8f8f", grid: "#2e2e2e", border: "#2e2e2e",
+    up: "#56b077", down: "#d97070", flat: "#8f8f8f",
   },
 } as const;
 

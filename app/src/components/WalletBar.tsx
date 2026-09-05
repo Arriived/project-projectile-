@@ -21,7 +21,14 @@ import { useAccount, useConnect, useConnectors, useDisconnect } from "wagmi";
 import type { Connector } from "wagmi";
 import { arc } from "../chain";
 import { useChain } from "../providers/ChainProvider";
-import { selectWallets, walletLabel, isGenericInjected, type WalletChoice } from "../lib/wallets";
+import {
+  selectWallets,
+  walletLabel,
+  isGenericInjected,
+  walletBadge,
+  walletInitials,
+  type WalletChoice,
+} from "../lib/wallets";
 import { useT } from "../i18n";
 
 function short(addr: string) {
@@ -95,8 +102,34 @@ function WalletPicker({
                     : t("wallet.connectsTo", { name: w.name })
                 }
               >
-                {w.icon && <img src={w.icon} alt="" className="wallet-icon" />}
-                <span>{pending ? t("common.checkYourWallet") : w.name}</span>
+                {/* An icon is wallet-supplied. EIP-6963 icons are data: URIs by spec, but
+                    the field is only a string from an extension, so it is rendered through
+                    <img src> and never injected as markup; a wallet with no usable icon
+                    falls back to initials rather than to a broken image. */}
+                {w.icon ? (
+                  <img src={w.icon} alt="" className="wallet-icon" />
+                ) : (
+                  <span className="wallet-icon wallet-icon-fallback" aria-hidden>
+                    {walletInitials(w.name)}
+                  </span>
+                )}
+                <span className="wallet-name">
+                  {pending ? t("common.checkYourWallet") : w.name}
+                </span>
+                {/* ⚠ DERIVED FROM EIP-6963 DISCOVERY, NEVER FROM THE NAME. "Installed"
+                    means the extension announced itself and we hold ITS provider object.
+                    The generic entry gets no such badge on purpose: something is at
+                    window.ethereum but we cannot say WHICH wallet, and on a two-extension
+                    machine Phantom usually wins that race. */}
+                {!pending && (
+                  <span className={`wallet-badge wallet-badge-${walletBadge(w)}`}>
+                    {walletBadge(w) === "installed"
+                      ? t("wallet.badgeInstalled")
+                      : walletBadge(w) === "qr"
+                        ? t("wallet.badgeQr")
+                        : t("wallet.badgeUnknown")}
+                  </span>
+                )}
               </button>
             );
           })}

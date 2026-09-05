@@ -4,12 +4,16 @@
 // contract; they apply the live snipe tax, the partial-fill clamp and current reserves,
 // and cannot drift because they ARE the contract.
 //
-// TRAP 7 (async races): the query key includes the amount and the side, so a slow
-// response for a superseded amount lands in a DIFFERENT cache entry from the one the
-// component reads. It cannot overwrite a newer answer -- the stale result is simply never
-// looked at. `placeholderData` keeps the previous number on screen while a new one loads
-// so the panel does not flash empty, which is a display concern and not a correctness
-// one: the value rendered is always the one keyed to the amount currently in the box.
+// TRAP 7 (async races): the query key includes the amount, the side AND the curve
+// fingerprint, so a slow response for a superseded amount -- or for a curve that has
+// since moved -- lands in a DIFFERENT cache entry from the one the component reads. It
+// cannot overwrite a newer answer; the stale result is simply never looked at.
+//
+// ⚠ `placeholderData` is CONDITIONAL, and the condition is the point (CLAUDE.md §12.2).
+// It carries the previous figure forward while the amount changes, so the panel does not
+// flash empty on every keystroke or poll -- but it DROPS that figure the moment the
+// fingerprint changes, because at that point the number is not merely old, it is wrong.
+// A figure that is known-wrong is never shown; a figure with no reason to be doubted is.
 
 import { useQuery } from "@tanstack/react-query";
 import { usePublicClient } from "wagmi";
@@ -22,11 +26,32 @@ import {
   IMPACT_PROBE_TOKENS18,
   impactPct,
   sellNetOut,
+  quoteQueryKey,
+  carryForwardQuote,
+  quotePollIntervalMs,
   type BuyQuote,
   type SellQuote,
+  type Side,
 } from "../lib/quotes";
 
-export type Side = "buy" | "sell";
+// ⚠ THE CACHE-KEY AND CARRY-FORWARD LOGIC LIVES IN lib/quotes.ts, NOT HERE.
+//
+// It is the decision CLAUDE.md §12.2 turns on, so it has to be reachable by a check --
+// and this file imports the ABI, wagmi and viem, none of which resolve under
+// `node --experimental-strip-types`. Every verify script in this project imports from
+// lib/ for exactly that reason. Pure logic that must be proved goes in lib/; hooks stay
+// thin enough to be obviously correct by inspection.
+export {
+  quoteQueryKey,
+  carryForwardQuote,
+  QUOTE_KEY_FINGERPRINT_INDEX,
+  curveQuoteFingerprint,
+  quotePollIntervalMs,
+  SNIPE_DECAY_SECONDS,
+  QUOTE_POLL_HOT_MS,
+  QUOTE_POLL_COLD_MS,
+} from "../lib/quotes";
+export type { Side } from "../lib/quotes";
 
 export type Quote = {
   side: Side;
@@ -41,70 +66,63 @@ export type Quote = {
   impact: number | null;
 };
 
-/**
- * How long after creation the snipe tax is still decaying.
- *
- * The published table is `[9800, 9500, 9000, 8000, 6000, 4000, 2000, 0]`, indexed by
- * ELAPSED SECONDS. So the tax changes every second for seven seconds and is then flat
- * forever. `SNIPE_DECAY_SECONDS` is that table's length, plus a second of slack for
- * clock skew between the browser and the chain.
- */
-export const SNIPE_DECAY_SECONDS = 9;
-
-/** While the tax is decaying per second, a quote is stale in one second. */
-export const QUOTE_POLL_HOT_MS = 1_000;
-
-/**
- * Afterwards the curve only moves when someone trades, so there is nothing to poll FOR.
- * 30s is a liveness floor, not a freshness requirement -- the trade panel re-quotes
- * immediately before signing regardless (trap 6), so a slightly old displayed number can
- * never become a number the contract is asked to honour.
- */
-export const QUOTE_POLL_COLD_MS = 30_000;
-
-/**
- * The polling interval for a token created `ageSeconds` ago.
- *
- * ⚠ THE OLD FIXED 4s WAS WRONG IN BOTH DIRECTIONS AT ONCE, which is why this is a
- * function rather than a constant:
- *
- *   - TOO SLOW when it mattered. The tax decays every second for seven seconds; a 4s
- *     poll sampled that curve about twice and missed most of it -- during precisely the
- *     window the snipe tax exists to govern.
- *   - TOO FAST afterwards. A curve that nobody is trading does not change, so a quote
- *     every 4 seconds forever is ~15 RPC calls per minute per open page, bought for
- *     nothing.
- *
- * `undefined` age means "not known yet" and is treated as HOT: over-polling for one tick
- * is cheap, under-polling during the snipe window is the failure this exists to prevent.
- */
-export function quotePollIntervalMs(ageSeconds: number | undefined): number {
-  if (ageSeconds === undefined) return QUOTE_POLL_HOT_MS;
-  return ageSeconds < SNIPE_DECAY_SECONDS ? QUOTE_POLL_HOT_MS : QUOTE_POLL_COLD_MS;
-}
-
 export function useQuote(
   token: Address | undefined,
   side: Side,
   amount: bigint,
   enabled = true,
   /** Seconds since this token was created. Drives the polling cadence; see above. */
-  tokenAgeSeconds?: number
+  tokenAgeSeconds?: number,
+  /**
+   * `curveQuoteFingerprint(...)` for the curve being quoted. See lib/quotes.ts.
+   *
+   * ⚠ IT IS IN THE QUERY KEY ON PURPOSE. That is what makes a superseded quote
+   * unreachable rather than merely unlikely: when the curve moves, the key moves with
+   * it, so the old answer is in a DIFFERENT cache entry and the component reading the
+   * new key cannot see it. Same structural trick trap 7 already uses for the amount.
+   *
+   * Defaulted so an omitted argument degrades to the old always-one-key behaviour
+   * rather than to a key of `undefined` that silently collides across curves.
+   */
+  curveFingerprint = "curve:unpinned"
 ) {
   const client = usePublicClient({ chainId: arc.id });
   const interval = quotePollIntervalMs(tokenAgeSeconds);
 
   return useQuery({
     // The amount is IN THE KEY. That is what makes trap 7 structurally impossible rather
-    // than merely unlikely.
-    queryKey: ["quote", token, side, amount.toString()],
+    // than merely unlikely. The curve fingerprint is in it for the same reason -- see the
+    // parameter doc above and CLAUDE.md §12.2.
+    queryKey: quoteQueryKey(token, side, amount, curveFingerprint),
     enabled: enabled && !!token && !!client && amount > 0n,
     // Matches the poll: during the decay a quote is stale in a second; afterwards it is
     // only as stale as the last trade, and nothing here is ever signed without a fresh
     // re-quote (trap 6).
     staleTime: interval,
     refetchInterval: interval,
-    placeholderData: (prev) => prev,
+    // ⚠ THE WHOLE POINT: carry a figure forward only while it is merely OLD, never once
+    // it is known WRONG.
+    //
+    // Two different in-flight states used to be one:
+    //
+    //   UNKNOWN-STALE   the amount changed, or the poll ticked, but nothing says the
+    //                   curve moved. The previous number is probably still right. Keep
+    //                   it, dimmed and marked (see Figure), because blanking to "—" on
+    //                   every refresh flickers the panel once a second during the snipe
+    //                   window and teaches people to ignore it.
+    //
+    //   KNOWN-STALE     the fingerprint changed, so the reserves, state or tax that
+    //                   produced that number are gone. The figure is not old, it is
+    //                   WRONG. Drop it and show "—" until the real answer lands.
+    //
+    // Returning `undefined` is what produces the dash: the component renders "—" when
+    // there is no quote. This is the fix for the confident-wrong-number half of §12.2.
+    placeholderData: (prev, prevQuery) =>
+      carryForwardQuote(prev, prevQuery?.queryKey, curveFingerprint),
+    // Superseded entries are dead the moment the curve moves; on a busy curve a new key
+    // is minted per trade. Collect them promptly rather than holding five minutes of
+    // them (TanStack's default) for figures nothing can ever render again.
+    gcTime: 60_000,
     queryFn: async (): Promise<Quote> => {
       const factory = { address: FACTORY_ADDRESS, abi: lfx1Abi } as const;
 

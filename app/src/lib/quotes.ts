@@ -14,6 +14,10 @@
 // contract.
 
 /** Shape returned by `quoteBuy(token, usdcIn)`. */
+// Type-only, so `node --experimental-strip-types` erases it and this module stays
+// runtime-dependency-free for the verify scripts.
+import type { Address } from "viem";
+
 export type BuyQuote = {
   tokensOut: bigint;
   newVirtualUsdc: bigint;
@@ -206,3 +210,156 @@ export const SELL_PERCENTS = [25, 50, 75, 100] as const;
  * contract's integer maths returns a non-zero output to divide by.
  */
 export const IMPACT_PROBE_TOKENS18 = 10n ** 18n; // one whole token
+
+/**
+ * Every input a quote depends on, reduced to one comparable string.
+ *
+ * ⚠ THIS IS THE SIGNAL THAT A DISPLAYED QUOTE IS KNOWN-SUPERSEDED, and it exists because
+ * of a real production defect. Read CLAUDE.md §12.2 for the incident and the measurement.
+ *
+ * The panel used to hold three figures refreshed on three different clocks: the curve
+ * every 6s, balances every 8s, the quote every 30s. So "In the curve" and "Estimated
+ * receive" routinely described the same curve at two different moments, and after any
+ * trade -- the user's own or a stranger's -- the estimate kept quoting the old reserves
+ * for up to thirty seconds.
+ *
+ * Measured against the live chain at block 60466878 vs 60466934, same token, same
+ * offered amount: 18.419215 USDC then 6.083286 USDC. A quote taken before that
+ * intervening sell and displayed after it OVERSTATES the payout by 3.03x, and overstating
+ * is the direction that matters -- a seller acts on a number the curve will not honour.
+ *
+ * WHAT IS IN IT, and why each:
+ *   virtual reserves   the curve's price, directly
+ *   realUsdcReserves   what the curve can actually pay a seller; drives the clamp
+ *   tokenReserves      what it can actually deliver a buyer; drives the clamp
+ *   state              ACTIVE / GRADUATION_READY / GRADUATED closes both sides
+ *   snipeTaxBps        changes per SECOND for the first seven seconds
+ *
+ * ⚠ DO NOT reduce this to a block number. A block in which nothing touched this curve
+ * does not stale a quote, and invalidating on every block would refetch every ~0.48s
+ * forever. The fingerprint changes when the ANSWER would change, which is the property
+ * that makes it both correct and cheap.
+ *
+ * ⚠ DO NOT add a timestamp or anything else that moves on its own. Anything in here that
+ * changes without the curve changing turns this into a poll, and a poll is what it
+ * replaces.
+ *
+ * An absent curve returns a distinct marker rather than a fabricated one, so "we do not
+ * know the curve" can never compare equal to a real state and quietly reuse a figure.
+ */
+export function curveQuoteFingerprint(
+  curve:
+    | {
+        virtualUsdcReserves: bigint;
+        virtualTokenReserves: bigint;
+        realUsdcReserves: bigint;
+        tokenReserves: bigint;
+        state: number;
+      }
+    | undefined,
+  snipeTaxBps: number | undefined
+): string {
+  if (!curve) return "curve:unknown";
+  return [
+    curve.virtualUsdcReserves,
+    curve.virtualTokenReserves,
+    curve.realUsdcReserves,
+    curve.tokenReserves,
+    curve.state,
+    snipeTaxBps ?? "?",
+  ].join(":");
+}
+
+/** Which side of the trade a quote describes. */
+export type Side = "buy" | "sell";
+
+/** Position of the fingerprint inside the query key. Named so the placeholder cannot
+ *  drift from the key it reads. */
+export const QUOTE_KEY_FINGERPRINT_INDEX = 4;
+
+/**
+ * The cache key for one quote.
+ *
+ * Exported so the check that proves the isolation property uses THE key builder rather
+ * than a retyped copy of its shape. A test that asserts against its own reimplementation
+ * of the thing under test proves only that the author can type it twice.
+ */
+export function quoteQueryKey(
+  token: Address | undefined,
+  side: Side,
+  amount: bigint,
+  curveFingerprint: string
+): readonly unknown[] {
+  return ["quote", token, side, amount.toString(), curveFingerprint];
+}
+
+/**
+ * Whether a figure already on screen may stay there while a new one loads.
+ *
+ * ⚠ THIS IS THE DECISION §12.2 TURNS ON, so it is a named pure function rather than an
+ * inline lambda: it is the thing the check has to be able to mutate and watch go red.
+ *
+ *   previous key's fingerprint === current  ->  UNKNOWN-STALE. The amount changed or the
+ *                                               poll ticked. Nothing says the curve moved.
+ *                                               Keep the figure, dimmed (see Figure).
+ *
+ *   anything else                           ->  KNOWN-STALE. The reserves, state or tax
+ *                                               that produced it are gone. Return
+ *                                               undefined, which renders "—".
+ *
+ * ⚠ The comparison is against the PREVIOUS KEY, never against a remembered variable. A
+ * remembered fingerprint can drift out of step with the data it labels; the key cannot,
+ * because the cache entry and its key are the same object.
+ */
+export function carryForwardQuote<T>(
+  previousData: T | undefined,
+  previousKey: readonly unknown[] | undefined,
+  curveFingerprint: string
+): T | undefined {
+  if (previousData === undefined) return undefined;
+  return previousKey?.[QUOTE_KEY_FINGERPRINT_INDEX] === curveFingerprint
+    ? previousData
+    : undefined;
+}
+
+/**
+ * How long after creation the snipe tax is still decaying.
+ *
+ * The published table is `[9800, 9500, 9000, 8000, 6000, 4000, 2000, 0]`, indexed by
+ * ELAPSED SECONDS. So the tax changes every second for seven seconds and is then flat
+ * forever. `SNIPE_DECAY_SECONDS` is that table's length, plus a second of slack for
+ * clock skew between the browser and the chain.
+ */
+export const SNIPE_DECAY_SECONDS = 9;
+
+/** While the tax is decaying per second, a quote is stale in one second. */
+export const QUOTE_POLL_HOT_MS = 1_000;
+
+/**
+ * Afterwards the curve only moves when someone trades, so there is nothing to poll FOR.
+ * 30s is a liveness floor, not a freshness requirement -- the trade panel re-quotes
+ * immediately before signing regardless (trap 6), so a slightly old displayed number can
+ * never become a number the contract is asked to honour.
+ */
+export const QUOTE_POLL_COLD_MS = 30_000;
+
+/**
+ * The polling interval for a token created `ageSeconds` ago.
+ *
+ * ⚠ THE OLD FIXED 4s WAS WRONG IN BOTH DIRECTIONS AT ONCE, which is why this is a
+ * function rather than a constant:
+ *
+ *   - TOO SLOW when it mattered. The tax decays every second for seven seconds; a 4s
+ *     poll sampled that curve about twice and missed most of it -- during precisely the
+ *     window the snipe tax exists to govern.
+ *   - TOO FAST afterwards. A curve that nobody is trading does not change, so a quote
+ *     every 4 seconds forever is ~15 RPC calls per minute per open page, bought for
+ *     nothing.
+ *
+ * `undefined` age means "not known yet" and is treated as HOT: over-polling for one tick
+ * is cheap, under-polling during the snipe window is the failure this exists to prevent.
+ */
+export function quotePollIntervalMs(ageSeconds: number | undefined): number {
+  if (ageSeconds === undefined) return QUOTE_POLL_HOT_MS;
+  return ageSeconds < SNIPE_DECAY_SECONDS ? QUOTE_POLL_HOT_MS : QUOTE_POLL_COLD_MS;
+}

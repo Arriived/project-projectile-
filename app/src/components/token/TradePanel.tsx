@@ -23,7 +23,12 @@ import { useQuote, type Side } from "../../hooks/useQuote";
 import { useBalances } from "../../hooks/useBalances";
 import { useFees } from "../../hooks/useFees";
 import { useChain } from "../../providers/ChainProvider";
-import { minOutFromQuote, sellAmountForPercent, SELL_PERCENTS } from "../../lib/quotes";
+import {
+  minOutFromQuote,
+  sellAmountForPercent,
+  SELL_PERCENTS,
+  curveQuoteFingerprint,
+} from "../../lib/quotes";
 import { loadSlippageBps, saveSlippageBps, bpsToPctLabel, requiresAcknowledgement } from "../../lib/slippage";
 import { SlippageControl } from "./SlippageControl";
 import { checkAffordability, gasLimitFor, GAS_LIMIT_UNITS_FOR_PRECHECK } from "../../lib/gas";
@@ -88,7 +93,23 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
     ? Math.max(0, Math.floor(Date.now() / 1000) - Number(data.curve.creationTimestamp))
     : undefined;
 
-  const { data: quote, isFetching: quoting } = useQuote(token, side, amount, true, tokenAgeSeconds);
+  // ⚠ EVERY INPUT A QUOTE DEPENDS ON, AS ONE STRING. When this changes the curve has
+  // moved and any figure on screen is superseded -- see lib/quotes.ts and CLAUDE.md §12.2.
+  //
+  // It costs NOTHING to compute: useCurve already reads all of it every 6 seconds for the
+  // stat strip. That is why this is derived from the curve rather than from a
+  // `watchContractEvent` on `Trade` -- see the report. It also catches a move the Trade
+  // event would not, such as a graduation closing both sides.
+  const curveFingerprint = curveQuoteFingerprint(data.curve, data.snipeTaxBps);
+
+  const { data: quote, isFetching: quoting } = useQuote(
+    token,
+    side,
+    amount,
+    true,
+    tokenAgeSeconds,
+    curveFingerprint
+  );
 
   const { writeContractAsync, isPending: writing } = useWriteContract();
   const [txHash, setTxHash] = useState<`0x${string}` | undefined>();
@@ -180,6 +201,25 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
 
     balances.refetch();
     data.refetch();
+
+    // ⚠ CLEAR THE BOX. This is the other half of §12.2 and it is the half that produced
+    // the screenshot.
+    //
+    // The amount the user typed described a trade that has now HAPPENED. Left in place it
+    // keeps a live quote query running for a position they may no longer hold, and that
+    // quote is re-read against the post-trade curve -- so the panel sat there showing
+    // "Estimated receive 0.000001 USDC, partially filled" directly beneath "Settled ...
+    // 6.08 USDC". Both numbers were correct. Only their juxtaposition was a lie, and it
+    // read as a quote wrong by six orders of magnitude.
+    //
+    // Measured, not inferred: quoteSell at block 60466934 (immediately BEFORE that sell)
+    // returns 6.083285 for the submitted amount, and 0.000001 only at 60466935, the
+    // trade's own block. A stale quote could not have produced the figure shown; a
+    // freshly re-read orphan is the only thing that could.
+    //
+    // Clearing also removes a real hazard beyond display: a second click would have
+    // re-sent the same size against reserves that just moved.
+    setInput("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receipt]);
 
@@ -337,16 +377,23 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
 
   return (
     <section className="card trade">
-      <div className="trade-tabs">
+      {/* ⚠ role="tablist" + aria-selected carries "which side is active" to assistive
+          tech, so the green/red distinction is never the only way to know. Sighted
+          users get three colour-independent cues too -- see the note in styles.css. */}
+      <div className="trade-tabs" role="tablist" aria-label={t("trade.buy") + " / " + t("trade.sell")}>
         <button
-          className={`tab ${side === "buy" ? "on" : ""}`}
+          role="tab"
+          aria-selected={side === "buy"}
+          className={`tab tab-buy ${side === "buy" ? "on" : ""}`}
           onClick={() => { setSide("buy"); setInput(""); setSettled(null); }}
           disabled={!gate.canBuy}
         >
           {t("trade.buy")}
         </button>
         <button
-          className={`tab ${side === "sell" ? "on" : ""}`}
+          role="tab"
+          aria-selected={side === "sell"}
+          className={`tab tab-sell ${side === "sell" ? "on" : ""}`}
           onClick={() => { setSide("sell"); setInput(""); setSettled(null); }}
           disabled={!gate.canSell}
         >
@@ -355,7 +402,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
       </div>
 
       {side === "buy" && (
-        <div className="presets">
+        <div className="presets presets-buy">
           {BUY_PRESETS.map((p) => (
             <button key={p} className="btn btn-tiny" onClick={() => setInput(p)}>
               ${p}
@@ -389,7 +436,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           holder can always afford to SELL, so capping the sell with it would withhold
           the position from the very action the reserve protects. */}
       {side === "sell" && (
-        <div className="presets">
+        <div className="presets presets-sell">
           {SELL_PERCENTS.map((pc) => (
             <button
               key={pc}
@@ -519,7 +566,10 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
       )}
 
       <button
-        className={`btn btn-primary btn-block ${busy ? "btn-busy" : ""}`}
+        /* The primary action takes the active side's colour. It is the same control
+           either way, so the class is appended rather than replacing btn-primary --
+           padding, block width and the busy treatment all still apply. */
+        className={`btn btn-primary btn-block ${side === "buy" ? "btn-buy" : "btn-sell"} ${busy ? "btn-busy" : ""}`}
         /* ⚠ A wide tolerance must be acknowledged before it can be sent. The warning
            alone left the button live, which is advice next to a loaded trigger. */
         disabled={blocked || busy || (requiresAcknowledgement(slippageBps) && !slippageAck)}

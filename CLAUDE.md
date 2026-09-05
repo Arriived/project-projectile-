@@ -6,14 +6,14 @@
 
 | | |
 |---|---|
-| repo HEAD **when this was written** | `f96f267`, on branch **`ballista-migration`**, tree clean, pushed |
+| repo HEAD **when this was written** | `dc7e083`, on branch **`ballista-migration`**, tree clean, pushed. (Was `f96f267`; the earlier value stood for six commits after it stopped being true, which is the drift the paragraph below warns about.) |
 | deployed commit | `38e3e9e` — **not** the same thing, and it should not be. The contract is frozen; everything since is frontend. §7 carries this one. |
 | contract | **FROZEN.** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`, verified, 24,033 / 24,576 — 543 free. Re-confirmed on chain this session: `eth_getCode` returns 24,033 bytes. |
 | ✅ **ALL THREE WRITE PATHS PROVEN ON A REAL WALLET** | **Create, buy and sell, against real MetaMask, 2 September 2026. This closes the longest-open item in the project.** Round trip 246.89 → 246.778 USDC on a 5 USDC trade (~2.2% = two 1% fees plus gas). `wallet_watchAsset` prompted, imported, and MetaMask shows **1,991,519.04** — the correct figure, so decimals are right and trap 4 is clear. See §11.15. |
 | tests | **255 Hardhat passing + 10 pending** (the pending ones are the `FORK=1` suite), **13 Foundry**, **187 frontend** across nine suites (11+22+14+44+39+13+**31 upload** counted, plus i18n/claims pass-fail), **11 anon-key RLS checks**. |
 | tests NOT re-run | the **10 fork** checks (need a mainnet fork RPC) and the **14 live Arc-testnet R15** checks (need a funded key). Both passed when last run; neither was re-executed. |
 | indexer | Code is fixed and correct (§11.11) but ⚠ **runs on a laptop and nothing supervises it.** Live mode now polls `eth_getLogs`; it must never go back to a subscription. |
-| database | Migrations **000 + 001 + 002 + 003 + 004 all applied.** RLS re-verified with the **anon** key: **11/11**. View returns **5 rows / 34 columns**, `trades` **13 rows** (13 with `block_time`, 3 with reserve snapshots), `token_candles_1m` **3 candles**. |
+| database | Migrations **000 + 001 + 002 + 003 + 004 all applied.** RLS re-verified with the **anon** key: **11/11**. View returns **34 columns**; the ROW counts are live data and are therefore not asserted here — they were 5/13/3 when first written and were 11 tokens / 28 trades / 15 candles on 5 September 2026. **Read them, do not quote them:** `node indexer/scripts/verify-anon-access.js` prints the token and trade counts as part of its 11/11. |
 | frontend | **BUILT, and the create flow SHIPS — now with image upload.** React + Vite + wagmi + viem in `app/`. `/`, `/t/:address`, `/about`, `/create`. Price chart, toasts, focus states, Pinata uploads. ⚠ **No longer a purely static build**: `app/api/sign-upload.ts` is a serverless function (§11.17). Entry bundle **228.37 kB gzip**; the chart is a **55.20 kB lazy chunk** loaded only on a token page. |
 | ✅ deployment | **LIVE IN PRODUCTION — this row said "nothing is deployed anywhere" until 4 September 2026.** Frontend at **`https://ballista.trading`** (Vercel project `ballista`, Root Directory `app`); indexer at **`https://ballista-indexer.fly.dev/health`** (Fly app `ballista-indexer`, one machine, `iad`). Both verified HTTP 200 this session. Full detail in `app/DEPLOY.md` and `indexer/RUNBOOK.md` — **read those before touching either**, they carry traps that cost real deploys. |
 
@@ -134,7 +134,7 @@ git config core.hooksPath .githooks  # REQUIRED: see below
 npm run build                        # compile + regenerate the indexer ABI
 
 cd app && npm install                # the React frontend is a SEPARATE package (§11)
-npm run verify                       # 143 checks across seven suites; all should pass
+npm run verify                       # every suite; prints SUITES=n CHECKS=n FAILED=n
 npm run dev                          # http://localhost:5173
 ```
 
@@ -1034,9 +1034,9 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| deployed commit | `38e3e9e` — **the commit the frozen bytecode was built from, NOT the repo HEAD.** Repo HEAD is `f96f267`; the gap is entirely frontend work and the contract has not moved. Keep these two labelled differently, because this file has carried three conflicting HEADs before. |
+| deployed commit | `38e3e9e` — **the commit the frozen bytecode was built from, NOT the repo HEAD.** Repo HEAD is `dc7e083` (it read `f96f267` for six commits after that stopped being true); the gap is entirely frontend work and the contract has not moved. Keep these two labelled differently, because this file has carried three conflicting HEADs before. |
 | bytecode | **24,033 / 24,576 — 543 free.** Verified on chain this session: `eth_getCode` on the factory returns 24,033 bytes. |
-| tests | **255 Hardhat passing + 10 pending** (pending = the `FORK=1` suite, skipped without it), **13 Foundry** (`forge test`, 3 suites, 205s). Re-run this session. The **14 live R15** checks and the **10 fork** checks were **not** re-run — they need a funded key and a fork RPC respectively. |
+| tests | **255 Hardhat passing + 10 pending** (pending = the `FORK=1` suite, skipped without it), **13 Foundry** (`forge test`, 3 suites). ⚠ **Re-measured 5 September 2026: 664s wall / 1,472s CPU, not the 205s recorded here** — budget ~11 minutes, not ~3. Both counts re-run and green that day. The **14 live R15** checks and the **10 fork** checks were **not** re-run — they need a funded key and a fork RPC respectively. |
 | last mutation score | **52/56 = 92.9%**, re-read from `guard-coverage.jsonl` this session rather than recalled: 56 sites, 52 `DETECTED`, 4 `UNDETECTED`. Same four survivors, all classified (§5). |
 
 ## Current deployment — re-frozen
@@ -1908,8 +1908,23 @@ operational gaps are now the project's real risk rather than the code.
 
 | method | `rpc.testnet.arc.io` | `rpc.testnet.arc.network` |
 |---|---|---|
-| `eth_newFilter` | **`-32603 internal error`** | **`-32603`** |
-| `eth_newBlockFilter` | **`-32603`** | **`-32603`** |
+| `eth_newFilter` | ~~`-32603 internal error`~~ → **`-32601 method not supported`** | same |
+| `eth_newBlockFilter` | ~~`-32603`~~ → **`-32601`** | same |
+
+⚠ **THE ERROR CODE CHANGED, AND THE RATIONALE BELOW IS NOW STALE. Re-measured on BOTH
+hosts, 5 September 2026: both filter methods return `-32601 method not supported`, not
+`-32603 internal error`.** Circle appears to have fixed the bug this section was written
+about — `-32601` is the standard "method not found" code, and §11.11 itself says that had
+Arc returned it, ethers' downgrade-to-polling fallback would have fired and the 29-hour
+outage would not have happened.
+
+**The polling design still stands and must not change.** Its justification was never the
+error code: a dropped or silently-dead subscription reproduces the outage regardless of
+how the failure is reported, and polling from the checkpoint is self-healing. Only the
+REASONING below is out of date, not the conclusion. Measured with viem 2.56 the same day:
+`createContractEventFilter` throws, viem's bare `catch {}` engages the `getLogs` fallback
+correctly, and `getContractEvents` returns our `Trade` events — so viem, unlike ethers,
+handles this properly either way.
 | `eth_getLogs` | works | works |
 | `eth_subscribe` over **WebSocket** (`wss://`) | **works** | **works** |
 | `eth_subscribe` over **HTTP** | **returns an id — see the trap below** | same |
@@ -2514,10 +2529,10 @@ helper** in a common module rather than a fourth private copy.
 | `app/api/` outside the TS project | `app/tsconfig.json` has `"include": ["src"]`, so `tsc -b` **never type-checks the serverless function** |
 | No `engines` / `.nvmrc` at the repo root | confirmed absent. `verify:*` needs Node ≥22. ⚠ The **indexer's** floor is Supabase's own `engines: >=22.0.0`, not `--experimental-strip-types` |
 | Explore sort ranks graduated tokens by a stale market cap | reported, **deliberately not changed** |
-| Reown project ID not allowlisted | `api.web3modal.org/…/project-limits` 403, `pulse.walletconnect.org/batch` 400. Config, not code |
+| ~~Reown project ID not allowlisted~~ → ⚠ **MISDIAGNOSED. The 403 was a TRUNCATED PROJECT ID, not the allowlist** | Measured 5 September 2026 with both values against three origins: the correct id returns **200** from `ballista.trading`, `ballista.vercel.app` and `localhost:5173` — and **200 from an unlisted origin too**, so that endpoint was never origin-gated. The truncated id returns **403 everywhere**. Production had `6c706f1c…`, missing the leading `8`, lost to a dashboard paste. `pulse.walletconnect.org/batch` returns **400 with BOTH ids**, so that one is a payload-shape response and not an auth failure at all — do not chase it. |
 | ⚠ Wallet extension flagged the `*.vercel.app` preview as phishing | **not yet tested on `ballista.trading`.** Blockaid / MetaMask / Phantom review takes days and could not start until the domain served the app — which it now does |
 | zh-Hans translation | ⚠ **7 of 330 keys** (counted this session — the figure "239" in circulation is stale). `SHIPPED_LOCALES = ["en"]`, so it is reported, not enforced; moving it to shipped turns on a hard gate |
-| `.gitignore` gap | ⚠ `.env*.tmp` matches `.env.production.tmp` but **NOT** `.env.production.tmp.txt` — verified with `git check-ignore`. Both files existed at the repo root with real secrets and are now deleted. **The pattern gap is real and unfixed.** |
+| ~~`.gitignore` gap~~ → ⚠ **THE PROSE WAS WRONG WHEN IT WAS WRITTEN** | `.env*.tmp.txt` was added **in commit `dc7e083` — the SAME commit whose prose says the gap is "real and unfixed"**. It was written from an earlier measurement and never re-measured, which is exactly the failure the "Pending, small" section warns about, occurring inside the act of writing the warning. ⚠ The list was also still incomplete: `.env.production.tmp.bak`, `.env.prod.backup`, `.env.production.txt` and `.env.local.tmp.json` were all verified UNIGNORED. **Now closed properly** — the four `.env` lines are replaced by `.env*` plus `!.env.example`, and all eight variants are confirmed ignored with `git check-ignore` while `.env.example` stays tracked. |
 
 ## 12.8 What to do next, ranked
 
@@ -2543,7 +2558,8 @@ helper** in a common module rather than a fourth private copy.
 
 **Provider decision is MADE — do not reopen it.** Goldsky Edge at launch, our own indexer,
 Turbo in October as a resilience layer. ⚠ **Edge passes filter methods through to the node**,
-so `eth_newFilter` will return `-32603` on mainnet exactly as on testnet and **the polling
+so `eth_newFilter` will return `-32601` (see §11.11 — it was `-32603` until Arc fixed it,
+re-measured 5 September 2026) on mainnet exactly as on testnet and **the polling
 design stays correct**. The `getLogs` range cap on Arc mainnet is **still unanswered** —
 default 20K, heavier chains 1K; Goldsky has the question with engineering.
 
@@ -2570,3 +2586,202 @@ hashes at once and an unmarked guess is worse than an admitted hole.
   read.
 * **The 828 MB upload figure and the flyctl trap details.** Reported by the operator from
   the deploy session. `flyctl v0.4.97` **was** confirmed on this machine.
+
+---
+
+# 13. SESSION OF 5 SEPTEMBER 2026 — quote fix, identity pass, checker repair
+
+⚠ **APPENDED, NOT A REWRITE.** §12's warning applies unchanged: this file has lost three
+sections to a rewrite before. Everything above is amended in place where it was wrong, and
+each amendment says what it used to say.
+
+## 13.1 ⚠ §12.2's DIAGNOSIS OF THE STALE QUOTE WAS WRONG. It was not staleness.
+
+§12.2 records "the panel quotes moved reserves for up to 30 seconds" and reads the
+displayed `0.000001 USDC` against a settled `6.08` as a stale quote. **Measured against
+archive state at the incident's own blocks, a stale quote could not have produced that
+figure.** `quoteSell` for the exact amount submitted (2,471,092,226,246,865,422,123,154):
+
+| block | | net out |
+|---|---|---|
+| 60466878 | before the preceding sell | 6.168161 |
+| **60466934** | **immediately BEFORE the bug trade** | **6.083285** |
+| **60466935** | **the trade's OWN block, after it** | **0.000001** |
+
+`0.000001` exists at exactly one block: **after** the trade. A stale quote shows **6.08** —
+which is what it settled at.
+
+**What actually happened: an ORPHANED quote, not a stale one.** `input` was never cleared
+on settle, so after the sell confirmed `data.refetch()` moved "In the curve" to 0.000001
+and the quote query — still keyed to an amount the user no longer held — was re-read
+against the drained curve and rendered directly beneath "Settled … 6.08 USDC". Both numbers
+were correct; only their juxtaposition lied.
+
+The trade sequence, from the `Trade` events: buy, sell **75%**, sell the remaining **100%**
+(7,413,276,678,740,596,266,369,462 then 2,471,092,226,246,865,422,123,154 — exactly 3:1).
+
+**A real stale window ALSO existed, and is also fixed.** Same amount, same token:
+**18.419215** at block 60466878 vs **6.083286** at 60466934 — a quote taken before an
+intervening trade and shown after it **OVERSTATES by 3.03x**, for up to 30s, across
+anyone's trade. Overstating is the direction that matters.
+
+⚠ **Underneath both: three figures on three clocks.** The curve polled at **6s**, balances
+at **8s**, the quote at **30s** — so "In the curve" and "Estimated receive" routinely
+described the same curve at different moments.
+
+### The fix, and why it is NOT a `Trade` event watcher
+
+The quote is keyed on a **curve fingerprint** (`curveQuoteFingerprint`, `lib/quotes.ts`)
+built from data `useCurve` already fetches: virtual reserves, `realUsdcReserves`,
+`tokenReserves`, `state`, `snipeTaxBps`.
+
+* **Zero extra RPC.** A `watchContractEvent` costs ~2 calls per poll per open page.
+* Own trade → invalidated **immediately** (the receipt already calls `data.refetch()`).
+  Someone else's → **≤6s**, against 30s before.
+* Catches a move the `Trade` event would miss, such as a graduation closing both sides.
+
+⚠ **DO NOT reduce the fingerprint to a block number.** A block in which nothing touched
+this curve does not stale a quote, and invalidating per block would refetch every ~0.48s
+forever. It changes when the ANSWER would change — that is what makes it correct and cheap.
+
+**In-flight treatment — the distinction the old code could not make.** `placeholderData`
+carries a figure forward only while it is merely OLD (amount changed, poll ticked); it
+DROPS it the moment the fingerprint changes, because then the number is not old but wrong.
+Implemented structurally: the fingerprint is in the query key, so a superseded figure sits
+in a different cache entry and is unreachable.
+
+**`verify:quotefresh`, 28 checks, 7/7 mutations killed.** Q23 is the control — on an
+unchanged curve the figure survives all three polls, so the mechanism discriminates rather
+than blanket-refusing.
+
+## 13.2 ⚠ `eth_newFilter` NOW RETURNS `-32601`, NOT `-32603`
+
+See §11.11, amended in place. Both hosts, both filter methods, measured 5 September 2026.
+Circle appears to have fixed the bug §11.11 was written about. **The polling design is
+unchanged and must stay** — its justification was never the error code.
+
+## 13.3 ⚠ THE REOWN 403 WAS A TRUNCATED PROJECT ID, NOT THE ALLOWLIST
+
+§12.7 recorded "Reown project ID not allowlisted". **Wrong cause.** Production carried
+`6c706f1caa5d9a114f7e206898ea947` — 31 characters, the leading `8` lost to a dashboard
+paste. Measured with both values against three origins:
+
+| | correct id `86c706f1c…` | truncated id `6c706f1ca…` |
+|---|---|---|
+| `ballista.trading` | **200** | 403 |
+| `localhost:5173` | **200** | 403 |
+| an **unlisted** origin | **200** | 403 |
+| `getWallets` registry | **200, 609 wallets** | 403 |
+
+⚠ **The config endpoint returns 200 even from an unlisted origin**, so it was never
+origin-gated and the allowlist was never the cause. ⚠ `pulse.walletconnect.org/batch`
+returns **400 with BOTH ids** — a payload-shape response, not auth. Do not chase it.
+
+⚠ **The console displays the id with its first character truncated**, which is how the
+wrong value looked plausible. **The full value is 32 hex characters beginning `86c706f1c`.**
+
+## 13.4 ⚠ AppKit CANNOT BE INSTALLED. It is a hard dependency conflict, not a preference.
+
+The full Reown AppKit modal was approved and **was not built**, on the escape hatch the
+task itself provided. `@reown/appkit-adapter-wagmi` (1.8.19 and 1.8.23 both tried) fails to
+resolve:
+
+```
+Conflicting peer dependency: ox@0.8.9
+  @wagmi/core@3.6.5 -> accounts@0.18.4 -> @privy-io/react-auth@3.40.0
+    -> permissionless@0.2.57 -> peerOptional ox@^0.8.0
+```
+
+⚠ **`ox` is a DIRECT DEPENDENCY OF viem** — the library that encodes and signs every
+transaction. The installed version is **0.14.34**; AppKit's resolution wants **0.8.9**. The
+only ways past are `--force` or `--legacy-peer-deps`, which npm itself calls "an incorrect
+(and potentially broken) dependency resolution". **Downgrading `ox` under viem, eleven days
+before mainnet, to improve a wallet picker, is not a trade worth making.** Nothing was
+installed; `package-lock.json` is untouched.
+
+**Shipped instead: the EIP-6963 in-place upgrade.** Icons (with an initials fallback) and
+INSTALLED / QR / Unidentified badges, **zero new dependencies**. ⚠ The badge is derived from
+DISCOVERY, never from the name — Phantom wins `window.ethereum` on a two-extension machine,
+so a name-based rule would confidently mislabel the generic entry. The 540+ wallet search
+genuinely needs the registry and is therefore **not shipped**.
+
+⚠ **W14–W18 all still pass** (21/21 before the addition, 34/34 after). The connector dedupe
+is untouched.
+
+## 13.5 The checker repair, and a bug it caught in itself
+
+`stripComments()` is now one shared helper (`scripts/lib/strip-comments.mts`) replacing
+three private copies, as §12.6 proposed.
+
+⚠ **`REJECTS_CLAIM` IS DELETED, AND THE RESIDUAL EXEMPTION IS NONE.** Measured: stripping
+comments and running all five patterns over all 60 scanned files with **no exemption at
+all** yields **zero hits**. Every one of the 8 matches the word list used to suppress was a
+comment. The exemption was buying nothing and disabling four of five patterns.
+
+⚠ **THE FIRST SHARED STRIPPER HAD A BUG THAT DELETED REAL CODE.** A lazy JSX pattern
+backtracked past the first `*/` to a later one followed by `}`, matching from a media
+query's opening brace to its closing brace and **deleting 1,013 characters of styles.css**,
+including the `.addr-full` rule. Caught only because `verify:address` A13/A14 went red.
+**Those went red — the safe direction. The same over-deletion inside `verify:claims` would
+be SILENT**, because text the stripper eats is text that can never be flagged: a stripper
+that removes too much turns every negative check into a pass. Hence `verify:strip`
+(15 checks), and the tempered pattern that cannot span a comment boundary.
+
+## 13.6 Identity: the mark, the colours, the ground
+
+* **The wordmark is now the bow-and-arrow**, as one inline SVG with
+  `stroke="currentColor"` — one asset, both themes, no theme-switch bug. Header measures
+  **59.70px at 390px** (under the 61px bar); `ARC TESTNET` untouched and still derived from
+  `arc.name`.
+* ⚠ **The supplied raster assets were NOT broken.** The brief said `android-chrome-192x192.png`
+  was "dark grey on a solid white background". Measured: **94.9% fully transparent, ZERO
+  opaque white pixels** (favicon-32 90.9%, ballista-logo 96.0%, all zero). They render on
+  white in a previewer because previewers composite alpha onto white. **The favicons and
+  `site.webmanifest` needed no change** and carry this same drawing.
+* ⚠ **The header stroke is HEAVIER than the source drawing, deliberately.** Matching the
+  original's line weight needs ~0.35 in a 24 viewBox, which at 22px renders as a third of a
+  pixel and disappears. Judge it at 22px, not at 340px.
+* **Buy is `--pos`, sell is `--neg`.** ⚠ `color: var(--bg)` is what makes ONE declaration
+  correct in both themes — the tokens already encode the inversion. Picking white or
+  near-black outright fails half the cases: white on dark `--pos` is **2.67:1**, near-black
+  on light `--neg` is **2.64:1**. All four shipped pairs are **5.85–7.08:1**.
+* ⚠ **Colour is never the only signal.** The active tab keeps font-weight 600, a `--soft`
+  background and a 2px underline bar, plus `aria-selected` on a real `role="tablist"`. All
+  three survive desaturation.
+* **The dark ground is NEUTRAL: `#111111`.** It was `#14140f` — R20 G20 B15, a 5-point
+  red-over-blue bias that read brown-black. Every dark token now has R = G = B exactly, and
+  `--bg` equals the light theme's `--text`. Contrast improved on every pair.
+* ⚠ **`PriceChart`'s `PALETTE` is a COPY** and moved in the same change. `verify:theme`
+  asserts the correspondence. ⚠ It also found that `grid` is **not the same token in both
+  themes** — light uses `--soft`, dark uses `--line` — which is **pre-existing** and is
+  pinned as-is rather than silently normalised, because changing the light chart is a
+  visual decision nobody has taken.
+* **None of the 13 hardcoded `#fff` backgrounds returned.** The only `#ffffff` left is the
+  light theme's own `--card` token.
+
+## 13.7 Counts are now DERIVED, not asserted
+
+`npm run verify` is a runner (`scripts/verify-all.mts`) that discovers every `verify:*`
+script from `package.json`, runs **all** of them (the old `&&` chain stopped at the first
+failure and hid the rest), and prints:
+
+```
+SUITES=16 CHECKS=460 FAILED=0
+```
+
+⚠ **Quote that command, never a number.** This file has asserted "143 across seven suites"
+and "187 across nine" while the truth was 337 across 13.
+
+⚠ **It judges a suite by its EXIT CODE, not by counted FAIL lines.** A crashed suite prints
+no FAIL lines at all; a counter alone would report it green. Proved by crashing one
+deliberately: `RED verify:chain (exit 1, no FAIL lines — crashed?)`, exit 1 with `FAILED=0`.
+
+## 13.8 Still open after this session
+
+* **`VITE_WALLETCONNECT_PROJECT_ID` in Vercel Production is still truncated** at the time
+  of writing — Moad is correcting it in the dashboard. Until then WalletConnect fails auth
+  on `ballista.trading` regardless of the allowlist. **The correct value is 32 hex
+  characters beginning `86c706f1c`.**
+* **The 540+ wallet search** needs AppKit, which needs the `ox` conflict resolved upstream.
+* **The light chart's grid token** differs from the dark one (§13.6). Pinned, not fixed.
+* Everything in §12.8 that this session did not touch.

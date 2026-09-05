@@ -190,6 +190,32 @@ means re-issuing the key at Pinata, not recovering it from the platform.
 
 ### Two CLI traps that cost real time
 
+### ⚠ THIS TRAP ALREADY FIRED, ON `VITE_WALLETCONNECT_PROJECT_ID`
+
+Production carried **`6c706f1caa5d9a114f7e206898ea947`** — 31 characters. The correct value
+is 32 and begins **`86c706f1c`**; the leading `8` was lost to a dashboard paste. Found 5
+September 2026.
+
+**Everything WalletConnect-shaped fails with an invalid project id, and it fails as a
+`403` that looks exactly like an origin-allowlist problem.** Measured with both values:
+
+| | correct id | truncated id |
+|---|---|---|
+| `api.web3modal.org/appkit/v1/config` from any allowlisted origin | **200** | 403 |
+| the same endpoint from an **unlisted** origin | **200** | 403 |
+| `api.web3modal.org/getWallets` (the 540+ registry) | **200, 609 wallets** | 403 |
+
+⚠ **The config endpoint is not origin-gated at all**, so a 403 there is ALWAYS the id and
+never the allowlist. Do not chase the Reown domain list on that signal.
+
+⚠ **`pulse.walletconnect.org/batch` returns 400 with BOTH ids.** That is a payload-shape
+response, not authentication. It is not evidence of anything.
+
+⚠ **The browser console prints the id with its first character cut off**, which is how the
+truncated value looked plausible for as long as it did. **Check the length: it is 32 hex
+characters, and it starts `86c706f1c`.** `app/.env.local` has always been correct; only the
+Production copy was short.
+
 ⚠ **The Vercel CLI truncates long values pasted at its prompt.** A long secret entered
 interactively is silently cut short, and the failure surfaces later as an upstream auth
 error rather than as a paste problem. **Long secrets go in through the dashboard.**
@@ -213,16 +239,24 @@ Production is actively wrong, and `VERCEL_OIDC_TOKEN` is a live credential. Only
 during this session, both containing real secrets (`PINATA_JWT`, `VERCEL_OIDC_TOKEN`, the
 Supabase anon key). `.gitignore` matched **neither** until `.env*.tmp` was added.
 
-⚠ **`.env*.tmp` STILL DOES NOT MATCH THE `.txt` VARIANT.** Verified with
-`git check-ignore` at the time of writing:
+⚠ **THIS SAID THE `.txt` VARIANT WAS STILL UNIGNORED. IT WAS ALREADY FIXED WHEN THAT WAS
+WRITTEN — corrected 5 September 2026.** `.env*.tmp.txt` was added in commit `dc7e083`, the
+same commit whose prose said the gap was "real and unfixed": written from an earlier
+measurement and never re-measured.
 
-```
-.env.production.tmp        IGNORED
-.env.production.tmp.txt    NOT IGNORED     <- a git add -A would stage secrets
+⚠ **And the list was still incomplete.** `.env.production.tmp.bak`, `.env.prod.backup`,
+`.env.production.txt` and `.env.local.tmp.json` were all verified UNIGNORED — a list
+assembled one incident at a time never covers the variant nobody has invented yet.
+
+**Now closed by one pattern rather than a list:**
+
+```gitignore
+.env*
+!.env.example
 ```
 
-Both files have since been deleted, so nothing is exposed today. The pattern gap is real
-and unfixed.
+Verified with `git check-ignore`: all eight variants ignored, `.env.example` still tracked
+and still not ignored.
 
 ### Deployment Protection is OFF
 

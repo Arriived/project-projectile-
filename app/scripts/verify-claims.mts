@@ -19,6 +19,7 @@
 // Run: npm run verify:claims   (wired into the verify chain)
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
+import { stripComments } from "./lib/strip-comments.mts";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -52,13 +53,9 @@ files.push(shell);
 /**
  * Claims that must not appear, with the reason attached to each.
  *
- * Matched case-insensitively against SOURCE TEXT, including comments -- a comment
- * asserting "we ship v4" is wrong in the same way and misleads the next reader, which is
- * how the claim reached five places to begin with.
- *
- * The one legitimate exception is prose that explicitly says V4 is NOT what ships. Those
- * lines name the contradiction rather than making the claim, so they are allowed by an
- * explicit allowlist of surrounding words rather than by a blanket carve-out.
+ * ⚠ MATCHED AGAINST SOURCE WITH COMMENTS STRIPPED. Read the note on REJECTS_CLAIM's
+ * removal below before changing that -- scanning comments as well cost this checker four
+ * of its five patterns.
  */
 const FORBIDDEN: { pattern: RegExp; why: string }[] = [
   {
@@ -83,28 +80,60 @@ const FORBIDDEN: { pattern: RegExp; why: string }[] = [
   },
 ];
 
+// ⚠ REJECTS_CLAIM IS DELETED. IT DISABLED FOUR OF THE FIVE PATTERNS ABOVE.
+//
+// It was a word-list exemption: any line matching /not|never|instead|was|
+// said|.../ was skipped, on the reasoning that a line NAMING a forbidden claim in
+// order to reject it is not making it. The reasoning was sound; the mechanism was not.
+// Those are among the commonest words in English, so ordinary marketing copy carried
+// them and was waved straight through. Measured, using this file's own regexes:
+//
+//   MISSED  Liquidity lands in a Uniswap v3 pool, not a bespoke AMM.
+//   MISSED  LP is locked forever — your liquidity is never at risk.
+//   MISSED  A 90/10 creator split, not the industry standard.
+//   MISSED  Creators are capped at 2.5%, so nobody was able to dump on you.
+//
+// The second is the one that mattered: CLAUDE.md §1.8 says "burned" and "locked" are NOT
+// interchangeable claims, and LP burned to 0x…dEaD is one of the differentiators the
+// positioning rests on. A checker that would not catch that sentence was not doing its job.
+//
+// ⚠ THE RESIDUAL EXEMPTION IS NONE, and that is measured rather than assumed. Stripping
+// comments and running all five patterns over all 60 scanned files with NO exemption
+// yields ZERO hits -- every one of the 8 matches the word list used to suppress was a
+// comment (`// Was "Uniswap v4".`), which stripComments now removes at the source. The
+// exemption was therefore buying nothing and costing four patterns.
+//
+// ⚠ DO NOT REINTRODUCE A WORD LIST if a legitimate rejection ever needs to appear in
+// SHIPPED COPY. Exempt that one string by identity, or reword it. A vocabulary rule
+// cannot tell "we do not use Uniswap v4" from "Uniswap v4 pools, not the older V3".
+
 /**
- * Lines that NAME a forbidden claim in order to reject it are not making it.
+ * Every forbidden claim in a piece of text, with the line it appeared on.
  *
- * This vocabulary was too narrow on its first run and flagged this very file's header,
- * which quotes "Uniswap v4" precisely to explain why it is banned. A checker that fails
- * on its own explanation of itself is a checker people switch off, so the exemption has
- * to cover honest quotation -- while staying keyed to explicit rejection words rather
- * than becoming a blanket carve-out for comments.
+ * ⚠ EXPORTED SHAPE ON PURPOSE: the fixture check below runs the SAME function over
+ * hand-written claim strings that the file scan runs over real source. A fixture tested
+ * against a reimplementation of the detector proves only that the detector can be typed
+ * twice -- CLAUDE.md §12.6's M13 rule.
  */
-const REJECTS_CLAIM =
-  /\bnot\b|\bnever\b|\bno version\b|\bpost-launch\b|\bforbidden\b|\bmust not\b|\bcontradicts?\b|\binstead\b|\bwas\b|\bsaid\b|\bbanned\b|\bunversioned\b/i;
+function findForbiddenClaims(text: string): { line: number; text: string; why: string }[] {
+  const found: { line: number; text: string; why: string }[] = [];
+  stripComments(text)
+    .split("\n")
+    .forEach((line, i) => {
+      for (const { pattern, why } of FORBIDDEN) {
+        if (pattern.test(line)) found.push({ line: i + 1, text: line.trim(), why });
+      }
+    });
+  return found;
+}
 
 const hits: string[] = [];
 for (const f of files) {
-  const src = readFileSync(f, "utf8");
-  src.split("\n").forEach((line, i) => {
-    for (const { pattern, why } of FORBIDDEN) {
-      if (!pattern.test(line)) continue;
-      if (REJECTS_CLAIM.test(line)) continue;
-      hits.push(`${relative(root, f)}:${i + 1}\n        ${line.trim().slice(0, 90)}\n        -> ${why}`);
-    }
-  });
+  for (const h of findForbiddenClaims(readFileSync(f, "utf8"))) {
+    hits.push(`${relative(root, f)}:${h.line}
+        ${h.text.slice(0, 90)}
+        -> ${h.why}`);
+  }
 }
 
 console.log(`── public claims (${files.length} files) ──`);
@@ -142,6 +171,52 @@ check(
   namesUniswap && !versionedInCopy,
   `${copyValues.length} strings checked — names Uniswap: ${namesUniswap}, versioned: ${versionedInCopy}`
 );
+
+// ══ FIXTURES ═══════════════════════════════════════════════════════════════════════
+//
+// ⚠ EVERY PATTERN IS PROVED TO CATCH A REAL-SHAPED CLAIM. Four of these five were MISSED
+// by the old REJECTS_CLAIM word list; they are pinned here so removing the exemption
+// cannot be quietly undone.
+//
+// ⚠ THESE ARE CLAIM STRINGS, NOT COMMENTS. That distinction is the whole point: the
+// self-matching trap has fired three times in this project, so each fixture is written as
+// the sentence a marketing page would actually contain, and F6 below proves the SAME
+// sentence is correctly ignored once it is a comment.
+//
+// ⚠ scripts/ is not in the scanned tree (`root` is ../src plus ../index.html), so these
+// strings cannot flag the build by existing here. Verified: the scan reports 60 files and
+// none of them is this one.
+console.log("\n── the detector catches a real claim for every pattern ──");
+
+const CLAIM_FIXTURES: [string, string][] = [
+  ["v4", "Every launch graduates into a Uniswap v4 pool the moment it fills."],
+  ["v3", "Liquidity lands in a Uniswap v3 pool, not a bespoke AMM."],
+  ["LP locked", "LP is locked forever — your liquidity is never at risk."],
+  ["90/10", "A 90/10 creator split, not the industry standard."],
+  ["creator cap", "Creators are capped at 2.5%, so nobody was able to dump on you."],
+];
+for (const [label, claim] of CLAIM_FIXTURES) {
+  const found = findForbiddenClaims(claim);
+  check(`F  catches the ${label} claim`, found.length > 0, JSON.stringify(claim.slice(0, 52)) + "…");
+}
+
+// ⚠ THE OTHER HALF. Stripping must still exempt honest quotation in a COMMENT, or the
+// checker fails the build for explaining itself -- the defect CLAUDE.md §11.7 records.
+// Same sentence, once as code and once as a comment.
+const asComment = "// " + CLAIM_FIXTURES[2][1];
+check("F6 the same sentence as a COMMENT is not flagged", findForbiddenClaims(asComment).length === 0);
+check("F7 …but as shipped copy it still is", findForbiddenClaims(CLAIM_FIXTURES[2][1]).length > 0);
+
+// Negative control: honest copy must not trip anything, or the checker is noise people
+// switch off.
+const CLEAN = [
+  "At the threshold the curve closes and its liquidity moves to a Uniswap pool.",
+  "The LP tokens are burned, so the liquidity cannot be withdrawn.",
+  "Creators receive 70% of trading fees, blended across buys and sells.",
+];
+for (const line of CLEAN) {
+  check(`F8 honest copy is not flagged`, findForbiddenClaims(line).length === 0, JSON.stringify(line.slice(0, 44)) + "…");
+}
 
 console.log(`\n${failures === 0 ? "OK" : `${failures} FAILURE(S)`}`);
 // ⚠ process.exitCode, NOT process.exit(). process.exit() tears the event loop down
