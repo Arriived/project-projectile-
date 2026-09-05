@@ -29,6 +29,7 @@ import {
   walletInitials,
   type WalletChoice,
 } from "../lib/wallets";
+import { classifySwitchFailure, chainIdHex } from "../lib/switchFailure";
 import { useT } from "../i18n";
 
 function short(addr: string) {
@@ -146,7 +147,8 @@ function WalletPicker({
 export function WalletBar() {
   const { t } = useT();
   const { address, connector } = useAccount();
-  const { guard, switchToArc, switching, stuck, inAutoPrompt, switchError } = useChain();
+  const { guard, switchToArc, switching, stuck, inAutoPrompt, switchError, sessionNamespace } =
+    useChain();
   const { connect, isPending: connecting, error: connectError, variables } = useConnect();
   const { disconnect } = useDisconnect();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -259,9 +261,29 @@ export function WalletBar() {
             )}
             {switchError && !stuck && (
               <span className="wallet-err" role="status">
-                {switchError.name === "UserRejectedRequestError"
-                  ? t("chain.switchDeclined")
-                  : switchError.message.split("\n")[0]}
+                {/* ⚠ THE ERROR NAME IS NOT ENOUGH, AND TRUSTING IT COST A DEBUGGING
+                    SESSION. wagmi rethrows every failure in the WalletConnect switch path
+                    as UserRejectedRequestError, so a chain the wallet never offered was
+                    reported as the user declining a prompt they never saw. The session's
+                    approved chains are the only thing separating the two, which is why
+                    classifySwitchFailure consults them FIRST. */}
+                {(() => {
+                  const why = classifySwitchFailure({
+                    error: switchError,
+                    namespace: sessionNamespace,
+                    targetChainId: arc.id,
+                  });
+                  if (why.kind === "not-in-session") {
+                    return t("chain.switchNotInSession", {
+                      chain: arc.name,
+                      target: String(why.target),
+                      targetHex: chainIdHex(why.target),
+                      offered: why.offered.join(", "),
+                    });
+                  }
+                  if (why.kind === "declined") return t("chain.switchDeclined");
+                  return switchError.message.split("\n")[0];
+                })()}
               </span>
             )}
           </div>

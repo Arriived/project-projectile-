@@ -25,7 +25,8 @@
     "verify:launchbuy": "node --experimental-strip-types scripts/verify-launchbuy.mts",
     "verify:quotefresh": "node --experimental-strip-types scripts/verify-quote-freshness.mts",
     "verify:strip": "node --experimental-strip-types scripts/verify-strip-comments.mts",
-    "verify:theme": "node --experimental-strip-types scripts/verify-theme.mts"
+    "verify:theme": "node --experimental-strip-types scripts/verify-theme.mts",
+    "verify:switch": "node --experimental-strip-types scripts/verify-switch-failure.mts"
   },
   "dependencies": {
     "@metamask/connect-evm": "^2.1.1",

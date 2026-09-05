@@ -270,6 +270,11 @@ export const en = {
     switching: "Switching to {chain} — confirm in {wallet}…",
     switchDeclined: "Network switch declined — still on the wrong network.",
     switchStuck: "That didn’t complete — still on the wrong network. Try again.",
+    // The wallet never offered the chain, so nobody declined anything. wagmi rethrows a
+    // namespace miss as UserRejectedRequestError, which made the UI blame the user for a
+    // prompt that was never shown. Naming both sides is what makes this self-diagnosing.
+    switchNotInSession:
+      "Your wallet’s WalletConnect session does not include {chain} (chain {target}, {targetHex}). It approved {offered}. Reconnect and approve {chain}, or add it in your wallet first — nothing was declined.",
     bannerWrong: "Your wallet is on chain {chainId}, not {chain}.",
     bannerUnknown: "Your wallet’s network could not be confirmed.",
     bannerBody:

@@ -10,6 +10,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useAccount, useSwitchChain } from "wagmi";
+import type { Eip155Namespace } from "../lib/switchFailure";
 import { arc } from "../chain";
 import { useArcGuard, type ArcGuard } from "../hooks/useArcGuard";
 import { shouldAutoPromptSwitch } from "../lib/arcGuard";
@@ -41,6 +42,15 @@ type ChainState = {
   /** An automatic on-connect prompt is open. Callers should stay quiet, not alarm. */
   inAutoPrompt: boolean;
   switchError: Error | null;
+  /**
+   * The `eip155` namespace of the WalletConnect session, when there is one.
+   *
+   * ⚠ Read so a failed switch can be classified honestly. wagmi rethrows a namespace miss
+   * as `UserRejectedRequestError`, so the error alone cannot tell "the user said no" from
+   * "the wallet never offered this chain" -- only the approved chain list can. `undefined`
+   * for injected wallets, which keeps them on the pre-existing behaviour.
+   */
+  sessionNamespace: Eip155Namespace | undefined;
 };
 
 const Ctx = createContext<ChainState | null>(null);
@@ -49,6 +59,35 @@ export function ChainProvider({ children }: { children: ReactNode }) {
   const { address, connector } = useAccount();
   const guard = useArcGuard();
   const { switchChain, isPending: switching, error: switchError } = useSwitchChain();
+
+  // ── The WalletConnect session's approved chains ───────────────────────────────
+  //
+  // Read once per connection, off the connector's own provider. Injected providers have no
+  // `.session`, so this stays undefined for them and nothing downstream changes.
+  const [sessionNamespace, setSessionNamespace] = useState<Eip155Namespace | undefined>(undefined);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!connector) {
+        if (alive) setSessionNamespace(undefined);
+        return;
+      }
+      try {
+        const provider = (await connector.getProvider()) as {
+          session?: { namespaces?: Record<string, Eip155Namespace> };
+        } | undefined;
+        if (!alive) return;
+        setSessionNamespace(provider?.session?.namespaces?.eip155);
+      } catch {
+        // A provider that will not answer tells us nothing about the session. Undefined
+        // means "cannot say", which falls back to the error name rather than guessing.
+        if (alive) setSessionNamespace(undefined);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [connector, address]);
 
   const startedAt = useRef<number | undefined>(undefined);
   const [, setTick] = useState(0);
@@ -143,6 +182,7 @@ export function ChainProvider({ children }: { children: ReactNode }) {
         stuck,
         inAutoPrompt,
         switchError: switchError ?? null,
+        sessionNamespace,
       }}
     >
       {children}
