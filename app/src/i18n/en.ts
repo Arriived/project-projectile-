@@ -253,7 +253,18 @@ export const en = {
     pickerTitle: "Connect a wallet",
     pickerClose: "Close",
     badgeInstalled: "Installed",
-    badgeQr: "QR / mobile",
+    // ⚠ "70+" IS A LOWER BOUND CHOSEN SO IT IS TRUE EITHER WAY, not a precise count.
+    // Measured against the registry with this project's own id: 609 wallets unfiltered,
+    // but 79 when filtered to the chain the dapp requests (eip155:5042002) -- and 544 for
+    // eip155:1, so the filter is doing real work. It could not be established from outside
+    // which of the two the embedded modal applies, so the copy states a floor that holds
+    // under both readings rather than a figure that is wrong under one of them.
+    //
+    // ⚠ The modal differs by width. At 390px it opens on "All Wallets" with a search box
+    // and a grid (Trust, MetaMask, Binance, SafePal, TokenPocket, imToken, Safe...). On
+    // desktop it opens on a bare QR pairing screen -- but that QR is a generic WalletConnect
+    // URI any of those wallets can scan, so the badge is honest at both sizes.
+    badgeQr: "QR / 70+ wallets",
     // Deliberately not "Installed": something is at window.ethereum but we cannot say
     // which wallet it is, and claiming an identity we do not have is the failure this
     // whole connector path exists to prevent.
