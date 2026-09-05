@@ -55,7 +55,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     // Keep the browser chrome in step with the page ground, or the notch area on iOS
     // stays off-white above a dark page.
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", theme === "dark" ? "#14140f" : "#f3f3f0");
+    // ⚠ THESE TWO MUST TRACK --bg IN styles.css. They are a THIRD copy of the ground
+    // colour (styles.css, PriceChart's PALETTE, here), and this one was missed when the
+    // dark ground went #14140f -> #111111: the iOS status bar and the Android task
+    // switcher kept painting the old brown-black against a neutral page. `verify:theme`
+    // now fails on any superseded token value appearing in a .ts/.tsx file, which is the
+    // general form of the check that would have caught it.
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#111111" : "#f3f3f0");
   }, [theme]);
 
   // Follow the OS only while the user has not chosen. Once they have, their choice wins

@@ -21,7 +21,9 @@
 // Everything is read from the REAL styles.css and the REAL PriceChart.tsx. Nothing is
 // retyped, so the check cannot pass against a copy that has drifted.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { stripComments } from "./lib/strip-comments.mts";
 
 let failures = 0;
@@ -177,6 +179,85 @@ for (const rel of ["src/routes/TokenList.tsx", "src/routes/Create.tsx", "src/pro
   const src = stripComments(readFileSync(new URL(`../${rel}`, import.meta.url), "utf8"));
   check(`S2 ${rel.split("/").pop()} hardcodes no white`, !/#fff\b|#ffffff|backgroundColor:\s*"white"/i.test(src));
 }
+
+// ══ 3b. NO SUPERSEDED TOKEN VALUE MAY SURVIVE IN CODE ════════════════════════════════
+//
+// ⚠ THE GENERAL FORM OF A CHECK THAT WAS TOO SPECIFIC, AND MISSED A LIVE BUG.
+//
+// The palette lives in styles.css but is COPIED wherever a consumer cannot read a CSS
+// custom property. This suite already checked one copy -- PriceChart's PALETTE -- and
+// asserted it matched. It never asked whether there were OTHER copies. There was one:
+//
+//   ThemeProvider.tsx set <meta name="theme-color"> to #14140f, the superseded dark
+//   ground, so the iOS status bar and the Android task switcher painted the old
+//   brown-black against a neutral #111111 page. Shipped, and confirmed on a real phone.
+//
+// So this does not enumerate the copies -- enumerating them is what failed. It asserts
+// the property: a retired colour must not appear anywhere in TypeScript, whatever the
+// reason. A new copy added tomorrow is covered without anyone remembering to add it here.
+console.log("\nretired token values — none may survive in .ts/.tsx");
+
+/**
+ * Values that WERE tokens and are not any more.
+ *
+ * ⚠ THIS LIST GROWS EVERY TIME A TOKEN VALUE IS RETIRED. When you change a value in
+ * styles.css, add the OLD one here. That is the whole maintenance contract, and it is the
+ * step that turns "we changed the palette" into "the palette cannot half-change".
+ *
+ * The current entries are the warm dark ramp replaced on 5 September 2026 (see the
+ * comment block above :root[data-theme="dark"] in styles.css).
+ */
+const RETIRED_TOKEN_VALUES = [
+  "#14140f", // was --bg    (dark)  -> #111111
+  "#ecece6", // was --text  (dark)  -> #ededed
+  "#8f8f86", // was --muted (dark)  -> #8f8f8f
+  "#2f2f29", // was --line  (dark)  -> #2e2e2e
+  "#1f1f1a", // was --soft  (dark)  -> #1e1e1e
+  "#1a1a15", // was --card  (dark)  -> #191919
+] as const;
+
+// ⚠ Comments are stripped first, and that is load-bearing rather than tidy. A file
+// explaining "this was #14140f before" is documenting the change, not shipping the value
+// — and a checker that cannot tell those apart is one people switch off. It is also the
+// self-matching trap CLAUDE.md §11.7 records and §12.6 makes a rule.
+const tsFiles: string[] = [];
+const walkTs = (dir: string) => {
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) walkTs(full);
+    else if (/\.tsx?$/.test(full)) tsFiles.push(full);
+  }
+};
+walkTs(fileURLToPath(new URL("../src", import.meta.url)));
+
+const retiredHits: string[] = [];
+for (const file of tsFiles) {
+  const code = stripComments(readFileSync(file, "utf8"));
+  code.split("\n").forEach((line, i) => {
+    for (const dead of RETIRED_TOKEN_VALUES) {
+      if (line.toLowerCase().includes(dead)) {
+        retiredHits.push(`${file.split(/[\/]/).slice(-2).join("/")}:${i + 1} ${dead} -> ${line.trim().slice(0, 56)}`);
+      }
+    }
+  });
+}
+check(
+  `R1 ⚠ no retired token value appears in any of the ${tsFiles.length} .ts/.tsx files under src/`,
+  retiredHits.length === 0,
+  retiredHits.length ? retiredHits.join(" | ") : `${RETIRED_TOKEN_VALUES.length} retired values checked`
+);
+
+// ⚠ THE CONTROL. Without it R1 also passes if RETIRED_TOKEN_VALUES is emptied, or if the
+// walker finds no files — both of which are "check does nothing" rather than "code clean".
+check("R2 the walker actually found files to scan", tsFiles.length > 20, `${tsFiles.length} files`);
+check("R3 the retired list is not empty", RETIRED_TOKEN_VALUES.length > 0);
+// And the light tokens are UNCHANGED and legitimate: they must never be flagged.
+const LIGHT_STILL_LIVE = ["#f3f3f0", "#111111", "#777777", "#d6d6d1", "#e9e9e5", "#ffffff"];
+check(
+  "R4 ⚠ live LIGHT token values are not in the retired list (they are unchanged and legal)",
+  LIGHT_STILL_LIVE.every((v) => !(RETIRED_TOKEN_VALUES as readonly string[]).includes(v)),
+  LIGHT_STILL_LIVE.join(" ")
+);
 
 // ══ 4. BUY IS GREEN, SELL IS RED ═════════════════════════════════════════════════════
 console.log("\nbuy/sell — the tokens, both themes, and a signal that is not colour");
