@@ -124,6 +124,12 @@ contract AdapterReenterer {
         adapter = adapter_;
     }
 
+    // The reentrant call has to be able to SUCCEED but for the guard, or the test proves
+    // only that an unfunded call reverts.
+    function approveAdapter(address token) external {
+        IERC20(token).approve(adapter, type(uint256).max);
+    }
+
     function reenter(
         address tokenA,
         address tokenB,

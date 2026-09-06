@@ -475,12 +475,25 @@ describe('BallistaV4Adapter — ADVERSARIAL, against real Uniswap v4 (Base fork)
     await reent.connect(attacker).approve(adapterAddr, ethers.MaxUint256);
     await plain.connect(attacker).approve(adapterAddr, ethers.MaxUint256);
 
+    // ⚠ THE REENTERER MUST BE ABLE TO SUCCEED BUT FOR THE GUARD, or this proves nothing.
+    // The first version left it holding no tokens and no approval, so the nested call
+    // reverted on the transfer rather than on the guard -- and the v4-no-guard red-proof
+    // duly SURVIVED, 17 passing, because removing the guard changed nothing the check
+    // could see. This is CLAUDE.md §12.6 in its second form: mutate the thing the check
+    // asserts about, and make sure the check actually reaches it.
+    const reentererAddr = await reenterer.getAddress();
+    await reent.mint(reentererAddr, 10n ** 21n);
+    await plain.mint(reentererAddr, 10n ** 21n);
+    await reenterer.approveAdapter(await reent.getAddress());
+    await reenterer.approveAdapter(await plain.getAddress());
+
     const deadline = (await ethers.provider.getBlock('latest')).timestamp + 3600;
     // Arm the token to call back into addLiquidity during its own transferFrom.
     const payload = reenterer.interface.encodeFunctionData('reenter', [
-      await reent.getAddress(), await plain.getAddress(), 1n, 1n, attacker.address, deadline,
+      await reent.getAddress(), await plain.getAddress(),
+      10n ** 18n, 10n ** 18n, reentererAddr, deadline,
     ]);
-    await reent.arm(await reenterer.getAddress(), payload, 1, 0);
+    await reent.arm(reentererAddr, payload, 1, 0);
 
     await adapter.connect(attacker).addLiquidity(
       await reent.getAddress(), await plain.getAddress(),
@@ -491,7 +504,14 @@ describe('BallistaV4Adapter — ADVERSARIAL, against real Uniswap v4 (Base fork)
       .to.equal(true);
     expect(await reenterer.secondCallSucceeded(), 'REENTRANCY SUCCEEDED into addLiquidity')
       .to.equal(false);
-    console.log(`      ATTACK A3a  FAILED. callback fired, nested addLiquidity reverted`);
+
+    // Name the guard, so a nested call that fails for some unrelated reason cannot be
+    // mistaken for the guard holding.
+    const ret = await reenterer.secondCallReturndata();
+    const REENTRANT = ethers.id('ReentrancyGuardReentrantCall()').slice(0, 10);
+    expect(ret.slice(0, 10), 'the nested call failed for a reason OTHER than the guard')
+      .to.equal(REENTRANT);
+    console.log(`      ATTACK A3a  FAILED. returndata ${ret.slice(0, 10)} = ReentrancyGuardReentrantCall`);
   });
 
   it('A3b. a FEE-ON-TRANSFER tokenA reverts the whole call -- it cannot half-succeed', async function () {
