@@ -1022,6 +1022,10 @@ command** or the hook is inert. Verified to actually block: with a lease present
 # 6. FORWARD DECISIONS ALREADY SETTLED — DO NOT REOPEN
 
 - **Mainnet launches on the V2 router, LP burned to `BURN_ADDRESS`.** V4 is post-launch, via the router timelock. **A next session must not start building V4.**
+  ⚠ **SUPERSEDED AS TO THE VENUE, 6 September 2026 — see §17.** v4 IS the graduation
+  venue by operator decision. The prohibition on building **phase 2** (the hook, the
+  escrow) still stands; the claim that mainnet ships v2 does not. v2 remains the
+  fallback and is unmodified (§17.3).
   ⚠ **STILL BINDING, but the strategic direction has moved — see §14.6.** The intent is now a v4 graduation with a fee-capturing hook, phased. That spec is **unwritten and unapproved**, and this rule is not lifted. What §14.1 changes is the *reason*: v4 is a choice about fee capture, not a prerequisite, because the v2 router is published and the frozen `addLiquidity` interface works against it unmodified.
 - **The zero-fee-pool rationale is LP fee dilutability** — anyone can add liquidity to a permissionless v4 pool and take a pro-rata share of LP fees. It is **not** "Uniswap charges a fee on top of ours". That reasoning was wrong and must not reappear.
 - **Under a zero-fee pool the position accrues nothing, so the hook is the fee accountant and the locker is a tombstone.** *(Corrected: an earlier version of this file said the locker "must be able to call `PositionManager` to collect fees and manage the position." That is wrong under a zero-fee pool and has been removed.)*
@@ -3039,6 +3043,8 @@ preview is needed before any mobile testing of the wallet changes.**
 ## 14.6 The direction change — graduation to v4 with a fee-capturing hook
 
 **Recorded, NOT approved, and no work has started.** The spec is unwritten and §6's standing
+⚠ **APPROVED, 6 September 2026 — see §17.** Phase 1 is built (§15) and attacked (§16).
+Phases 2 and 3 remain unstarted. The line below was true when written and is not now.
 rule against starting V4 has not been lifted.
 
 The intent is a Uniswap **v4** graduation with a **fee-capturing singleton hook**, modelled
@@ -3049,6 +3055,9 @@ on Pons v2, phased:
 3. **escrow**
 
 ⚠ **PHASE 1 IS A CHOICE, NOT A NECESSITY.** §14.1 is the reason: the v2 path is published,
+⚠ **THE CHOICE HAS BEEN MADE — see §17.** The arithmetic below is unchanged and still
+correct: v2 works unmodified and no new contract is REQUIRED. But v4 is now the plan,
+so "phase 1 is optional" is no longer a reason to defer work on it.
 LFX1's frozen `addLiquidity` interface works against `0x1f7d7550…` unmodified, and **no new
 contract is required for graduation to function.** Do not let a future session record that an
 adapter is needed to make graduation work.
@@ -3113,6 +3122,9 @@ not deployed.** `contracts/LFX1.sol`, `LFX1Token.sol`, `GraduationHelper.sol` an
 `contracts/BallistaV4Adapter.sol` implements the one method LFX1 calls, `addLiquidity`, by
 seeding a Uniswap v4 pool. It is ownerless: no owner, no withdraw, no upgrade, no pause.
 **§6's standing rule against starting V4 is NOT lifted** — this is phase 1 of §14.6's
+⚠ **SUPERSEDED FRAMING — see §17.** v4 is the graduation venue and the adapter is on
+the intended path, not spike work. Phase 2 is still not started. The two sentences
+below describe the position as of §15 and are kept for the record.
 phased intent, `hooks: address(0)`, and §14.1 still stands: the v2 path is published and
 works unmodified, so any v4 work is a choice about fee capture, never a prerequisite.
 
@@ -3150,6 +3162,8 @@ treating the figure as safe.** A graduation that cannot be mined is a token that
 reach the DEX, and that is the failure this measurement exists to rule out.
 
 Two further caveats. This is v4; the **v2 path's graduation gas is still unmeasured**, and
+⚠ **§17 SUPERSEDES "v2 is what mainnet ships on" BELOW.** v4 is the venue. The v2
+path's graduation gas is still genuinely unmeasured either way, so that half stands.
 v2 is what mainnet ships on (§6). And Base is not Arc: Zero8 changed Arc's gas accounting
 once already (§2), so an Arc figure has to be measured on Arc.
 
@@ -3614,3 +3628,128 @@ small amounts and relatively at large ones and no single bound covers both. The 
 that does hold everywhere is directional: `floor(sqrt(x))^2 <= x`, so the pool can only ever
 open AT or BELOW the ratio the deposit justifies. §15.5's own M5 already recorded the
 raw-unit half of that and this session repeated the mistake anyway.
+
+---
+
+# 17. ⚠ DECIDED, 6 September 2026: v4 IS THE GRADUATION VENUE
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§16. Nothing above this line was
+deleted. Forward pointers were ADDED at the sites that assert the superseded premise; no
+existing sentence was altered, and every original line survives.
+
+**This is an operator decision, not an inference.** It supersedes a premise several
+sections still state, and it is recorded because the file and the decision had already
+diverged — which is the drift class this project has hit repeatedly (§7's three conflicting
+HEADs, §14.1's V2-is-absent reversal, §12.5's "never measured" standing after it had been).
+
+## 17.1 The decision
+
+**Uniswap v4 is the intended graduation venue.** Phased, and the phases are unchanged from
+§14.6 — what changed is that this is now the plan rather than a recorded intent:
+
+1. **the adapter**, `hooks: address(0)` — `contracts/BallistaV4Adapter.sol`, built (§15),
+   attacked (§16), not deployed
+2. **the fee-capturing hook** — phase 2, **NOT STARTED and still out of scope**
+3. **escrow** — phase 3
+
+⚠ **What this changes is the STATUS of phase 1, not its content.** §15 framed the adapter as
+spike work whose justification was "a choice about fee capture, never a prerequisite". That
+framing is superseded: the adapter is now on the intended path. Nothing about the contract
+itself changes, and §16's findings stand exactly as written.
+
+⚠ **PHASE 2 IS STILL NOT STARTED.** Deciding the venue does not authorise building the hook.
+No hook, no escrow, no fee capture, until a spec exists.
+
+## 17.2 The hook design, recorded as intent — unbuilt, unspecified, unapproved
+
+Modelled on **Pons v2's meme hook**. Recorded here so phase 2 starts from a described shape
+rather than a blank page, and explicitly NOT a specification:
+
+* **`beforeInitialize` gates the pool** — only pools the factory registered may be
+  initialised. Everything else reverts.
+* **`afterSwap` takes the fee on the UNSPECIFIED currency** — the side the swap did not fix
+  (the output of an exact-input swap, the input of an exact-output one), returned as a hook
+  delta.
+* **Every other callback disabled.** The permission bits live in the hook's own address
+  (`v4-core/src/libraries/Hooks.sol`), so the address has to be mined for exactly the flags
+  used and no others — an unused flag that is set is a live callback nobody wrote.
+* ⚠ **The pool's own `fee` stays 0.** A burned position has no LP to pay, so an LP fee would
+  accrue to nobody — and §6 already records the real reason it must be zero: **LP fees are
+  dilutable**, because anyone can add liquidity to a permissionless pool and take a pro-rata
+  share. The hook is the fee accountant; the pool fee is not.
+
+⚠ **`beforeInitialize` GATING WOULD CLOSE §16.1's POISONING, AND ONLY FOR HOOKED POOLS.**
+A hook that refuses to initialise unregistered pools makes the pre-emptive attack impossible
+on the pools it governs — the attacker cannot create them at all. That is a genuine
+second reason to want the hook, beyond fee capture, and it should be weighed when phase 2 is
+specified. It does **not** help phase 1: `hooks: address(0)` pools have no hook to gate them.
+
+⚠ **A HOOK CHANGES THE PoolKey, SO PHASE 2 POOLS ARE DIFFERENT POOLS.** `hooks` is a member
+of `PoolKey` (`v4-core/src/types/PoolKey.sol:21`), so tokens graduated under phase 1 and
+phase 2 land in **different pools that cannot be merged**. Liquidity does not migrate. That
+is a product decision to take deliberately at phase 2, not a detail to discover then.
+
+## 17.3 The v2 path remains available, and unmodified
+
+**It is the fallback, not the plan.** §14.1 stands unchanged: Uniswap V2 **is** published for
+Arc, LFX1's frozen `addLiquidity` is a V2-signature call, and the router at
+`0x1f7d7550b1b028f7571e69a784071f0205fd2efa` works against it **with no new contract at all**.
+Switching back is a `proposeRouter` / 24h / `activateRouter` sequence and nothing more.
+
+⚠ **So graduation is not blocked on v4 shipping, and no session may record that it is.**
+§14.1 is emphatic about this in the other direction and remains correct: an adapter is a
+choice, never a prerequisite. What §17.1 settles is which choice was made.
+
+⚠ **And the v2 path has a live blocker of its own that v4 does not remove:** §15.8 measured
+**no Uniswap v4 on Arc Testnet**, and §10 records that the v2 addresses have never been
+`eth_getCode`-verified on Arc *mainnet*, which does not exist yet. **Both venues are
+unverified on the chain that matters.** Whichever ships, the pre-flight in §15.2 and §12.8
+runs first.
+
+## 17.4 What this supersedes
+
+| where | what it says | status |
+|---|---|---|
+| §6 | "Mainnet launches on the V2 router… A next session must not start building V4" | ⚠ **superseded as to the VENUE.** v4 is the plan. The prohibition on building **phase 2** stands |
+| §14.6 | "Recorded, NOT approved, and no work has started" | ⚠ **approved now.** Phase 1 is built; phases 2–3 are not started |
+| §14.6 | "PHASE 1 IS A CHOICE, NOT A NECESSITY" | still true as ARITHMETIC — v2 works — but the choice has been made |
+| §15 preamble | "§6's standing rule against starting V4 is NOT lifted… any v4 work is a choice about fee capture" | ⚠ **superseded framing.** The adapter is on the intended path, not spike work |
+| §15.1 | "v2 is what mainnet ships on (§6)" | ⚠ **superseded.** The v2 graduation gas remains genuinely unmeasured either way |
+| the F1 fix recommendation | deferred the in-adapter correction on the grounds that "v4 is not on the mainnet path" | ⚠ **THAT REASON IS GONE.** See §17.5 |
+
+## 17.5 ⚠ The F1 deferral rested on this premise, and the premise was wrong
+
+§16.1 records F1: a pool can be poisoned for **51,508 gas, with no capital, before the token
+exists**, because `PoolManager.initialize` never checks the currencies have code and LFX1
+addresses are predictable. The design report that followed recommended **deferring** the
+in-adapter fix, and gave as its first reason that v4 was not on the mainnet path and the
+work could wait for phase 2.
+
+**That reason no longer holds.** The rest of that analysis is unaffected and still stands —
+the fixed-point problem with correcting a liquidity-backed pool, the sandwich surface, and
+`CurrencyNotSettled` as the enforcement mechanism are all properties of v4 rather than of the
+schedule. **What changes is the priority, not the design.**
+
+The independently-shippable half was built instead: **`contracts/BallistaPoolCorrector.sol`**
+(§17.6), which makes recovery one permissionless transaction without touching the adapter or
+the graduation path. The in-adapter correction remains unbuilt and remains a decision.
+
+## 17.6 `BallistaPoolCorrector` — the recovery tool, shipped separately
+
+Standalone, ownerless, **not in the graduation path**. The adapter still reverts on a
+mispriced pool exactly as before; this only makes putting the pool back a single call anyone
+can send, rather than a manual arbitrage someone has to construct.
+
+The safety argument is **structural and worth stating in one line: it holds no funds, has no
+settle path, and therefore cannot pay for a correction that costs anything.** An empty pool
+has no liquidity to trade against, so the swap settles nothing and succeeds; a pool with
+liquidity produces a non-zero delta and `PoolManager.unlock` reverts it with
+`CurrencyNotSettled` (`v4-core/src/PoolManager.sol:112`) without the corrector needing to
+check anything.
+
+⚠ **DO NOT "FIX" IT BY ADDING A SETTLE PATH.** The absence is the enforcement. A settle path
+would let it pay for a correction out of whatever it was holding, which is exactly the
+unbounded, attacker-sized, sandwichable trade §16's design report argued against.
+
+Detail, the design question about who supplies the target price, and the test results are in
+the contract's own header and in `test/Fork.v4.corrector.test.js`.
