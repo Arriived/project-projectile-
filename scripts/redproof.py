@@ -166,6 +166,67 @@ def mut_r17_unblock_renounce(s):
     return s.replace(a, "    // MUTATED: R17 override removed\n\n")
 
 
+V4_SRC = "contracts/BallistaV4Adapter.sol"
+
+# The Base fork is opt-in, and a fork suite that SKIPS prints "0 passing" with nothing
+# failing -- which this harness would report as the mutation SURVIVING. That is a false
+# negative on the most important red-proof here, so the environment every v4 mutation
+# needs travels WITH the mutation instead of being something the operator has to
+# remember. Same reasoning as the grep: a red-proof that silently tests nothing is worse
+# than one that errors.
+V4_ENV = {"FORK_BASE": "1"}
+V4_GREP = "REAL Uniswap v4"
+
+
+def mut_v4_decimal_normalise(s):
+    """Normalise one side to 18 decimals before deriving the price -- the plausible
+    "fix" for an 18dp token against 6dp USDC, and wrong by exactly the 1e12 the raw
+    amounts already carry. It still initialises, still mints and still returns a
+    non-zero liquidity, so ONLY a price assertion can catch it."""
+    a = _anchor(s, "        uint256 ratio = amount1 / amount0;")
+    return s.replace(a, "        amount1 = amount1 * 1e12; // MUTATED\n" + a)
+
+
+def mut_v4_pull_99pct(s):
+    """Pull 99% instead of the full desired amounts. LFX1 zeroes its reserves whatever
+    was taken, so the 1% left behind sits in the FACTORY with no accounting entry and no
+    payout path that could ever reach it."""
+    a = _anchor(s, "        IERC20(tokenA).safeTransferFrom(msg.sender, address(this), amountADesired);\n"
+                   "        IERC20(tokenB).safeTransferFrom(msg.sender, address(this), amountBDesired);")
+    return s.replace(
+        a,
+        "        IERC20(tokenA).safeTransferFrom(msg.sender, address(this), amountADesired * 99 / 100); // MUTATED\n"
+        "        IERC20(tokenB).safeTransferFrom(msg.sender, address(this), amountBDesired * 99 / 100); // MUTATED",
+    )
+
+
+def mut_v4_lp_to_sender(s):
+    """Mint the position to the caller instead of the snapshotted lpRecipient. Applied at
+    the FORWARDING site so the adapter stays self-consistent -- its own ownerOf check
+    then passes -- and the test's own burn-address assertion is what has to fire."""
+    a = _anchor(s, "            (amountA, amountB, liquidity) = _seed(tokenA, tokenB, amountADesired, amountBDesired, to, deadline);")
+    b = _anchor(s, "            (amountB, amountA, liquidity) = _seed(tokenB, tokenA, amountBDesired, amountADesired, to, deadline);")
+    s = s.replace(a, a.replace(", to, deadline)", ", msg.sender, deadline) /* MUTATED */"))
+    return s.replace(b, b.replace(", to, deadline)", ", msg.sender, deadline) /* MUTATED */"))
+
+
+def mut_v4_fake_liquidity(s):
+    """Report a non-zero liquidity for a pool that was never seeded: skip the mint, and
+    strip every verification that would notice. LFX1 gates only on liquidity == 0, so
+    this marks the token GRADUATED with the LP already gone and nothing able to undo it.
+    If the suite stays green under this, it is not testing the failure that matters
+    most."""
+    a = _anchor(s, "        positionManager.modifyLiquidities(_encodeMint(key, liquidity, amount0, amount1, to), deadline);")
+    b = _anchor(s, "        if (consumed0 == 0 || consumed1 == 0) revert NothingConsumed();")
+    c = _anchor(s, "        mintedLiquidity = uint256(positionManager.getPositionLiquidity(tokenId));")
+    d = _anchor(s, "        {\n            address actualOwner = positionManager.ownerOf(tokenId);\n"
+                   "            if (actualOwner != to) revert PositionNotMinted(tokenId, to, actualOwner);\n        }")
+    s = s.replace(a, "        // MUTATED: the mint never happens")
+    s = s.replace(b, "        // MUTATED: consumption never checked")
+    s = s.replace(c, "        mintedLiquidity = 1; // MUTATED: fabricated, never read back")
+    return s.replace(d, "        // MUTATED: ownership never verified")
+
+
 def mut_multicurve_claim_prank(s):
     a = _anchor(s, "        vm.prank(creator);")
     return s.replace(a, "        // MUTATED: prank removed, restoring the dead-claim bug")
@@ -256,6 +317,42 @@ MUTATIONS = {
         "fn": mut_r17_unblock_renounce,
         "doc": "removes the R17 override; the R17 tests must go RED, residuals stay green",
     },
+    "v4-decimal-normalise": {
+        "file": V4_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "env": V4_ENV,
+        "grep": V4_GREP,
+        "fn": mut_v4_decimal_normalise,
+        "doc": "1e12 decimal normalisation in the v4 price; the pool PRICE assertions must go RED",
+    },
+    "v4-pull-99pct": {
+        "file": V4_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "env": V4_ENV,
+        "grep": V4_GREP,
+        "fn": mut_v4_pull_99pct,
+        "doc": "adapter pulls 99%; the stranded-in-the-factory assertion must go RED",
+    },
+    "v4-lp-to-sender": {
+        "file": V4_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "env": V4_ENV,
+        "grep": V4_GREP,
+        "fn": mut_v4_lp_to_sender,
+        "doc": "position minted to the caller, not lpRecipient; the burn assertion must go RED",
+    },
+    "v4-fake-liquidity": {
+        "file": V4_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "env": V4_ENV,
+        "grep": V4_GREP,
+        "fn": mut_v4_fake_liquidity,
+        "doc": "non-zero liquidity reported for a pool never seeded; something MUST go RED",
+    },
     "multicurve-claim-prank": {
         "file": MULTI_HANDLER,
         "suite": MULTI_SUITE,
@@ -278,7 +375,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("mutation", nargs="?")
     ap.add_argument("--list", action="store_true")
-    ap.add_argument("--runner", choices=["forge", "hardhat"], default="forge")
+    ap.add_argument("--runner", choices=["forge", "hardhat"], default=None)
     ap.add_argument("--suite", help="override the mutation's default suite path")
     ap.add_argument("--grep", help="hardhat runner: mocha grep pattern")
     ap.add_argument("--full", action="store_true",
@@ -329,16 +426,18 @@ def main():
     # Cached counterexamples replay before fuzzing and would mask a genuine result.
     shutil.rmtree("cache/invariant/failures", ignore_errors=True)
 
-    if args.runner == "forge":
+    runner = args.runner or m.get("runner") or "forge"
+    if runner == "forge":
         env = {} if args.full else {"FOUNDRY_INVARIANT_RUNS": "50",
                                     "FOUNDRY_INVARIANT_DEPTH": "50"}
         _, out = run('forge test --match-path "%s"' % (args.suite or m["suite"]), env=env)
         keep = lambda l: l.startswith("[PASS]") or l.startswith("[FAIL") or "Suite result" in l
     else:
         cmd = "npx hardhat test"
-        if args.grep:
-            cmd += ' --grep "%s"' % args.grep
-        _, out = run(cmd)
+        grep = args.grep or m.get("grep")
+        if grep:
+            cmd += ' --grep "%s"' % grep
+        _, out = run(cmd, env=m.get("env"))
         # Mocha prints the failure title and the reason on separate lines from the
         # counts, so a counts-only filter reports "1 failing" and hides WHICH and WHY --
         # which is most of what a red-proof is for.

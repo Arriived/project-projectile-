@@ -261,20 +261,17 @@ mention. That list is what to read after any contract change.
 
 ## CLAUDE.md coverage
 
-Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **84**.
+Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **80**.
 
 Not every one needs prose — a getter for a constant that is already described by
 its constant does not. But anything here that changes BEHAVIOUR and is unexplained
 is the shape of the symbol-lock gap, and should be read as a candidate.
 
-- `LFX1.CURVE_TOKEN_SUPPLY`
 - `LFX1.INITIAL_VIRTUAL_TOKEN_RESERVES`
 - `LFX1.INITIAL_VIRTUAL_USDC_RESERVES`
 - `LFX1.MAX_FEE_BPS`
 - `LFX1.ROUTER_TIMELOCK`
 - `LFX1.TOTAL_TOKEN_SUPPLY`
-- `LFX1.caseSensitiveSymbols`
-- `LFX1.currentPrice`
 - `LFX1.currentSnipeTaxBps`
 - `LFX1.defaultGraduationThresholdUsdc`
 - `LFX1.setCaseSensitiveSymbols`
@@ -300,7 +297,6 @@ is the shape of the symbol-lock gap, and should be read as a candidate.
 - `LFX1.GraduationFailed`
 - `LFX1.LaunchCooldownActive`
 - `LFX1.LaunchWindowClosed`
-- `LFX1.NotCreator`
 - `LFX1.NotReadyToGraduate`
 - `LFX1.NothingToClaim`
 - `LFX1.OwnableInvalidOwner`
