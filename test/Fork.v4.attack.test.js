@@ -441,6 +441,77 @@ describe('BallistaV4Adapter — ADVERSARIAL, against real Uniswap v4 (Base fork)
     console.log(`      MEASURE corrector usdc  delta  ${afterU - beforeU}`);
   });
 
+  it('A2d. poisoning in the direction that needs TOKENS to correct is still recoverable', async function () {
+    await deployAll();
+    const token = await launch('A2D');
+    const { key } = poolKeyFor(token);
+    const adapterAddr = await adapter.getAddress();
+
+    // ⚠ THE DIRECTION MATTERS AND A2b ONLY COVERED ONE OF THEM. There, the pool
+    // underpriced the token, so correcting it meant BUYING tokens and the corrector
+    // needed nothing but USDC. Poison the other way -- token far too EXPENSIVE -- and
+    // correction means SELLING tokens into the pool.
+    //
+    // That is the awkward case, because at GRADUATION_READY both sides of the curve are
+    // closed (CLAUDE.md §1.4), so nobody can obtain tokens from the curve after the fact.
+    // The only supply is people who already bought. This establishes that such supply is
+    // sufficient rather than assuming it.
+    await ethers.provider.send('evm_increaseTime', [30]);
+    await ethers.provider.send('evm_mine', []);
+    await ballista.connect(attacker).buy(token, 500n * ONE, 0);
+    await ballista.connect(buyer).buy(token, 2_000n * ONE, 0); // an ordinary holder, pre-park
+
+    const launched = new ethers.Contract(token, ERC20_ABI, attacker);
+    await launched.approve(adapterAddr, ethers.MaxUint256);
+    await usdc.connect(attacker).approve(adapterAddr, ethers.MaxUint256);
+
+    // Few tokens against a lot of USDC => the token is priced far ABOVE its curve price.
+    const deadline = (await ethers.provider.getBlock('latest')).timestamp + 3600;
+    const fewTokens = 1_000n * 10n ** 18n;
+    await adapter.connect(attacker).addLiquidity(
+      token, USDC, fewTokens, 5_000n * ONE, 0, 0, attacker.address, deadline
+    );
+    const [poisoned] = await lens.slot0(POOL_MANAGER, key);
+
+    const g = await graduate(token);
+    expect(g.graduated, 'graduated into an over-priced pool').to.be.undefined;
+    expect(g.curve.state, 'not parked').to.equal(1n);
+
+    // The curve is shut, so confirm an ordinary holder genuinely cannot restock from it.
+    await expect(ballista.connect(buyer).buy(token, 10n * ONE, 0))
+      .to.be.revertedWithCustomError(ballista, 'CurveNotActive');
+
+    // Correct it using ONLY tokens an existing holder already had.
+    const LP = await ballista.LP_TOKEN_RESERVE();
+    const [a0, a1] = poolKeyFor(token).tokenIsCurrency0
+      ? [LP + g.curve.tokenReserves, g.curve.realUsdcReserves + g.curve.poolBoost]
+      : [g.curve.realUsdcReserves + g.curve.poolBoost, LP + g.curve.tokenReserves];
+    const mathHarness = await (await ethers.getContractFactory('V4AdapterMathHarness')).deploy();
+    const target = await mathHarness.sqrtPriceX96(a0, a1);
+
+    const swapper = await (await ethers.getContractFactory('V4Swapper')).deploy(POOL_MANAGER);
+    const swapperAddr = await swapper.getAddress();
+    const holderTokens = await new ethers.Contract(token, ERC20_ABI, buyer).balanceOf(buyer.address);
+    await new ethers.Contract(token, ERC20_ABI, buyer).transfer(swapperAddr, holderTokens);
+
+    const beforeU = await usdc.balanceOf(swapperAddr);
+    await swapper.swapToPrice(keyTuple(key), target);
+    const afterU = await usdc.balanceOf(swapperAddr);
+
+    const [corrected] = await lens.slot0(POOL_MANAGER, key);
+    expect(corrected, 'could not correct an over-priced pool with holder tokens alone')
+      .to.equal(target);
+
+    const rc = await (await ballista.connect(buyer).graduate(token)).wait();
+    const ev = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+      .filter(Boolean).find((l) => l.name === 'Graduated');
+    expect(ev, 'still blocked after correction').to.not.be.undefined;
+    expect((await ballista.curves(token)).state).to.equal(2n);
+
+    console.log(`      ATTACK A2d  poisoned HIGH (${poisoned}); corrected using holder tokens only`);
+    console.log(`      MEASURE corrector usdc gained  ${afterU - beforeU} (profit, at the attacker's expense)`);
+  });
+
   it('A2c. an EXTREME-tick pool is still refused and still recoverable', async function () {
     await deployAll();
     const token = await launch('A2C');
