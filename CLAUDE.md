@@ -3096,3 +3096,274 @@ hold the position itself with no withdraw function — a materially different co
   when `eth_newFilter` was. A neighbouring value changing is not evidence about this one.
 * Swept and clean: **no "V2 absent from Arc" claim**, **no "adapter required"** claim, **no
   remaining Reown-403-as-allowlist** claim, and `eth_newFilter` reads `-32601` throughout.
+
+---
+
+# 15. SESSION OF 6 SEPTEMBER 2026 — v4 phase 1, the adapter and its fork test
+
+⚠ **APPENDED, NOT A REWRITE.** Same rule as §12, §13 and §14: this file has lost three
+sections to a rewrite before. Nothing above this line was deleted.
+
+Branch **`v4-adapter`**, off `ballista-migration`. Two commits: `43077d0` (the adapter and
+its fork test) and `4fd0230` (the red-proofs, and two checks they caught). **Not merged,
+not deployed.** `contracts/LFX1.sol`, `LFX1Token.sol`, `GraduationHelper.sol` and
+`IDEXRouter.sol` are byte-identical to `ballista-migration` — `git diff ballista-migration
+-- contracts/LFX1.sol` is empty and LFX1 still compiles to exactly **24,033 bytes**.
+
+`contracts/BallistaV4Adapter.sol` implements the one method LFX1 calls, `addLiquidity`, by
+seeding a Uniswap v4 pool. It is ownerless: no owner, no withdraw, no upgrade, no pause.
+**§6's standing rule against starting V4 is NOT lifted** — this is phase 1 of §14.6's
+phased intent, `hooks: address(0)`, and §14.1 still stands: the v2 path is published and
+works unmodified, so any v4 work is a choice about fee capture, never a prerequisite.
+
+## 15.1 ⚠ GRADUATION GAS, MEASURED — §12.5 said it never had been
+
+§12.5 records graduation gas as "the largest unmeasured number in the product" and
+"never measured on any path, not before Zero8, not after". **That is now false, and this
+is the measurement.** §12.8 item 3 asks for exactly this.
+
+| | gas |
+|---|---|
+| buy alone, no graduation | **187,350** |
+| buy that triggers graduation | **696,332** |
+| **delta — what graduation costs** | **508,982** |
+| standalone `graduate()` retry | **602,853** |
+
+**Conditions, because the number means nothing without them:**
+
+* Real Uniswap v4 on a **Base mainnet fork, pinned at block 50,900,000**. Not Arc — Arc
+  mainnet does not exist yet, and v4 is live on Base today.
+* **Default 8,000 USDC graduation threshold**, deliberately not a scaled-down one. The
+  test funds USDC by writing the balance slot, so there is no reason to shrink the curve,
+  and the amounts are the ones production actually produces.
+* Token side **193,297,304.88e18** against **8,019 USDC** — §1.1's own figure, reached
+  independently.
+* The graduating transaction is a `buy()` that crosses the threshold (`LFX1.sol:462-466`),
+  so its receipt covers both; the delta is the attribution.
+
+⚠ **ARC'S BLOCK GAS LIMIT HAS NOT BEEN MEASURED, AND 508,982 MEANS NOTHING UNTIL IT SITS
+NEXT TO THAT NUMBER.** It appears nowhere in this file and nowhere in `scripts/` — checked,
+not assumed. The fork test asserts only that the transaction fits in a 30,000,000 block,
+which is Hardhat's default and says nothing whatsoever about Arc. **Read Arc's limit off
+the chain (`eth_getBlockByNumber` → `gasLimit`) and record it beside this table before
+treating the figure as safe.** A graduation that cannot be mined is a token that can never
+reach the DEX, and that is the failure this measurement exists to rule out.
+
+Two further caveats. This is v4; the **v2 path's graduation gas is still unmeasured**, and
+v2 is what mainnet ships on (§6). And Base is not Arc: Zero8 changed Arc's gas accounting
+once already (§2), so an Arc figure has to be measured on Arc.
+
+## 15.2 ⚠ PositionManager REQUIRES Permit2 — and the interface will not import
+
+**The settle path.** `PositionManager._settlePair` (`PositionManager.sol:442`) sets the
+payer to `msgSender()`, which is the locker — our adapter. `_pay` (`:515`) then routes any
+payer that is **not PositionManager itself** through `permit2.transferFrom`. There is no
+way to hand v4 tokens directly on that path.
+
+**No signature is involved.** `approve(address,address,uint160,uint48)` is a plain call, so
+a contract can reach Permit2 without any EIP-712 machinery. The adapter does three things
+per currency, in order:
+
+1. ERC-20 `forceApprove(PERMIT2, amount)`
+2. `permit2.approve(token, POSITION_MANAGER, uint160(amount), uint48(block.timestamp))`
+3. after the mint, **both zeroed** — mirroring `LFX1.sol:668-670`, which clears whatever the
+   router did not consume. A mint that settles less than it was approved for otherwise
+   leaves a live allowance standing over the adapter's balance.
+
+### ⚠ `IPositionManager` is NOT Hardhat-importable, and it never will be
+
+`v4-periphery/src/interfaces/IPositionManager.sol` reaches
+`permit2/src/interfaces/IAllowanceTransfer.sol` through `IPermit2Forwarder.sol:4`. **The
+`permit2` npm package was unpublished on 2026-08-11 and no scoped Uniswap equivalent has
+ever existed** (`@uniswap/permit2` 404s; only the JS `permit2-sdk` is published). The
+periphery package declares **zero npm dependencies** and its `remappings.txt` points at
+Foundry `lib/` paths absent from the tarball. So the import is not inconvenient, it is
+**unresolvable**, and no amount of remapping configuration fixes it.
+
+The adapter therefore declares minimal interfaces by hand in
+`contracts/interfaces/IV4Minimal.sol`. Hand-transcribed signatures are exactly the risk
+§1.3 warns about, so each was **verified against DEPLOYED bytecode on Base at block
+50,900,000** rather than recalled:
+
+| selector | signature | contract |
+|---|---|---|
+| `0x87517c45` | `approve(address,address,uint160,uint48)` | Permit2 |
+| `0x36c78516` | `transferFrom(address,address,uint160,address)` | Permit2 |
+| `0xdd46508f` | `modifyLiquidities(bytes,uint256)` | PositionManager |
+| `0xf7020405` | `initializePool((address,address,uint24,int24,address),uint160)` | PositionManager |
+
+### ⚠ STANDING CONSEQUENCE: those selectors are verified on BASE, not on ARC
+
+Base's PositionManager and Permit2 are not Arc's. A different deployed version, or a
+different address entirely, and the hand-written interface silently calls the wrong thing —
+or calls into an address with no code, where a low-level call to a non-existent contract
+**succeeds and returns empty** rather than reverting.
+
+**Add to the pre-flight, alongside §10's and §12.8 item 2's `eth_getCode` checks:**
+
+* `eth_getCode` on Arc's PositionManager, PoolManager and Permit2 — non-empty, with the
+  probe first validated against three known-good addresses, because a probe that returns
+  empty for everything proves nothing (§10, §12.8).
+* **Then probe each of the four selectors above against the Arc deployments** — presence in
+  the deployed bytecode, or a staticcall that returns a sane answer. Code existing at an
+  address is not evidence that it exposes the function we are about to call.
+
+Nothing may depend on the adapter on Arc until both have passed.
+
+## 15.3 ⚠ `amountAMin` / `amountBMin` are ACCEPTED AND NOT ENFORCED LITERALLY
+
+**A knowing departure from V2 semantics inside the graduation path. It must not be
+discovered by surprise later, which is why it has its own entry.**
+
+LFX1 passes the desired amounts as the mins (`LFX1.sol:656-664`) — §1.1's strict mins, and
+the single most load-bearing line in the graduation path. **The adapter cannot honour them
+literally.** A full-range v4 mint consumes an integer `liquidity`, so one side is always a
+few wei short of the offer, and `consumed >= desired` would revert on **every honest
+graduation**, not just an adversarial one.
+
+The protection is kept, by a different and exact mechanism: an **exact `sqrtPriceX96`
+check** against the price derived from the amounts the adapter was handed. If the adapter
+initialised the pool, `slot0` holds precisely the value just written and the comparison is
+free — structurally the same "free in the normal case" property §1.1 depends on. If someone
+else initialised first at a different price, it reverts.
+
+⚠ **There is still NO tolerance constant**, which §1.1 is emphatic about. The check is
+equality, not proximity.
+
+**Reverting is the correct outcome and is not a denial of service.** LFX1 wraps the call in
+`try/catch`, zeroes its approvals, emits `GraduationAttemptFailed` and leaves the curve at
+`GRADUATION_READY` with reserves intact, where the permissionless `graduate(address)` can
+retry (`LFX1.sol:656-687`). That is v2's recovery shape exactly, and a v4 pool can be
+swapped to an exact target price via `sqrtPriceLimitX96`. The residual is **R6**, the
+griefing race, unchanged in character. Proven end to end: a pool pre-seeded at a hostile
+price parks the curve and an unrelated token graduates normally; a reverting router parks
+the curve and the adapter graduates it afterwards through the full 24h timelock.
+
+## 15.4 ⚠ The `2**64` ratio bound was REACHABLE — and `setDefaultGraduationThreshold` now has an effective floor
+
+The price derivation computes `sqrt(amount1 * 2**192 / amount0)`, which needs
+`amount1/amount0` to stay under `2**64` or the intermediate overflows a `uint256`.
+
+**That bound is reachable, and the failure was permanent.** `tokenLiquidity` tops out near
+`1e27` (`LP_TOKEN_RESERVE` + an almost-unsold curve), so:
+
+```
+usdc floor = 1e27 / 2**64 = 5.42e7 raw = 54.2 USDC
+```
+
+**Any graduation threshold below roughly 54 USDC broke it.** A default graduation runs at
+`1e27 / 8_000e6` = `1.25e17`, some **148x inside the bound** — but the threshold is an owner
+setter, it is **snapshotted per curve at creation**, and there is **no path to change it
+afterwards**. So a single mis-set value would have left every token launched under it
+reverting at graduation forever, parked at `GRADUATION_READY` with both sides closed and no
+recovery: **R7 with the key thrown away.** Found by a test written to exercise an extreme
+amount ratio, not by reasoning.
+
+**Fixed by a second branch.** Past `2**63` the derivation uses
+`sqrt(amount1 * 2**64 / amount0) << 64` — the identity `sqrt(x * 2**128) == sqrt(x) * 2**64`
+— trading 32 bits of precision (still ~1e-19 relative, far below anything a pool price
+expresses) for a ceiling of `2**192`. That is beyond what v4 itself can represent:
+`MIN/MAX_SQRT_PRICE` bound the ratio near `2**128` either side. `AmountRatioOutOfRange` is
+now a backstop rather than a limit. Both branches are pinned as agreeing across the switch
+(`verify` M7 in `test/V4AdapterMath.test.js`).
+
+⚠ **OPERATIONAL CONSEQUENCE, and it belongs in the deployment runbook's parameter
+checklist (§12.8 item 2, which does not exist yet):** `setDefaultGraduationThreshold` has an
+effective floor. The arithmetic no longer breaks above ~54 USDC, but the value is still
+snapshotted per curve and still unfixable after a launch, so **every threshold change is
+irreversible for everything launched under it.** Treat it like `setLpRecipient` (§1.8): a
+value you cannot correct for tokens already created.
+
+## 15.5 ⚠ 4.148e-5 and 4.148e-17 are the SAME price. Conflating them is the 1e12 hazard
+
+The launch token is **18 decimals** — `LFX1Token` extends OZ `ERC20` and never overrides
+`decimals()` — and USDC's ERC-20 view is **6**. So 193.3M tokens against 8,019 USDC is:
+
+| figure | what it is |
+|---|---|
+| **4.148e-5** | USDC per **TOKEN** — the human-decimal price, what a UI shows |
+| **4.148e-17** | raw unit per raw unit — **what v4 actually stores**, 1e12 smaller |
+
+**Only the second is what `sqrtPriceX96` encodes.** The raw amounts already differ by 1e12,
+so a price derived from them is a raw-unit price and needs no decimal adjustment;
+normalising one side to 18 decimals applies the factor twice.
+
+⚠ **The strategy brief for this work stated the human figure and labelled it "in raw
+units", and the first band assertion copied the label — and failed by precisely 1e12.** The
+hazard reproduced itself inside the description of the hazard. That is why this has its own
+entry rather than a footnote: the two numbers look like a units question and are actually
+the whole failure mode.
+
+**Why nothing on chain catches it.** An adapter wrong by 1e12 in either direction still
+initialises the pool, still mints, still returns a non-zero `liquidity`, and still leaves
+LFX1 marking the token `GRADUATED` with the LP already burned. No revert, no event, no
+signal — the same shape as §1.1's original attack. The only thing that catches it is
+asserting the pool's resulting **price**, which is why the fork test does that rather than
+checking a pool exists.
+
+## 15.6 ⚠ RULE: a check that derives its expected value from the thing under test is asserting the bug
+
+**A fourth pattern for §12.6's list, and it bit on the most important assertion in the new
+suite.**
+
+The fork test's price assertion originally compared the pool's `sqrtPriceX96` against the
+ratio of the amounts the mint **consumed**. Red-proved with a deliberate 1e12 decimal
+normalisation, it **passed, at `rel=-7.5e-13`, on a pool priced 1e12 wrong.**
+
+**The reason is structural, not a slip.** For a full-range position the amounts a mint
+absorbs are *derived from* the pool price: `consumed1/consumed0` equals that price
+identically, whatever the price is. The comparison was circular and **could not fail on the
+error it existed to catch**, in any scenario.
+
+**The fix is a reference the pool cannot influence:** what the adapter was *handed*.
+`pulled = consumed + whatever the adapter kept`, measured by bracketing its balances across
+the transaction. Under the same mutation every price case now reports `999999999999` — a
+clean 1e12 — where one previously escaped entirely.
+
+This sits beside §12.6's existing three, and it is the same family as §11.7's
+self-matching-comment trap and §5's vacuous-invariant: **the check has to be able to
+disagree with the code.** Two corollaries worth keeping:
+
+* ⚠ **A check must also be REACHED.** A second red-proof fired on a range assertion that ran
+  *before* the stranded-balance assertion it was meant to prove, so the check actually under
+  proof never executed. §12.6 says "mutate the thing the check asserts about"; the mirror of
+  it is that ordering can hide the check from its own proof. The factory-balance assertions
+  now run first.
+* ⚠ **Mutate so the code stays SELF-CONSISTENT.** Scaling only the `transferFrom` made the
+  mint settle more than the adapter held and revert — which proves the adapter is internally
+  consistent and says **nothing** about whether the test would notice funds stranded in the
+  factory. The mutation now scales the desired amounts themselves, so the adapter pulls 99%,
+  prices 99% and mints 99% with every one of its own guards passing, and the assertion under
+  proof is the one that fires.
+
+Four mutations are registered in `scripts/redproof.py` (`v4-decimal-normalise`,
+`v4-pull-99pct`, `v4-lp-to-sender`, `v4-fake-liquidity`); the fifth, a reverting router, is
+a permanent test rather than a mutation because the half that matters is what happens
+*after* — swapping in a working router and completing the graduation.
+
+⚠ **Each carries its own `env` and `grep` in the registry, deliberately.** The Base fork is
+opt-in, and a fork suite that SKIPS prints "0 passing" with nothing failing — which the
+harness would report as **the mutation surviving**. A false negative on the most important
+red-proof in the file. The environment travels with the mutation rather than being something
+the operator has to remember.
+
+## 15.7 Two smaller records
+
+**`BASE_RPC_URL` is unconfigured, and the default works.** The Alchemy app behind
+`MAINNET_RPC_URL` has **Base disabled** (`BASE_MAINNET is not enabled for this app`), and an
+Alchemy key for eth-mainnet does not cover Base automatically — the network has to be
+enabled on the app. `hardhat.config.js` therefore defaults to **`https://mainnet.base.org`**,
+which was measured to serve archive state at the pinned block. It rate-limits, so the first
+run is slow while Hardhat fills its cache. Of the public endpoints tried, only that one
+worked: `publicnode` demands a token for archive requests, `llamarpc` returned HTML,
+`drpc` timed out on the free plan, and `1rpc` reported the state pruned.
+
+⚠ **`CONTRACT_INVENTORY.md` moved 84 → 80 as PRE-EXISTING DRIFT, not from this work.**
+§14's additions mention `CURVE_TOKEN_SUPPLY`, `currentPrice` and `caseSensitiveSymbols`, and
+`npm run build` was never re-run afterwards, so the generated coverage list still described
+the older CLAUDE.md. **Generated docs are not regenerated on commit and nothing checks
+them**, so this will keep drifting: the inventory is generated from the ABI and the source
+and then diffed against *this file*, which means every edit here silently ages it. §"HOW TO
+READ THIS FILE" says to read the coverage list after any contract change; it is worth
+reading after any CLAUDE.md change too. Running `npm run build` before committing a
+CLAUDE.md edit is the whole fix.

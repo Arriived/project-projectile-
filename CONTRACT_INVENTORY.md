@@ -261,7 +261,7 @@ mention. That list is what to read after any contract change.
 
 ## CLAUDE.md coverage
 
-Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **80**.
+Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **79**.
 
 Not every one needs prose — a getter for a constant that is already described by
 its constant does not. But anything here that changes BEHAVIOUR and is unexplained
@@ -322,7 +322,6 @@ is the shape of the symbol-lock gap, and should be read as a candidate.
 - `LFX1.DefaultFeesSet`
 - `LFX1.DefaultGraduationThresholdSet`
 - `LFX1.DefaultSnipeTaxTreasuryBpsSet`
-- `LFX1.GraduationAttemptFailed`
 - `LFX1.GraduationReady`
 - `LFX1.LaunchCooldownSet`
 - `LFX1.LpRecipientSet`
