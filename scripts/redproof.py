@@ -235,6 +235,50 @@ def mut_v4_fake_liquidity(s):
     return s.replace(d, "        // MUTATED: ownership never verified")
 
 
+V4_ATTACK_GREP = "ADVERSARIAL"
+V4_MATH_GREP = "price math"
+
+
+def mut_v4_accept_any_price(s):
+    """Drop the exact sqrtPriceX96 check -- the strict-min substitute of section 15.3.
+
+    This is the guard the entire pool-poisoning defence rests on. Without it the adapter
+    seeds whatever price an attacker put there first, mints, burns the LP and reports
+    success, and LFX1 marks the token GRADUATED with nothing recoverable. Every attack in
+    the A1/A2/A4 cluster that asserts a hostile pool is REFUSED must go red."""
+    a = _anchor(s, "        (uint160 poolSqrtPriceX96,,,) = poolManager.getSlot0(key.toId());\n"
+                   "        if (poolSqrtPriceX96 != sqrtPriceX96) {\n"
+                   "            revert PoolPriceMismatch(sqrtPriceX96, poolSqrtPriceX96);\n"
+                   "        }")
+    return s.replace(a, "        // MUTATED: any pre-existing price is accepted")
+
+
+def mut_v4_leave_approvals(s):
+    """Stop zeroing the Permit2 grants on the way out, so a live allowance over the
+    adapter's balance survives the call. A5a and A5b must go red."""
+    a = _anchor(s, "        _permitApprove(Currency.unwrap(key.currency0), 0);\n"
+                   "        _permitApprove(Currency.unwrap(key.currency1), 0);")
+    return s.replace(a, "        // MUTATED: approvals left standing")
+
+
+def mut_v4_no_guard(s):
+    """Remove the adapter's own ReentrancyGuard from the entry point. A3a must go red --
+    and note what it proves and what it does not: A7 is stopped by PositionManager's
+    lock, not by ours, so A7 stays green under this and that is the correct outcome."""
+    a = _anchor(s, "    ) external override nonReentrant returns (uint256 amountA, uint256 amountB, uint256 liquidity) {")
+    return s.replace(a, "    ) external override returns (uint256 amountA, uint256 amountB, uint256 liquidity) { // MUTATED")
+
+
+def mut_v4_sqrt_round_up(s):
+    """Return the ceiling rather than the floor of the square root.
+
+    The floor is what guarantees the pool never opens at a price RICHER than the deposit
+    justifies -- floor(sqrt(x))^2 <= x. Rounding up inverts that directional invariant,
+    which is the one property attack 6 asserts on every single input."""
+    a = _anchor(s, "            uint256 r1 = x / r;\n            return r < r1 ? r : r1;")
+    return s.replace(a, "            uint256 r1 = x / r;\n            return r < r1 ? r1 : r; // MUTATED")
+
+
 def mut_multicurve_claim_prank(s):
     a = _anchor(s, "        vm.prank(creator);")
     return s.replace(a, "        // MUTATED: prank removed, restoring the dead-claim bug")
@@ -360,6 +404,41 @@ MUTATIONS = {
         "grep": V4_GREP,
         "fn": mut_v4_fake_liquidity,
         "doc": "non-zero liquidity reported for a pool never seeded; something MUST go RED",
+    },
+    "v4-accept-any-price": {
+        "file": V4_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "env": V4_ENV,
+        "grep": V4_ATTACK_GREP,
+        "fn": mut_v4_accept_any_price,
+        "doc": "drops the exact price check; every hostile-pool REFUSED assertion must go RED",
+    },
+    "v4-leave-approvals": {
+        "file": V4_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "env": V4_ENV,
+        "grep": V4_ATTACK_GREP,
+        "fn": mut_v4_leave_approvals,
+        "doc": "leaves Permit2 grants standing; the approval-window assertions must go RED",
+    },
+    "v4-no-guard": {
+        "file": V4_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "env": V4_ENV,
+        "grep": V4_ATTACK_GREP,
+        "fn": mut_v4_no_guard,
+        "doc": "removes the adapter's own ReentrancyGuard; the reentrancy attack must go RED",
+    },
+    "v4-sqrt-round-up": {
+        "file": V4_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "grep": V4_MATH_GREP,
+        "fn": mut_v4_sqrt_round_up,
+        "doc": "ceils the sqrt, inverting the never-richer-than-the-deposit invariant; A6 must go RED",
     },
     "multicurve-claim-prank": {
         "file": MULTI_HANDLER,
