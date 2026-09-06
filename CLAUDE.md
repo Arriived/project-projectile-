@@ -3460,3 +3460,157 @@ equality.
 **Still open, and unprobeable until v4 lands:** `0xdd46508f` `modifyLiquidities` and
 `0xf7020405` `initializePool`. There is no PositionManager on Arc to probe them against,
 so §15.2's pre-flight item stays open for those two on both testnet and mainnet.
+
+---
+
+# 16. SESSION OF 6 SEPTEMBER 2026 — the adapter attacked against real v4
+
+⚠ **APPENDED, NOT A REWRITE.** Same rule as §12, §13, §14 and §15. Nothing above this line
+was deleted.
+
+17 attacks against **real PoolManager, real PositionManager, real Permit2** on a Base fork
+pinned at block 50,900,000, plus 2 price sweeps locally. `test/Fork.v4.attack.test.js` and
+the `ATTACK 6` block in `test/V4AdapterMath.test.js`. **One finding**, recorded below.
+`contracts/BallistaV4Adapter.sol` is unmodified — only test fixtures were added.
+
+⚠ **WHAT THIS DOES NOT COVER, AND IT IS THE SAME CAVEAT §4 MAKES.** A Base fork exercises
+real v4 and **nothing about Arc** — not the USDC blocklist, not EIP-7708 transfer logs, not
+the truncating 6dp `balanceOf`. Arc's own docs say local simulators "run a standard EVM, not
+Arc's". Base was used because **Arc Testnet has no v4 deployment at all (§15.8)**, so this
+is the only surface that exists. **An adapter attacked on Base is not an adapter cleared for
+Arc.** It is one whose logic has been tested somewhere real rather than nowhere.
+
+## 16.1 ⚠ F1 — a pool can be poisoned BEFORE the token exists, for 51,508 gas and no capital
+
+**`PoolManager.initialize` checks tickSpacing, currency ordering and hook validity and
+NOTHING ELSE.** `@uniswap/v4-core/src/PoolManager.sol:117`, with the complete guard set at
+**lines 119-126**: `TickSpacingTooLarge`, `TickSpacingTooSmall`, `CurrenciesOutOfOrderOrEqual`
+and `isValidHookAddress`. **There is no check that either currency is a contract**, so a pool
+can be initialised for an address that holds no code and never has.
+
+**And LFX1 token addresses are predictable.** The factory uses plain `CREATE`, so a token is
+at `keccak(rlp([factory, nonce]))` — §12.4 verified that derivation exact against two live
+tokens. So an attacker can enumerate the next N tokens a factory will ever create and
+**pre-initialise every one of their pools at a hostile price before any of them exist**.
+
+**51,508 gas each. No capital, no race, no front-run.** Poisoning the next hundred launches
+costs ~5.15M gas, well under one Arc block (§15.8 measured Arc Testnet's limit at 30,000,000).
+Reproduced by `A4b`, which predicts the address, initialises at `Q96`, then launches and
+confirms the prediction and the park.
+
+⚠ **THIS IS A PROPERTY OF v4 AND OF CREATE ADDRESSING, NOT OF THE ADAPTER.** It remains true
+whatever the adapter does, and it remains true if the fix in the report ships. What a fix can
+change is the *consequence*, not the attacker's ability to do it.
+
+### Recoverability, measured in both directions
+
+The adapter refuses a mispriced pool (§15.3's strict-min substitute), so the curve parks at
+`GRADUATION_READY` with reserves intact rather than seeding at the attacker's price. What
+that costs depends entirely on whether the price can be put back, so it was measured rather
+than argued:
+
+| pool state | correction | measured |
+|---|---|---|
+| **empty** (initialise only) | moves to an EXACT target price for **gas alone** | full retry **579,824 gas** (`A1a`) |
+| **poisoned LOW, with liquidity** | corrector buys the underpriced token | pays **3,365 USDC** for 353M tokens worth ~**14,600** — profits ~**11,000** at the attacker's expense (`A2b`) |
+| **poisoned HIGH, with liquidity** | corrector sells into the overpriced pool | gains **4,985.58** of the attacker's **5,000 USDC** stake (`A2d`) |
+
+An empty pool corrects for free because there is no liquidity to trade against: v4's swap
+consumes nothing and walks the price straight to `sqrtPriceLimitX96`, settling no currency.
+Confirmed on chain, not reasoned about — `V4PriceMover` performs the swap and returns
+without settling anything, and `unlock` would have reverted `CurrencyNotSettled` if any
+delta were non-zero.
+
+⚠ **BACKING THE POISON WITH CAPITAL IS SELF-DEFEATING ARBITRAGE.** A mispriced pool with
+liquidity in it is a gift: correcting it is profitable in both directions, and the profit
+comes out of the attacker's own position. An attacker who wants to raise the cost of
+recovery can only do so by handing that cost to whoever recovers it.
+
+### ⚠ The cost that REMAINS, and it is not zero
+
+While the curve is parked at `GRADUATION_READY`, **both buy and sell are closed** (§1.4 — we
+are stricter than Pons here, deliberately). So:
+
+* **holders are frozen** for the whole window, with no exit;
+* **nobody can buy the token to fund a correction.** `A2d` asserts this directly: an
+  ordinary holder attempting to restock from the curve gets `CurveNotActive`. The only
+  supply of tokens is people who already bought before the park.
+* **someone external must notice and act.** Recovery is permissionless and profitable, but
+  it is not automatic. Nothing in the system performs it.
+
+That is the residual: not a loss, but a dependency on an outside party noticing. It is **R6,
+the griefing race, in a new place** — and unlike R6 it can be triggered pre-emptively, in
+bulk, before the target exists.
+
+## 16.2 ⚠ Run the two fork suites SEPARATELY — together they present as a hang
+
+```bash
+FORK_BASE=1 npx hardhat test test/Fork.v4.test.js
+FORK_BASE=1 npx hardhat test test/Fork.v4.attack.test.js
+```
+
+Running **both files in one mocha process times out**. `mainnet.base.org` — the default when
+`BASE_RPC_URL` is unset (§15.7) — rate-limits once the two suites' archive fetches
+interleave, and the run dies on mocha's timeout after 30 minutes.
+
+⚠ **Recorded because of how it PRESENTS.** A rate-limited fork suite does not fail, it
+**hangs**: no error, no failing assertion, just a process that stops making progress and is
+eventually killed by a timeout naming a test file. That reads as a bug in the test rather
+than a property of the endpoint, and it costs a long time to work out. Set `BASE_RPC_URL` to
+a dedicated provider and the constraint disappears.
+
+## 16.3 Two findings that came out of the attacks that FAILED
+
+**⚠ A7's guard is Uniswap's, not ours.** The one genuinely dangerous window is the settle
+inside `PoolManager.unlock`, where both of the adapter's Permit2 approvals are live and the
+PoolManager is unlocked. A token callback there was fired deliberately (`A7`) and stopped by
+**`ContractLocked` (`0x6f5ffb7e`) — PositionManager's own `ReentrancyLock`**
+(`v4-periphery/src/base/ReentrancyLock.sol:10-15`), reached via the `isNotLocked` modifier on
+both `modifyLiquidities` and `modifyLiquiditiesWithoutUnlock`. Re-entering `PoolManager.unlock`
+is separately refused with `AlreadyUnlocked` (`0x5090d6c6`).
+
+**So the adapter's safety in that window is an UPSTREAM DEPENDENCY.** It is not a property of
+our code and would not survive a v4-periphery version that relaxed it. Worth knowing before
+anyone reads "no reentrancy found" as "we handle reentrancy there".
+
+**The accepted price band is exactly one value.** The check is equality on `sqrtPriceX96`, so
+the set of prices it accepts has one member. Expressed as a price that is **1.6e-37 relative
+— 1.3e-33 USDC on an 8,019 USDC pool** (`A1b`). **There is no exploitable band inside the
+check**; an attacker who lands on the accepted value has moved the pool by less than one raw
+unit of either side.
+
+## 16.4 ⚠ RULE: a mutation that survives means the test was never testing the thing it names
+
+**Two of the four new mutations passed unchanged on the first attempt**, and in both cases
+the test was green for a reason that had nothing to do with the guard in its own title.
+
+| mutation | why it survived |
+|---|---|
+| `v4-accept-any-price` | deleting the price check did not let a hostile pool through, because the mint's own `amount0Max`/`amount1Max` caps also reject the lopsided amounts a wrong price demands. The test asserted "refused" and could not tell WHICH guard refused it. |
+| `v4-no-guard` | the reenterer held no tokens and no approval, so the nested `addLiquidity` died on the transfer. Removing the `ReentrancyGuard` changed nothing the check could observe. |
+
+This belongs beside §15.6 and is the same family. §15.6 says a check that derives its
+expected value from the thing under test is asserting the bug. The rule here is its
+companion:
+
+> **A mutation that SURVIVES is not a contract that is safe. It is a test that was never
+> testing the thing it names.** Read a survivor as a defect in the check first and in the
+> code second — and fix it by making the check name its guard, not by widening the mutation.
+
+Both were fixed by making the assertion specific rather than circumstantial. `A1c` now
+asserts the revert is **`PoolPriceMismatch` by name**, on a direct call, because LFX1's
+try/catch swallows the reason. `A3a` now **funds and approves the reenterer** so the only
+thing that can stop it is the guard, and asserts the returndata selector is
+`ReentrancyGuardReentrantCall`.
+
+⚠ **AND FIXING THE SECOND PROVED THE GUARD IS LOAD-BEARING.** Under `v4-no-guard` with a
+funded reenterer, the nested call **succeeds** — the failure message is "REENTRANCY
+SUCCEEDED into addLiquidity". Before the fix there was no evidence the adapter's own
+`nonReentrant` did anything at all; there is now.
+
+⚠ **A third check was wrong in the same session and was NOT caught by a mutation** — attack
+6's magnitude bound took three attempts, because the error is quantised in raw units at
+small amounts and relatively at large ones and no single bound covers both. The invariant
+that does hold everywhere is directional: `floor(sqrt(x))^2 <= x`, so the pool can only ever
+open AT or BELOW the ratio the deposit justifies. §15.5's own M5 already recorded the
+raw-unit half of that and this session repeated the mistake anyway.
