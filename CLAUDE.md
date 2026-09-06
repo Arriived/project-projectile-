@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| repo HEAD **when this was written** | `dc7e083`, on branch **`ballista-migration`**, tree clean, pushed. (Was `f96f267`; the earlier value stood for six commits after it stopped being true, which is the drift the paragraph below warns about.) |
+| repo HEAD **when this was written** | `920acad`, on branch **`ballista-migration`**, tree clean, pushed. (Was `dc7e083`, and `f96f267` before that — the latter stood for six commits after it stopped being true, which is the drift the paragraph below warns about.) ⚠ **`git rev-parse --short HEAD` is ground truth; this line is a snapshot and rots the moment anything lands on top of it.** |
 | deployed commit | `38e3e9e` — **not** the same thing, and it should not be. The contract is frozen; everything since is frontend. §7 carries this one. |
 | contract | **FROZEN.** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b`, verified, 24,033 / 24,576 — 543 free. Re-confirmed on chain this session: `eth_getCode` returns 24,033 bytes. |
 | ✅ **ALL THREE WRITE PATHS PROVEN ON A REAL WALLET** | **Create, buy and sell, against real MetaMask, 2 September 2026. This closes the longest-open item in the project.** Round trip 246.89 → 246.778 USDC on a 5 USDC trade (~2.2% = two 1% fees plus gas). `wallet_watchAsset` prompted, imported, and MetaMask shows **1,991,519.04** — the correct figure, so decimals are right and trap 4 is clear. See §11.15. |
@@ -1022,11 +1022,78 @@ command** or the hook is inert. Verified to actually block: with a lease present
 # 6. FORWARD DECISIONS ALREADY SETTLED — DO NOT REOPEN
 
 - **Mainnet launches on the V2 router, LP burned to `BURN_ADDRESS`.** V4 is post-launch, via the router timelock. **A next session must not start building V4.**
+  ⚠ **STILL BINDING, but the strategic direction has moved — see §14.6.** The intent is now a v4 graduation with a fee-capturing hook, phased. That spec is **unwritten and unapproved**, and this rule is not lifted. What §14.1 changes is the *reason*: v4 is a choice about fee capture, not a prerequisite, because the v2 router is published and the frozen `addLiquidity` interface works against it unmodified.
 - **The zero-fee-pool rationale is LP fee dilutability** — anyone can add liquidity to a permissionless v4 pool and take a pro-rata share of LP fees. It is **not** "Uniswap charges a fee on top of ours". That reasoning was wrong and must not reappear.
 - **Under a zero-fee pool the position accrues nothing, so the hook is the fee accountant and the locker is a tombstone.** *(Corrected: an earlier version of this file said the locker "must be able to call `PositionManager` to collect fees and manage the position." That is wrong under a zero-fee pool and has been removed.)*
 - **Burn vs locker for the v4 position is OPEN**, pending the operator's recommendation. `PositionManager` uses **`_mint`, not `_safeMint`** (L369, solmate base), so a position can go to a non-receiver address without reverting — graduation will **not** revert regardless of what the recipient implements.
 - **No unvalidated calldata may ever be forwarded to `PositionManager` or `PoolManager`.** A reported launchpad exploit forwarded user-supplied calldata into `multicall()`; the attacker injected `setApprovalForAll` and swept every custodied position. All calldata must be constructed internally from validated parameters.
-- Uniswap on Arc mainnet, from their own SDK: v2 router `0x1f7d7550b1b028f7571e69a784071f0205fd2efa`, v2 factory `0x89e5db8b5aa49aa85ac63f691524311aeb649eba`, v4 PoolManager `0x8366a39cc670b4001a1121b8f6a443a643e40951`, v4 PositionManager `0x6049c9a0e26405c0985f9e3685c87d0ae917f82b`. **The v2 router matches `IDEXRouter.addLiquidity` exactly.**
+## ⚠ UNISWAP V2 **IS** PUBLISHED FOR ARC. A previous conclusion said otherwise and was wrong.
+
+**Corrected 5 September 2026.** A strategy session concluded there is no canonical Uniswap
+V2 on Arc, and several sessions were built on that. **It is wrong, and the way it went
+wrong is the reusable part:** the conclusion came from Uniswap's chain playbook, which
+enumerates the `ChainAddresses` struct — v3 factory, SwapRouter02, v4 PoolManager, v4
+Quoter. **V2 is not a member of that struct.** It lives in two separate top-level maps,
+`V2_ROUTER_ADDRESSES` and `V2_FACTORY_ADDRESSES`, which the playbook does not surface.
+
+**The answer was drawn from a list that structurally could not contain it.** Before
+concluding "X is absent", establish that the source you are reading is one where X *could*
+appear.
+
+**Source for every value below:** `github.com/Uniswap/sdks`,
+`sdks/sdk-core/src/addresses.ts`, branch `main`, **read 2026-09-05**.
+
+| what | address | where in the SDK |
+|---|---|---|
+| **v2 router** | `0x1f7d7550b1b028f7571e69a784071f0205fd2efa` | `V2_ROUTER_ADDRESSES[ChainId.ARC]` |
+| **v2 factory** | `0x89e5db8b5aa49aa85ac63f691524311aeb649eba` | `V2_FACTORY_ADDRESSES[ChainId.ARC]` |
+| v3 core factory | `0xf0db7b58379503491d857db50ac9ece64c653918` | `ARC_ADDRESSES.v3CoreFactoryAddress` |
+| multicall | `0x33e885ed0ec9bf04ecfb19341582aadcb4c8a9e7` | `ARC_ADDRESSES.multicallAddress` |
+| quoter | `0x7dfd4f31be6814d2906bde155c3e1b146eac1468` | `ARC_ADDRESSES.quoterAddress` |
+| NF position manager | `0x39654a85a4c05127f5fd6ed22caec077a0fb1377` | `ARC_ADDRESSES.nonfungiblePositionManagerAddress` |
+| tick lens | `0x9eb8600665b55d10c1eb2316ca5127a9ca6e2e76` | `ARC_ADDRESSES.tickLensAddress` |
+| SwapRouter02 | `0x53bf6b0684ec7ef91e1387da3d1a1769bc5a6f77` | `ARC_ADDRESSES.swapRouter02Address` |
+| v4 PoolManager | `0x8366a39cc670b4001a1121b8f6a443a643e40951` | `ARC_ADDRESSES.v4PoolManagerAddress` |
+| v4 PositionManager | `0x6049c9a0e26405c0985f9e3685c87d0ae917f82b` | `ARC_ADDRESSES.v4PositionManagerAddress` |
+| v4 StateView | `0xf3334192d15450cdd385c8b70e03f9a6bd9e673b` | `ARC_ADDRESSES.v4StateView` |
+| v4 Quoter | `0x8dc178efb8111bb0973dd9d722ebeff267c98f94` | `ARC_ADDRESSES.v4QuoterAddress` |
+
+**⚠ CONSEQUENCE, AND IT IS THE LOAD-BEARING ONE: the frozen contract already works on Arc
+mainnet with no new contract at all.** `IDEXRouter.addLiquidity` is a V2-signature call and
+`0x1f7d7550…` is a V2 router, so graduation needs no adapter to function. **Any v4 work is
+therefore a CHOICE about fee capture, never a prerequisite for graduating.** Do not let a
+future session record "we need an adapter or graduation is broken" — that is false.
+
+### ⚠ Provenance — these are not unattributed addresses
+
+`git log -S` (run 5 September 2026): **both `0x1f7d7550…` and `0x6049c9a0…` entered the
+repo in `546a531`, "Timed creator window, custom errors, and the comment strip"**, sourced
+from that same SDK file. `0x89e5db8b…` entered there too and was later touched by `6e7d16f`
+and `13920eb`. The §11 concern about where they came from is **closed**.
+
+A commit about creator windows is a poor home for two mainnet addresses, which is why the
+record lives here now rather than only in a diff nobody will think to search.
+
+### ⚠ CAVEAT — PUBLISHED IS NOT DEPLOYED. `eth_getCode` EVERY ONE BEFORE DEPENDING ON IT.
+
+These are **SDK entries for a chain whose mainnet has not opened**. They may be
+deterministic addresses published *ahead of* deployment rather than confirmations that code
+exists at them. The SDK is a manifest, not a chain.
+
+The strongest evidence that they are deterministic rather than observed: **`0x1f7d7550…`
+appears elsewhere in the same file as Robinhood's v3 factory and as Ink's mixed-route
+quoter** — the same address in three different roles on three different chains, which is
+exactly what CREATE2-style cross-chain deployment produces and is impossible for
+independently-deployed contracts. *(Reported by the strategy session from its own read of
+`addresses.ts`; not re-verified here, because the SDK is not installed and this pass fetched
+nothing.)*
+
+So: **every address above requires `eth_getCode` on Arc mainnet before anything depends on
+it** — and, per §10, **the probe must first be validated against three known-good addresses**,
+because a probe that returns empty for everything proves nothing.
+`scripts/refreeze-preflight.js` already does exactly this and returned `0x` (NO CODE) for
+both v2 addresses on *testnet*, which is expected and is not evidence either way about
+mainnet.
 
 ---
 
@@ -1034,7 +1101,7 @@ command** or the hook is inert. Verified to actually block: with a lease present
 
 | | |
 |---|---|
-| deployed commit | `38e3e9e` — **the commit the frozen bytecode was built from, NOT the repo HEAD.** Repo HEAD is `dc7e083` (it read `f96f267` for six commits after that stopped being true); the gap is entirely frontend work and the contract has not moved. Keep these two labelled differently, because this file has carried three conflicting HEADs before. |
+| deployed commit | `38e3e9e` — **the commit the frozen bytecode was built from, NOT the repo HEAD.** Repo HEAD is `920acad` (it read `dc7e083` before that, and `f96f267` for six commits after THAT stopped being true); the gap is entirely frontend work and the contract has not moved. Keep these two labelled differently, because this file has carried three conflicting HEADs before. |
 | bytecode | **24,033 / 24,576 — 543 free.** Verified on chain this session: `eth_getCode` on the factory returns 24,033 bytes. |
 | tests | **255 Hardhat passing + 10 pending** (pending = the `FORK=1` suite, skipped without it), **13 Foundry** (`forge test`, 3 suites). ⚠ **Re-measured 5 September 2026: 664s wall / 1,472s CPU, not the 205s recorded here** — budget ~11 minutes, not ~3. Both counts re-run and green that day. The **14 live R15** checks and the **10 fork** checks were **not** re-run — they need a funded key and a fork RPC respectively. |
 | last mutation score | **52/56 = 92.9%**, re-read from `guard-coverage.jsonl` this session rather than recalled: 56 sites, 52 `DETECTED`, 4 `UNDETECTED`. Same four survivors, all classified (§5). |
@@ -1584,8 +1651,12 @@ consistent rather than contradictory.
 Routes: `/` (list), `/t/:address` (token page), `/about` (the ported landing page), `*` →
 redirect to `/`. **`/create` is linked but NOT built** — Phase 4 is gated on the operator.
 
-**143 frontend checks across seven suites**, all passing, all red-proved, run by
-`npm run verify` in `app/`:
+⚠ **THIS TABLE'S COUNTS ARE HISTORICAL AND ARE KEPT ONLY TO SHOW WHAT EACH SUITE COVERS.**
+It read "143 frontend checks across seven suites", which was true when written and was wrong
+for months afterwards. **Do not quote a number from here.** `npm run verify` in `app/` prints
+the live figure as its last line — `SUITES=n CHECKS=n FAILED=n` — and that is the only
+figure worth repeating (§13.7). The per-suite rows below have drifted too; run
+`npm run verify:<name>` for any one of them.
 
 | suite | checks | covers |
 |---|---|---|
@@ -1949,6 +2020,11 @@ It returns a plausible subscription id. Then:
 
 - `eth_getFilterChanges` on that id → **`-32603`**
 - `eth_unsubscribe` on that id → **`false`**
+
+⚠ **These two were NOT re-measured when `eth_newFilter` was re-measured on 5 September 2026.**
+That check covered `eth_newFilter` and `eth_newBlockFilter` only, both of which moved from
+`-32603` to `-32601`. Do not assume these moved with them — a neighbouring value changing is
+not evidence about this one.
 
 So it accepts the call and hands back something worthless. **Anything checking "did
 subscribe succeed?" gets yes.** A future session trying subscriptions over HTTP will see a
@@ -2766,11 +2842,12 @@ script from `package.json`, runs **all** of them (the old `&&` chain stopped at 
 failure and hid the rest), and prints:
 
 ```
-SUITES=16 CHECKS=460 FAILED=0
+SUITES=17 CHECKS=481 FAILED=0        <- illustrative: this was the value on 6 Sep 2026
 ```
 
-⚠ **Quote that command, never a number.** This file has asserted "143 across seven suites"
-and "187 across nine" while the truth was 337 across 13.
+⚠ **Quote that command, never a number — including the line above.** This file has asserted
+"143 across seven suites" and "187 across nine" while the truth was 337 across 13, and the
+figure printed here has already moved twice since (460 across 16, then 481 across 17).
 
 ⚠ **It judges a suite by its EXIT CODE, not by counted FAIL lines.** A crashed suite prints
 no FAIL lines at all; a counter alone would report it green. Proved by crashing one
@@ -2785,3 +2862,237 @@ deliberately: `RED verify:chain (exit 1, no FAIL lines — crashed?)`, exit 1 wi
 * **The 540+ wallet search** needs AppKit, which needs the `ox` conflict resolved upstream.
 * **The light chart's grid token** differs from the dark one (§13.6). Pinned, not fixed.
 * Everything in §12.8 that this session did not touch.
+
+---
+
+# 14. SESSION OF 5–6 SEPTEMBER 2026 — mobile wallet work, and the V2 correction
+
+⚠ **APPENDED, NOT A REWRITE.** Same rule as §12 and §13: this file has lost three sections
+to a rewrite before. Everything above is amended in place where it was wrong, and each
+amendment says what it used to say.
+
+## 14.1 ⚠ THE BIGGEST ITEM IS A REVERSAL: Uniswap V2 **is** published for Arc
+
+**See §6, which now carries the full address table, the provenance and the caveat.** It is
+recorded there rather than here because §6 is where a session looks for settled forward
+decisions, and this correction changes one.
+
+The short version, because it invalidates reasoning several sessions were built on:
+
+* A strategy session concluded there is no canonical Uniswap V2 on Arc. **Wrong.**
+* It read Uniswap's chain playbook, which enumerates the `ChainAddresses` struct. **V2 is
+  not a member of that struct** — it lives in two separate top-level maps,
+  `V2_ROUTER_ADDRESSES` and `V2_FACTORY_ADDRESSES`, in the same `addresses.ts`.
+* **The answer was drawn from a list that structurally could not contain it.** Before
+  concluding "X is absent", establish that the source could have shown X at all.
+* ⚠ **Consequence: the frozen contract already works on Arc mainnet with no new contract.**
+  `IDEXRouter.addLiquidity` is a V2-signature call and `0x1f7d7550…` is a V2 router. **Any
+  v4 work is a choice about fee capture, never a prerequisite for graduating.**
+* ⚠ **Published is not deployed.** Every address needs `eth_getCode` on mainnet first, with
+  the probe validated against three known-good addresses (§10).
+
+**Nothing in this repo ever claimed V2 was absent** — swept 6 September, zero hits. The
+wrong conclusion lived only in chat, which is precisely why it now lives in §6 instead.
+
+## 14.2 What shipped — four commits
+
+All four are on `origin/ballista-migration`.
+
+| commit | what |
+|---|---|
+| `1fcd932` | **theme-color** used `#14140f`, the dark ground superseded when the palette went neutral. Confirmed live on a phone: the iOS status bar and the Android task switcher painted the old brown-black against a neutral `#111111` page. |
+| `0f7b7f0` | **Build fails on a malformed WalletConnect project id.** |
+| `4caea95` | **A namespace rejection is now legible** instead of being reported as the user declining. |
+| `920acad` | **Picker badge** `QR / mobile` → `QR / 70+ wallets`. |
+
+`SUITES=17 CHECKS=481 FAILED=0`, `tsc -b` clean. Red-proofs: theme 3/3, project id 6/6
+(six full production builds), switch-failure 6/6.
+
+### 14.2.1 ⚠ The theme fix's real lesson is about the CHECK, not the colour
+
+`verify:theme` already checked **one** copy of the palette — `PriceChart.PALETTE` — and
+asserted it matched. **It never asked whether there were others.** There was a third copy in
+`ThemeProvider`, and enumerating copies is what failed.
+
+So the new check asserts the **property**: `RETIRED_TOKEN_VALUES` lists every value that
+*was* a token and is not any more, and no `.ts`/`.tsx` under `src/` may contain one. A copy
+added tomorrow is covered without anyone remembering to extend the check.
+
+⚠ **The maintenance contract: when you change a token value, add the OLD one to that list.**
+Comments are stripped first, so a file explaining a change is not mistaken for one shipping
+the old value.
+
+### 14.2.2 The project-id check fails the BUILD, not the site
+
+Production had carried `6c706f1caa5d9a114f7e206898ea947` — 31 characters, the leading `8`
+lost to a dashboard paste. WalletConnect then initialised and failed at auth with a 403 that
+reads exactly like an origin-allowlist problem.
+
+⚠ **The existing guard in `wagmi.ts` is a truthiness check, and that is why the truncation
+was invisible.** Unset and empty are falsy and correctly skip the connector; a 31-character
+id is **truthy**, so the connector was built and then failed. Truthiness cannot separate
+valid from malformed.
+
+Checked at build time because **Vite inlines `VITE_` variables** — the id is a literal in the
+shipped JS and cannot change afterwards, so a build check catches everything a boot check
+would while failing the *deployment* instead of the site. Vercel keeps serving the last good
+build and no user meets a blank page.
+
+## 14.3 Findings that outlive the tasks
+
+* ⚠ **The WalletConnect registry is 609 unfiltered, 79 filtered to `eip155:5042002`, 544 for
+  `eip155:1`.** Only **~13%** of WalletConnect wallets advertise Arc. That is a **funnel
+  constraint, not a bug**, and it is worth knowing before launch-day support questions.
+* ⚠ **The WalletConnect modal differs by width.** At 390px it opens on **"All Wallets"** with
+  a search box and a grid (Trust, MetaMask, Binance, SafePal, TokenPocket, imToken, Safe…).
+  On **desktop it opens on a bare QR pairing screen with no wallet list at all.** Anyone
+  checking the `70+ wallets` badge from a desktop browser will see no list and reasonably
+  conclude the copy is false. It is not — the QR is a generic WalletConnect URI any of those
+  wallets can scan.
+* ⚠ **`loadEnv` returns `""` rather than omitting the key** for a bare `VITE_X=` line. Caught
+  by the project-id red-proof: an `!== undefined` guard failed the build on a file that meant
+  "no id". Anything reading env this way must treat empty as unset, as `wagmi.ts` already does.
+* **`verify-switch-failure.mts` is red-proved as a pure function, but no component test drives
+  the rendered UI.** Consistent with §4's standing note that the UI itself is untested.
+* **The session namespace is read once per `(connector, address)`.** A mid-session
+  `session_update` would classify against a stale list until reconnect. It degrades to
+  `unknown`/`declined`, i.e. the pre-existing behaviour, so it fails safe.
+
+## 14.4 ⚠ STILL OPEN: mobile WalletConnect lands on the wrong chain
+
+**Not fixed, and inference is exhausted. The next step is measurement, not more reasoning.**
+
+`84156418 = 0x5042002` — Arc's **decimal** digits `5042002` parsed as **hex**. Arc Testnet is
+5042002 decimal, whose correct hex is `0x4cef52`. Our own derivation is right
+(`chain.ts:100`, asserted by `verify:chain`) and `84156418` appears **nowhere** in the repo.
+
+⚠ **The obvious explanation has been ruled out.** The wallet's network entry was deleted and
+re-added reading `0x4cef52`, the session was killed on both sides, **and it still
+reproduces.** So it is not simply a mistyped network.
+
+**The diagnostic was written and reverted WITHOUT EVER BEING RUN.** It is recorded here in
+full so the next session re-applies it rather than rewriting it.
+
+Insert into `app/src/hooks/useArcGuard.ts`, immediately after the
+`if (!aliveRef.current) return;` that follows `connector.getProvider()` (~line 94), before
+`await readChain();`:
+
+```ts
+      // ── TEMPORARY WALLETCONNECT SESSION DIAGNOSTIC — REMOVE BEFORE COMMIT ──────
+      try {
+        const p = providerRef.current as unknown as {
+          chainId?: number | string;
+          session?: { namespaces?: Record<string, unknown>; peer?: { metadata?: unknown } };
+        };
+        if (p?.session) {
+          const ns = p.session.namespaces?.eip155 as
+            | { chains?: string[]; accounts?: string[]; methods?: string[]; events?: string[] }
+            | undefined;
+          console.log("[WC-DIAG] provider.chainId =", p.chainId);
+          console.log("[WC-DIAG] eip155.chains    =", ns?.chains);
+          console.log("[WC-DIAG] eip155.accounts  =", ns?.accounts);
+          console.log("[WC-DIAG] eip155.methods   =", ns?.methods);
+          console.log("[WC-DIAG] eip155.events    =", ns?.events);
+          console.log("[WC-DIAG] peer.metadata    =", p.session.peer?.metadata);
+          console.log("[WC-DIAG] full namespaces  =", JSON.stringify(p.session.namespaces));
+        } else {
+          console.log("[WC-DIAG] not a WalletConnect provider (no .session) —", connector?.name);
+        }
+      } catch (e) {
+        console.log("[WC-DIAG] diagnostic threw (ignored):", e);
+      }
+      // ── END TEMPORARY DIAGNOSTIC ──────────────────────────────────────────────
+```
+
+**Reading it from an iPhone (Safari remote inspect):**
+
+1. iPhone: **Settings → Apps → Safari → Advanced → Web Inspector: ON**.
+2. Laptop Safari: **Settings → Advanced → "Show features for web developers"**.
+3. `npm run dev -- --host` in `app/`, note the `Network:` URL it prints.
+4. Phone on the **same Wi-Fi**, open that URL in **mobile Safari** — ⚠ *not* the MetaMask
+   in-app browser, which uses the injected provider and has no WalletConnect session.
+5. Plug in, trust the computer, then laptop Safari → **Develop → [iPhone] → [the page]**.
+6. Connect via WalletConnect, approve, return to Safari; `[WC-DIAG]` appears in the console.
+
+*(Android: `chrome://inspect/#devices` with USB debugging.)*
+
+⚠ **Attach the inspector BEFORE connecting** — the log fires once when the provider resolves,
+and a session restored from storage prints before you can attach otherwise.
+
+**What to look for:** whether `eip155.chains` contains `eip155:5042002`. If it does not, the
+switch cannot work whatever the wallet's network list says — and the app now says so on
+screen (`4caea95`).
+
+## 14.5 Not deployed
+
+**Production still serves the pre-`3cd27c1` bundle.** A **preview** was deployed on
+5 September and nothing has been promoted since:
+
+`https://ballista-9oqqeu21p-moadadas-projects.vercel.app`
+
+⚠ None of the four commits in §14.2 are in that preview either — it predates them. **A fresh
+preview is needed before any mobile testing of the wallet changes.**
+
+**Connected-wallet flows remain untested** as a direct consequence, on desktop and mobile.
+`WalletBar`, `lib/wallets.ts`, `ChainProvider` and the connector list have all changed.
+
+## 14.6 The direction change — graduation to v4 with a fee-capturing hook
+
+**Recorded, NOT approved, and no work has started.** The spec is unwritten and §6's standing
+rule against starting V4 has not been lifted.
+
+The intent is a Uniswap **v4** graduation with a **fee-capturing singleton hook**, modelled
+on Pons v2, phased:
+
+1. **adapter with `hooks: address(0)`** — v4 pool, no hook
+2. **the hook** — fee capture
+3. **escrow**
+
+⚠ **PHASE 1 IS A CHOICE, NOT A NECESSITY.** §14.1 is the reason: the v2 path is published,
+LFX1's frozen `addLiquidity` interface works against `0x1f7d7550…` unmodified, and **no new
+contract is required for graduation to function.** Do not let a future session record that an
+adapter is needed to make graduation work.
+
+### The four measured facts any adapter design rests on
+
+Established 6 September by reading the frozen source, not inferred:
+
+1. ⚠ **The launched token is 18 decimals; USDC's ERC-20 view is 6.** `LFX1Token` extends OZ
+   `ERC20` and never overrides `decimals()` (`contracts/LFX1Token.sol:6`, OZ default 18).
+   **The `sqrtPriceX96` derivation therefore carries a 1e12 scale factor**, and that is the
+   likeliest place for this to go silently wrong.
+2. ⚠ **Both liquidity amounts are VARIABLE, never constants.**
+   `tokenLiquidity = LP_TOKEN_RESERVE + c.tokenReserves ≥ 193,000,000e18` and
+   `usdcLiquidity = c.realUsdcReserves + c.poolBoost > 8,000e6`. `c.tokenReserves` is
+   **non-zero on the normal (threshold) arm** — it is only zero on the depletion arm
+   (`LFX1.sol:442-443`). One measured graduation: **193,297,304e18 / ~8,019e6**, with
+   `poolBoost = 0`. `poolBoost` is opt-in per token and adds ~1–4%.
+3. **LFX1 ignores the returned `amountA`/`amountB`.** They appear only in the `Graduated`
+   event (`LFX1.sol:681`); only `liquidity == 0` is rejected (`:672`). Nothing downstream
+   reads them — `indexer/src/index.js:361` uses `log.args.token` alone. **So an adapter may
+   consume less than offered.**
+4. ⚠ **Unpulled dust is permanently stranded in the FACTORY.** `LFX1.sol:677-679` zeroes
+   `tokenReserves`, `realUsdcReserves` and `poolBoost` **unconditionally on the amounts**, so
+   anything left unpulled sits in the factory's balance with no accounting entry and no
+   payout path can ever reach it (R14). **An adapter must `transferFrom` the full approved
+   amounts** and sweep dust on its own side, where it can still move it.
+
+⚠ **Also unestablished: whether v4 `PositionManager` has code on Arc mainnet.**
+`@uniswap/sdk-core` is not installed in this repo, so `ARC_ADDRESSES` could not be read
+directly; the address in §6 comes from the strategy session's read of the SDK. If it turns
+out to be absent, an adapter must go straight to `PoolManager.unlock` → `modifyLiquidity` and
+hold the position itself with no withdraw function — a materially different contract.
+
+## 14.7 Corrections made to this file in this pass
+
+* **HEAD** in the RESUME HERE table and §7: `dc7e083` → `920acad`, with a note that
+  `git rev-parse --short HEAD` is ground truth and the line is a snapshot.
+* **§11.1's suite table** no longer states a total. It read "143 frontend checks across seven
+  suites", which was true when written and wrong for months. The counts are now obtained from
+  `npm run verify`'s own last line.
+* **§13.7's example output** updated and labelled illustrative — it has already moved twice
+  (460/16 → 481/17).
+* **§11.11**: a note that `eth_getFilterChanges` and `eth_unsubscribe` were **not** re-measured
+  when `eth_newFilter` was. A neighbouring value changing is not evidence about this one.
+* Swept and clean: **no "V2 absent from Arc" claim**, **no "adapter required"** claim, **no
+  remaining Reown-403-as-allowlist** claim, and `eth_newFilter` reads `-32601` throughout.

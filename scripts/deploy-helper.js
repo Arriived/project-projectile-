@@ -17,6 +17,16 @@ const { ethers } = hre;
 const fs = require("fs");
 const path = require("path");
 
+// github.com/Uniswap/sdks, sdks/sdk-core/src/addresses.ts, branch main, read 2026-09-05:
+//   V2_FACTORY_ADDRESSES[ChainId.ARC] = 0x89e5db8b5aa49aa85ac63f691524311aeb649eba
+//
+// ⚠ V2 IS PUBLISHED FOR ARC -- a previous session concluded otherwise from Uniswap's chain
+// playbook, which enumerates the ChainAddresses struct that V2 is not a member of. See
+// CLAUDE.md §6 for the correction and for why "absent from that list" proved nothing.
+//
+// ⚠ PUBLISHED IS NOT DEPLOYED. Arc mainnet has not opened, so this may be a deterministic
+// address registered ahead of deployment. eth_getCode it before anything depends on it --
+// scripts/refreeze-preflight.js does that, with the probe validated first.
 const ARC_MAINNET_V2_FACTORY = "0x89e5db8b5aa49aa85ac63f691524311aeb649eba";
 
 async function main() {
