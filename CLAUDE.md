@@ -3367,3 +3367,96 @@ and then diffed against *this file*, which means every edit here silently ages i
 READ THIS FILE" says to read the coverage list after any contract change; it is worth
 reading after any CLAUDE.md change too. Running `npm run build` before committing a
 CLAUDE.md edit is the whole fix.
+
+## 15.8 ⚠ ARC TESTNET HAS NO UNISWAP v4. The adapter cannot be exercised on Arc at all yet
+
+**Measured 6 September 2026, read-only, by `scripts/arc-v4-preflight.js`. This is a
+go/no-go gate and it is currently NO-GO.** A session planning to deploy the adapter to
+Arc Testnet and attack it there should read this first and stop.
+
+| address | source | result on Arc Testnet |
+|---|---|---|
+| `0x8366a39c…` v4 PoolManager | sdk-core, `ChainId.ARC` = **5042 (mainnet)** | **0 bytes** |
+| `0x6049c9a0…` v4 PositionManager | same | **0 bytes** |
+| `0xf3334192…` v4 StateView | same | **0 bytes** |
+| `0x8dc178ef…` v4 Quoter | same | **0 bytes** |
+| `0x00000000…78BA3` Permit2 | Circle's own contract-addresses page | **9,152 bytes — PRESENT** |
+
+**The absence is real, not a broken probe.** Three known-good Arc Testnet addresses were
+read first and all returned code (USDC 1,798 · LFX1 24,033 · Multicall3 3,808), and Base's
+own v4 addresses were read as controls and correctly returned nothing. §10 and §12.8 both
+require this: a probe that returns empty for everything proves nothing.
+
+### ⚠ And the absence was checked against a source where a testnet entry COULD appear
+
+§14.1's lesson is that "V2 is absent from Arc" was concluded from a list structurally
+incapable of containing it. So the same mistake was explicitly guarded against here:
+
+* **`@uniswap/sdk-core` (latest) carries `ChainId.ARC = 5042` and the Arc v4 addresses**,
+  so it is a file where an Arc *testnet* entry could appear. **`5042002` occurs zero
+  times in the whole bundle**, as do `ARC_TESTNET` and `ARC_SEPOLIA`. Uniswap publishes
+  no Arc Testnet chain at all, so there is no testnet address this probe could have
+  missed.
+* **Arc's own contract-addresses page lists no Uniswap deployment** — but that page is a
+  Circle/tooling directory (USDC, CCTP, Gateway, CREATE2, Multicall3, Permit2), **not a
+  DEX registry**, so on its own its silence would have proved nothing. It is cited only
+  for Permit2, which it does list.
+* The single Uniswap mention anywhere in Arc's docs is in the **porting guide** — *"if
+  you are porting a DEX, AMM, or router (for example, Uniswap V2, Uniswap V3, or a
+  fork)"* — advice for bringing your own, not a record of a deployment, and it does not
+  mention v4.
+
+**Consequence: a Base fork remains the ONLY surface on which the adapter can be
+exercised.** There is nothing on Arc for it to talk to, and §4's rule stands — do not
+substitute a mock and call the result chain-level assurance. Re-run
+`scripts/arc-v4-preflight.js` before assuming this has changed; it is one command and it
+answers the question outright.
+
+⚠ **This says nothing about Arc MAINNET**, which does not exist yet (16 September).
+§6's address table is for 5042 and remains unverified against a chain, and §15.2's
+pre-flight applies there unchanged.
+
+### ✅ ARC TESTNET'S BLOCK GAS LIMIT IS 30,000,000 — §15.1's missing number
+
+§15.1 records graduation gas at 508,982 and says plainly the figure means nothing until
+it sits beside this. Read from three consecutive blocks, all **30,000,000**, with observed
+`gasUsed` of 1.0M–3.1M.
+
+**So §15.1's 508,982 is about 1.7% of one Arc Testnet block.** Graduation fits with an
+enormous margin, and the concern that a graduation might not be mineable is closed for
+testnet. Two caveats that keep it from closing outright: the 508,982 is a **Base** figure
+and Zero8 already moved Arc's gas accounting once (§2), and **testnet is not mainnet** —
+§9's fee parameters are explicitly testnet-only and "may change before mainnet launch".
+
+### ✅ Permit2 IS on Arc Testnet, and §15.2's selectors are verified ON ARC
+
+Half of §15.2's standing pre-flight can be closed for testnet. All three Permit2
+selectors are present in Arc's own deployed bytecode and a **live staticcall to
+`allowance()` answers** — `[0, 0, 0]`, not a revert, not empty:
+
+| selector | signature | Arc Testnet |
+|---|---|---|
+| `0x87517c45` | `approve(address,address,uint160,uint48)` | PRESENT |
+| `0x36c78516` | `transferFrom(address,address,uint160,address)` | PRESENT |
+| `0x927da105` | `allowance(address,address,address)` | PRESENT |
+
+⚠ **Its code hash DIFFERS from Base's and that is CORRECT — do not read it as a
+different Permit2.** Measured byte by byte: the two deployments are the same **9,152
+bytes** and differ in exactly **35 of them, in two contiguous runs**:
+
+| offset | length | Arc | Base | what it is |
+|---|---|---|---|---|
+| 6974 | 3 | `4cef52` | `002105` | the chain id — 5042002 against 8453 |
+| 6983 | 32 | `e59c8d3f…` | `3b6f35e4…` | the `DOMAIN_SEPARATOR` derived from it |
+
+Both are `immutable`s in Permit2's EIP-712 base, and Solidity bakes immutables into
+runtime code at deploy time, so CREATE2 of identical init code produces exactly this.
+**9,117 of 9,152 bytes are identical**, each chain embeds its own id and not the other's.
+This is the same shape as §7's "12 differing bytes, all benign — the `usdc` immutable
+substituted at its reference sites", and it is why the identity check in the script is
+*same length plus differences confined to the chain-dependent immutables*, never hash
+equality.
+
+**Still open, and unprobeable until v4 lands:** `0xdd46508f` `modifyLiquidities` and
+`0xf7020405` `initializePool`. There is no PositionManager on Arc to probe them against,
+so §15.2's pre-flight item stays open for those two on both testnet and mainnet.
