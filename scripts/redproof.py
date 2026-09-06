@@ -279,6 +279,50 @@ def mut_v4_sqrt_round_up(s):
     return s.replace(a, "            uint256 r1 = x / r;\n            return r < r1 ? r1 : r; // MUTATED")
 
 
+CORRECTOR_SRC = "contracts/BallistaPoolCorrector.sol"
+CORRECTOR_GREP = "BallistaPoolCorrector"
+
+
+def mut_corrector_no_swap(s):
+    """Never perform the corrective swap. The pool stays where the attacker put it, so the
+    end-to-end recovery and the adapter-accepts-it checks must both go red."""
+    a = _anchor(s, "        poolManager.swap(\n            key,")
+    return s.replace(a, "        if (false) poolManager.swap( // MUTATED\n            key,")
+
+
+def mut_corrector_settle(s):
+    """ADD A SETTLE PATH -- the one thing the header says must never be added.
+
+    The restriction to empty pools is enforced by the ABSENCE of any way to pay, so that
+    absence is the thing under test. C2 names CurrencyNotSettled specifically rather than
+    merely asserting a revert, which is what makes this detectable: with a settle path in
+    place the failure moves to some other mechanism and the named assertion fails."""
+    a = _anchor(s, "        // ⚠ NOTHING IS SETTLED HERE, AND THAT IS THE POINT.")
+    return s.replace(
+        a,
+        "        { // MUTATED: a settle path, which the header forbids\n"
+        "            int256 d0 = poolManager.currencyDelta(address(this), key.currency0);\n"
+        "            if (d0 > 0) poolManager.take(key.currency0, address(this), uint256(d0));\n"
+        "            int256 d1 = poolManager.currencyDelta(address(this), key.currency1);\n"
+        "            if (d1 > 0) poolManager.take(key.currency1, address(this), uint256(d1));\n"
+        "        }\n" + a,
+    )
+
+
+def mut_corrector_noop_reverts(s):
+    """Remove the already-at-target early return, so a redundant correction reaches the
+    swap and dies on v4's PriceLimitAlreadyExceeded. C3 must go red."""
+    a = _anchor(s, "        if (current == targetSqrtPriceX96) return false;")
+    return s.replace(a, "        // MUTATED: no early return; a redundant call now reverts")
+
+
+def mut_corrector_unguarded_callback(s):
+    """Drop the msg.sender check on unlockCallback, so anyone can drive the swap while
+    wearing this contract's identity. C5 must go red."""
+    a = _anchor(s, "        if (msg.sender != address(poolManager)) revert NotPoolManager(msg.sender);")
+    return s.replace(a, "        // MUTATED: callback is open to any caller")
+
+
 def mut_multicurve_claim_prank(s):
     a = _anchor(s, "        vm.prank(creator);")
     return s.replace(a, "        // MUTATED: prank removed, restoring the dead-claim bug")
@@ -439,6 +483,42 @@ MUTATIONS = {
         "grep": V4_MATH_GREP,
         "fn": mut_v4_sqrt_round_up,
         "doc": "ceils the sqrt, inverting the never-richer-than-the-deposit invariant; A6 must go RED",
+    },
+    "corrector-no-swap": {
+        "file": CORRECTOR_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "env": V4_ENV,
+        "grep": CORRECTOR_GREP,
+        "fn": mut_corrector_no_swap,
+        "doc": "corrector never swaps; end-to-end recovery and the adapter-accepts check must go RED",
+    },
+    "corrector-settle": {
+        "file": CORRECTOR_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "env": V4_ENV,
+        "grep": CORRECTOR_GREP,
+        "fn": mut_corrector_settle,
+        "doc": "adds the forbidden settle path; the CurrencyNotSettled assertion must go RED",
+    },
+    "corrector-noop-reverts": {
+        "file": CORRECTOR_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "env": V4_ENV,
+        "grep": CORRECTOR_GREP,
+        "fn": mut_corrector_noop_reverts,
+        "doc": "removes the already-at-target early return; the no-op check must go RED",
+    },
+    "corrector-unguarded-callback": {
+        "file": CORRECTOR_SRC,
+        "suite": None,
+        "runner": "hardhat",
+        "env": V4_ENV,
+        "grep": CORRECTOR_GREP,
+        "fn": mut_corrector_unguarded_callback,
+        "doc": "opens unlockCallback to any caller; the NotPoolManager check must go RED",
     },
     "multicurve-claim-prank": {
         "file": MULTI_HANDLER,
