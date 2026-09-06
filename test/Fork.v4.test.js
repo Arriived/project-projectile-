@@ -137,9 +137,19 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
 
   // Cross the threshold in one buy, past the snipe window so the spend reaches the
   // curve rather than the tax.
+  //
+  // Also measures what the adapter was HANDED, by bracketing its balances. That
+  // quantity is not otherwise observable -- LFX1 zeroes the curve on success, so the
+  // amounts it offered are gone by the time anything can read them -- and it is the
+  // only price reference independent of the pool. See assertPoolPrice.
   async function graduate(token, usdcIn = 8_100n * ONE) {
     await ethers.provider.send('evm_increaseTime', [30]);
     await ethers.provider.send('evm_mine', []);
+
+    const adapterAddr = await adapter.getAddress();
+    const launched = new ethers.Contract(token, ERC20_ABI, ethers.provider);
+    const beforeToken = await launched.balanceOf(adapterAddr);
+    const beforeUsdc = await usdc.balanceOf(adapterAddr);
 
     const tokenIdBefore = await posm.nextTokenId();
     const rc = await (await ballista.connect(buyer).buy(token, usdcIn, 0)).wait();
@@ -147,14 +157,27 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .filter(Boolean);
 
+    // Whatever the adapter kept is the difference between what it pulled and what the
+    // mint absorbed, so pulled = dust + consumed. Measured as a DELTA because USDC dust
+    // can survive from an earlier graduation in the same run.
+    const dustToken = (await launched.balanceOf(adapterAddr)) - beforeToken;
+    const dustUsdc = (await usdc.balanceOf(adapterAddr)) - beforeUsdc;
+    const graduated = parsed.find((l) => l.name === 'Graduated');
+
     return {
       receipt: rc,
       gasUsed: rc.gasUsed,
       tokenId: tokenIdBefore, // the id our position takes; read before the mint
       curve: await ballista.curves(token),
-      graduated: parsed.find((l) => l.name === 'Graduated'),
+      graduated,
       attemptFailed: parsed.find((l) => l.name === 'GraduationAttemptFailed'),
       ready: parsed.find((l) => l.name === 'GraduationReady'),
+      dustToken,
+      dustUsdc,
+      consumedToken: graduated ? graduated.args[1] : 0n,
+      consumedUsdc: graduated ? graduated.args[2] : 0n,
+      pulledToken: graduated ? graduated.args[1] + dustToken : 0n,
+      pulledUsdc: graduated ? graduated.args[2] + dustUsdc : 0n,
     };
   }
 
@@ -178,27 +201,38 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
   // still initialises a pool, still mints, still returns a non-zero liquidity, and
   // still leaves LFX1 marking the token GRADUATED with the LP already burned. Nothing
   // on chain reports it. The only thing that can catch it is comparing the pool's
-  // resulting price against the ratio of the amounts actually put in.
+  // resulting price against the amounts that were actually handed over.
+  //
+  // ⚠ IT MUST BE THE PULLED AMOUNTS, NOT THE CONSUMED ONES, AND THE DIFFERENCE IS NOT
+  // COSMETIC. The first version of this compared the pool price against what the mint
+  // consumed, and the v4-decimal-normalise red-proof showed that check passing at
+  // rel=-7.5e-13 on a pool priced 1e12 wrong. The reason is structural: for a
+  // full-range position the amounts a mint absorbs are DERIVED from the pool price, so
+  // consumed1/consumed0 equals that price identically, whatever the price is. The
+  // comparison was partly circular and could not fail on the error it existed to catch.
+  //
+  // What the adapter was HANDED is independent of the pool, and that is the reference:
+  // pulled = consumed + whatever the adapter kept. Under a scale error the mint absorbs
+  // a lopsided fraction, the remainder shows up as dust, and pulled stops matching.
   //
   // TOLERANCE, stated: 1e-9 relative. The real sources of error are the floored square
-  // root and the difference between what was offered and what the mint consumed, both
-  // of which land around 1e-12 relative. The error this is built to catch is 1e12
-  // relative -- twenty-one orders of magnitude clear of the bound -- so the tolerance
-  // is nowhere near the interesting quantity in either direction.
-  async function assertPoolPrice(token, tokenConsumed, usdcConsumed, label) {
+  // root and the finite tick range, both around 1e-12 relative. The error this is built
+  // to catch is 1e12 relative -- twenty-one orders clear of the bound -- so the
+  // tolerance is nowhere near the interesting quantity in either direction.
+  async function assertPoolPrice(token, tokenPulled, usdcPulled, label) {
     const { key, tokenIsCurrency0 } = poolKeyFor(token);
-    const [consumed0, consumed1] = tokenIsCurrency0
-      ? [tokenConsumed, usdcConsumed]
-      : [usdcConsumed, tokenConsumed];
+    const [pulled0, pulled1] = tokenIsCurrency0
+      ? [tokenPulled, usdcPulled]
+      : [usdcPulled, tokenPulled];
 
     const [sqrtPriceX96] = await lens.slot0(POOL_MANAGER, key);
     expect(sqrtPriceX96, `${label}: pool is not initialised at all`).to.be.greaterThan(0n);
 
     // price = (sqrtPriceX96 / 2^96)^2 = currency1 per currency0, in RAW units.
     // Compare as a cross-multiplied ratio so no precision is lost to floats:
-    //     sqrtPriceX96^2 * consumed0   ==   consumed1 * 2^192
-    const lhs = sqrtPriceX96 * sqrtPriceX96 * consumed0;
-    const rhs = consumed1 * Q96 * Q96;
+    //     sqrtPriceX96^2 * pulled0   ==   pulled1 * 2^192
+    const lhs = sqrtPriceX96 * sqrtPriceX96 * pulled0;
+    const rhs = pulled1 * Q96 * Q96;
     const relE18 = ((lhs - rhs) * 10n ** 18n) / rhs;
     const rel = Number(relE18) / 1e18;
 
@@ -206,6 +240,26 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
       .to.be.lessThan(1e-9);
 
     return { sqrtPriceX96, rel, key, tokenIsCurrency0 };
+  }
+
+  // The mint absorbed essentially everything it was handed.
+  //
+  // Independent of the price check and it fires on the same faults, which is the point
+  // -- a scale error makes the mint take a lopsided fraction of one side and leave the
+  // rest behind, so the dust ratio blows up even where a self-consistent price would
+  // not. It is also the direct statement of what step 1 of the adapter is for: the
+  // residue is meant to be rounding, not a slice of the pool.
+  function assertDustIsNegligible(g, label) {
+    for (const [side, dust, pulled] of [
+      ['token', g.dustToken, g.pulledToken],
+      ['usdc', g.dustUsdc, g.pulledUsdc],
+    ]) {
+      expect(dust, `${label}: ${side} dust is negative -- the adapter paid out of its own balance`)
+        .to.be.at.least(0n);
+      const share = Number(dust) / Number(pulled);
+      expect(share, `${label}: the mint left ${share} of the ${side} side behind`)
+        .to.be.lessThan(1e-9);
+    }
   }
 
   it('1. graduation seeds a real v4 pool AT THE PRICE THE AMOUNTS IMPLY', async function () {
@@ -220,8 +274,33 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
     expect(g.curve.realUsdcReserves, 'realUsdcReserves not zeroed').to.equal(0n);
     expect(g.curve.poolBoost, 'poolBoost not zeroed').to.equal(0n);
 
-    const tokenConsumed = g.graduated.args[1];
-    const usdcConsumed = g.graduated.args[2];
+    // NOTHING STRANDED IN THE FACTORY -- the point of pulling 100% at step 1.
+    //
+    // Stated as an EXACT identity rather than "balances are zero", because the USDC
+    // balance is legitimately non-zero: LFX1 accrues the creation fee and both trading
+    // fees and holds them until they are claimed (CLAUDE.md 1.7). Asserting zero there
+    // would be asserting a falsehood. Asserting the accrual identity is the real claim
+    // -- every USDC unit left is attributable to someone, and none is unaccounted dust
+    // of the kind CLAUDE.md R14 makes permanently unrecoverable.
+    //
+    // ⚠ THIS RUNS BEFORE THE RANGE CHECKS BELOW, DELIBERATELY. An adapter that takes a
+    // computed subset instead of the full amounts strands the remainder here, but it
+    // ALSO drags the token side under the LP allocation -- so with the range checks
+    // first, they fire and this one never executes. The v4-pull-99pct red-proof showed
+    // exactly that, reporting a masked failure at the range check and leaving the
+    // assertion actually under proof unexercised. Ordering is the whole fix.
+    const launched = new ethers.Contract(token, ERC20_ABI, ethers.provider);
+    const factory = await ballista.getAddress();
+    expect(await launched.balanceOf(factory), 'launched tokens stranded in the factory')
+      .to.equal(0n);
+
+    const accounted =
+      (await ballista.treasuryFeesAccrued()) + (await ballista.creatorFeesAccrued(creator.address));
+    expect(await usdc.balanceOf(factory), 'factory holds USDC that is not accrued to anyone')
+      .to.equal(accounted);
+
+    const tokenConsumed = g.consumedToken;
+    const usdcConsumed = g.consumedUsdc;
     const liquidity = g.graduated.args[3];
 
     // Real-shaped, not a scaled-down rehearsal: the default 8,000e6 threshold is used,
@@ -231,7 +310,8 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
     expect(usdcConsumed, 'USDC side below the graduation threshold').to.be.greaterThan(8_000n * ONE);
     expect(liquidity, 'no liquidity reported').to.be.greaterThan(0n);
 
-    const { sqrtPriceX96, rel } = await assertPoolPrice(token, tokenConsumed, usdcConsumed, 'test 1');
+    const { sqrtPriceX96, rel } = await assertPoolPrice(token, g.pulledToken, g.pulledUsdc, 'test 1');
+    assertDustIsNegligible(g, 'test 1');
 
     // Independent sanity on the ABSOLUTE price, so a self-consistent but inverted
     // derivation cannot pass the ratio check above.
@@ -244,7 +324,7 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
     // first version of this assertion used the human figure with the raw quantities and
     // failed by precisely 1e12, which is the error this whole file exists to catch
     // showing up in the check rather than in the contract.
-    const rawRatio = Number(usdcConsumed) / Number(tokenConsumed);
+    const rawRatio = Number(g.pulledUsdc) / Number(g.pulledToken);
     expect(rawRatio, 'RAW-unit price out of band -- inverted or mis-scaled?')
       .to.be.within(1e-17, 1e-16);
     expect(rawRatio * 1e12, 'human-decimal price out of band').to.be.within(1e-5, 1e-4);
@@ -259,36 +339,15 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
     expect(await posm.getPositionLiquidity(g.tokenId), 'reported liquidity is not the minted liquidity')
       .to.equal(liquidity);
 
-    // NOTHING STRANDED IN THE FACTORY -- the point of pulling 100% at step 1.
-    //
-    // Stated as an EXACT identity rather than "balances are zero", because the USDC
-    // balance is legitimately non-zero: LFX1 accrues the creation fee and both trading
-    // fees and holds them until they are claimed (CLAUDE.md 1.7). Asserting zero there
-    // would be asserting a falsehood. Asserting the accrual identity is the real claim
-    // -- every USDC unit left is attributable to someone, and none is unaccounted dust
-    // of the kind CLAUDE.md R14 makes permanently unrecoverable.
-    const launched = new ethers.Contract(token, ERC20_ABI, ethers.provider);
-    const factory = await ballista.getAddress();
-    expect(await launched.balanceOf(factory), 'launched tokens stranded in the factory')
-      .to.equal(0n);
-
-    const accounted =
-      (await ballista.treasuryFeesAccrued()) + (await ballista.creatorFeesAccrued(creator.address));
-    expect(await usdc.balanceOf(factory), 'factory holds USDC that is not accrued to anyone')
-      .to.equal(accounted);
-
     // And the residue is where it was designed to be: in the ownerless adapter.
-    const adapterAddr = await adapter.getAddress();
-    const dustToken = await launched.balanceOf(adapterAddr);
-    const dustUsdc = await usdc.balanceOf(adapterAddr);
-
     console.log(`      MEASURE pool sqrtPriceX96      ${sqrtPriceX96}`);
     console.log(`      MEASURE price relative error   ${rel}`);
     console.log(`      MEASURE token side supplied    ${tokenConsumed}`);
     console.log(`      MEASURE usdc  side supplied    ${usdcConsumed}`);
     console.log(`      MEASURE liquidity minted       ${liquidity}`);
-    console.log(`      MEASURE adapter dust (token)   ${dustToken}`);
-    console.log(`      MEASURE adapter dust (usdc)    ${dustUsdc}`);
+    console.log(`      MEASURE token side pulled      ${g.pulledToken}`);
+    console.log(`      MEASURE adapter dust (token)   ${g.dustToken}`);
+    console.log(`      MEASURE adapter dust (usdc)    ${g.dustUsdc}`);
   });
 
   it('2. GRADUATION GAS, measured -- and what of it is the graduation', async function () {
@@ -347,7 +406,8 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
       expect(tokenIsCurrency0, `${label}: sorted the wrong way, the case is mislabelled`)
         .to.equal(label === 'token below USDC');
 
-      const { rel } = await assertPoolPrice(token, g.graduated.args[1], g.graduated.args[2], label);
+      const { rel } = await assertPoolPrice(token, g.pulledToken, g.pulledUsdc, label);
+      assertDustIsNegligible(g, label);
       expect(await posm.ownerOf(g.tokenId), `${label}: position not burned`).to.equal(BURN);
       console.log(`      MEASURE ${label.padEnd(18)} rel=${rel} gas=${g.gasUsed}`);
     }
@@ -367,8 +427,8 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
     const g = await graduate(token, 12n * ONE);
     expect(g.graduated, 'did not graduate at the small threshold').to.not.be.undefined;
 
-    const tokenConsumed = g.graduated.args[1];
-    const usdcConsumed = g.graduated.args[2];
+    const tokenConsumed = g.consumedToken;
+    const usdcConsumed = g.consumedUsdc;
 
     // Confirm the case really is extreme, so it cannot quietly degrade into a repeat of
     // test 1 if the threshold setter stops taking effect.
@@ -376,7 +436,8 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
     expect(tokenConsumed, 'not actually a large token side')
       .to.be.greaterThan(900_000_000n * 10n ** 18n);
 
-    const { rel } = await assertPoolPrice(token, tokenConsumed, usdcConsumed, 'extreme ratio');
+    const { rel } = await assertPoolPrice(token, g.pulledToken, g.pulledUsdc, 'extreme ratio');
+    assertDustIsNegligible(g, 'extreme ratio');
     expect(await posm.ownerOf(g.tokenId), 'position not burned').to.equal(BURN);
     console.log(`      MEASURE extreme token/usdc     ${tokenConsumed} / ${usdcConsumed} rel=${rel}`);
   });
@@ -439,7 +500,8 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
     const g2 = await graduate(clean);
     expect(g2.graduated, 'a hostile pool on one token blocked an unrelated one').to.not.be.undefined;
     expect(g2.curve.state).to.equal(2n);
-    await assertPoolPrice(clean, g2.graduated.args[1], g2.graduated.args[2], 'unaffected token');
+    await assertPoolPrice(clean, g2.pulledToken, g2.pulledUsdc, 'unaffected token');
+    assertDustIsNegligible(g2, 'unaffected token');
   });
 
   it('6. a REVERTING router parks the curve, and the adapter graduates it afterwards', async function () {
@@ -476,12 +538,12 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
     // Nothing moved to the broken router, and LFX1 cleared its approvals on the
     // failure path so no allowance is left standing over the pooled balance.
     const launched = new ethers.Contract(token, ERC20_ABI, ethers.provider);
+    const adapterAddr = await adapter.getAddress();
     expect(await launched.balanceOf(await broken.getAddress())).to.equal(0n);
     expect(await usdc.balanceOf(await broken.getAddress())).to.equal(0n);
 
     // Swap in the real adapter. The 24h timelock is not skippable and approval is
     // single-use (CLAUDE.md R12), so this is the only route there is.
-    const adapterAddr = await adapter.getAddress();
     await ballista.connect(owner).proposeRouter(adapterAddr);
     await expect(
       ballista.connect(owner).activateRouter(adapterAddr),
@@ -493,7 +555,14 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
     await ballista.connect(owner).activateRouter(adapterAddr);
 
     // The permissionless retry now completes, on the SAME reserves that were parked.
+    // Bracketed the same way graduate() does it, because the price reference has to be
+    // what the adapter was handed rather than what the mint absorbed -- see
+    // assertPoolPrice.
+    const beforeToken = await launched.balanceOf(adapterAddr);
+    const beforeUsdc = await usdc.balanceOf(adapterAddr);
     const rc = await (await ballista.connect(buyer).graduate(token)).wait();
+    const retryDustToken = (await launched.balanceOf(adapterAddr)) - beforeToken;
+    const retryDustUsdc = (await usdc.balanceOf(adapterAddr)) - beforeUsdc;
     const ev = rc.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .filter(Boolean).find((l) => l.name === 'Graduated');
@@ -510,7 +579,9 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
     const usdcConsumed = ev.args[2];
     expect(usdcConsumed, 'the retry seeded a different USDC amount than was parked')
       .to.equal(usdcReservesParked);
-    await assertPoolPrice(token, tokenConsumed, usdcConsumed, 'after retry');
+    await assertPoolPrice(
+      token, tokenConsumed + retryDustToken, usdcConsumed + retryDustUsdc, 'after retry'
+    );
 
     console.log(`      MEASURE parked then graduated  ${tokenConsumed} / ${usdcConsumed}`);
     console.log(`      MEASURE retry graduate() gas   ${rc.gasUsed}`);

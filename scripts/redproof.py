@@ -188,15 +188,23 @@ def mut_v4_decimal_normalise(s):
 
 
 def mut_v4_pull_99pct(s):
-    """Pull 99% instead of the full desired amounts. LFX1 zeroes its reserves whatever
-    was taken, so the 1% left behind sits in the FACTORY with no accounting entry and no
-    payout path that could ever reach it."""
-    a = _anchor(s, "        IERC20(tokenA).safeTransferFrom(msg.sender, address(this), amountADesired);\n"
-                   "        IERC20(tokenB).safeTransferFrom(msg.sender, address(this), amountBDesired);")
+    """Take a computed SUBSET instead of the full desired amounts.
+
+    Applied to the desired amounts themselves, before anything reads them, so the
+    adapter stays internally CONSISTENT -- it pulls 99%, prices 99% and mints 99%, and
+    every one of its own guards passes. Scaling only the transferFrom would instead
+    make the mint try to settle more than the adapter holds and revert, which proves
+    the adapter is self-consistent but says NOTHING about whether the test would notice
+    funds stranded in the factory. That second thing is the assertion under proof here.
+
+    The 1% left behind sits in the FACTORY with no accounting entry, and every LFX1
+    payout path is bounded by accounting rather than by balance, so nothing can ever
+    reach it again (CLAUDE.md R14)."""
+    a = _anchor(s, "        // 1. Pull the FULL desired amounts, never a computed subset.")
     return s.replace(
         a,
-        "        IERC20(tokenA).safeTransferFrom(msg.sender, address(this), amountADesired * 99 / 100); // MUTATED\n"
-        "        IERC20(tokenB).safeTransferFrom(msg.sender, address(this), amountBDesired * 99 / 100); // MUTATED",
+        "        amountADesired = amountADesired * 99 / 100; // MUTATED\n"
+        "        amountBDesired = amountBDesired * 99 / 100; // MUTATED\n" + a,
     )
 
 
@@ -362,6 +370,21 @@ MUTATIONS = {
 }
 
 
+def say(line):
+    """print(), but survivable on a cp1252 console.
+
+    mocha emits U+2714 and em dashes, and Windows stdout defaults to cp1252, so printing
+    a captured line verbatim can raise UnicodeEncodeError and abort the run *after* the
+    mutation has been applied. The subprocess capture already uses errors="replace";
+    this gives stdout the same tolerance so a red-proof reports its result instead of
+    dying on a tick mark."""
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        print(line.encode(enc, "replace").decode(enc, "replace"), flush=True)
+
+
 def run(cmd, env=None):
     e = dict(os.environ)
     if env:
@@ -447,10 +470,27 @@ def main():
             or "reverted" in l or "MEASURE" in l
         )
 
+    # Chai does not put "AssertionError:" on the line carrying a CUSTOM message -- a
+    # failed .to.be.greaterThanOrEqual(x, "why") prints the bare message on its own line
+    # -- so a shape-matching filter drops exactly the sentence that says which assertion
+    # fired. Rather than chase message shapes, keep a fixed window of lines after each
+    # "N)" failure header, which captures the title and the message whatever their form.
+    FAILURE_CONTEXT_LINES = 8
+    header = re.compile(r"\s+\d+\)\s")
+
     printed = False
+    remaining = 0
     for line in out.splitlines():
+        if header.match(line) is not None:
+            remaining = FAILURE_CONTEXT_LINES
+        if remaining > 0:
+            remaining -= 1
+            if line.strip() or remaining == FAILURE_CONTEXT_LINES - 1:
+                say(line)
+                printed = True
+                continue
         if keep(line):
-            print(line, flush=True)
+            say(line)
             printed = True
     if not printed:
         print("!! no parseable result -- INCONCLUSIVE, not a pass. Tail:", flush=True)
