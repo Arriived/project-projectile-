@@ -213,6 +213,45 @@ describe('BallistaV4Adapter — ADVERSARIAL, against real Uniswap v4 (Base fork)
     console.log(`      MEASURE correction cost        ${rc.gasUsed} gas for the retry`);
   });
 
+  it('A1c. the price check is what refuses it, NAMED -- and there is a second guard behind it', async function () {
+    await deployAll();
+    const adapterAddr = await adapter.getAddress();
+
+    // A1a proves a hostile pool is refused. It does NOT prove WHICH guard refused it, and
+    // that distinction matters: the v4-accept-any-price red-proof removed the price check
+    // entirely and A1a still passed, because the mint's own amount0Max/amount1Max caps
+    // reject the lopsided amounts a wrong price demands. Good defence in depth -- and a
+    // check that cannot tell the two apart is not evidence for either.
+    //
+    // LFX1 swallows the revert in its try/catch, so the reason is only visible on a DIRECT
+    // call. That is what this does.
+    const tokA = await (await ethers.getContractFactory('PlainToken18')).deploy();
+    const tokB = await (await ethers.getContractFactory('PlainToken18')).deploy();
+    await tokA.mint(attacker.address, 10n ** 24n);
+    await tokB.mint(attacker.address, 10n ** 24n);
+    await tokA.connect(attacker).approve(adapterAddr, ethers.MaxUint256);
+    await tokB.connect(attacker).approve(adapterAddr, ethers.MaxUint256);
+
+    const a = await tokA.getAddress();
+    const b = await tokB.getAddress();
+    const t0 = BigInt(a) < BigInt(b);
+    const key = {
+      currency0: t0 ? a : b, currency1: t0 ? b : a,
+      fee: POOL_FEE, tickSpacing: TICK_SPACING, hooks: ethers.ZeroAddress,
+    };
+
+    // Seed the pool at 1:1, then offer amounts implying a very different price.
+    await pm.initialize(keyTuple(key), Q96);
+    const deadline = (await ethers.provider.getBlock('latest')).timestamp + 3600;
+
+    await expect(
+      adapter.connect(attacker).addLiquidity(a, b, 10n ** 21n, 10n ** 15n, 0, 0, attacker.address, deadline),
+      'a mispriced pool was not refused by the NAMED price check'
+    ).to.be.revertedWithCustomError(adapter, 'PoolPriceMismatch');
+
+    console.log(`      ATTACK A1c  refused by PoolPriceMismatch, by name`);
+  });
+
   it('A1b. THE ACCEPTED BAND is one ulp of sqrtPriceX96 -- an attacker inside it extracts dust', async function () {
     await deployAll();
     const token = await launch('A1B');
