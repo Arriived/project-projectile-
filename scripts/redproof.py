@@ -291,47 +291,40 @@ def mut_corrector_no_swap(s):
 
 
 def mut_corrector_settle(s):
-    """ADD A SETTLE PATH -- the one thing the contract's header says must never be added.
+    """ADD A SETTLE PATH on exactly the case the header says must be refused.
 
-    The restriction to empty pools is enforced by the ABSENCE of any way to pay, so that
-    absence is the thing under test. C2 names CurrencyNotSettled specifically rather than
-    merely asserting that something reverted, which is what makes this detectable: once a
-    settle path exists the failure moves to a different mechanism (here, an ERC-20 transfer
-    from a contract holding nothing) and the named assertion no longer matches.
+    The corrector restricts itself to empty pools by having no way to pay: a swap against
+    liquidity leaves an unsettled delta and PoolManager.unlock reverts it. C2 names
+    CurrencyNotSettled specifically rather than merely asserting that something reverted,
+    and this is what makes that specificity worth having -- once settle-shaped code exists
+    the failure moves elsewhere (here to an ERC-20 transfer from a contract holding
+    nothing) and the named assertion stops matching.
 
-    Adds the imports and the `using` directive too, because a mutation that does not
-    compile proves nothing and reports as INCONCLUSIVE rather than as a survivor."""
+    ⚠ IT SETTLES ONLY WHEN THE POOL HAS LIQUIDITY, so the empty-pool path is untouched and
+    C1 stays green. A mutation that broke every test would show that something is checked,
+    not that C2 checks the thing it names.
+
+    ⚠ AND IT USES StateLibrary, NOT TransientStateLibrary. Reading the actual delta would
+    be the faithful version, but TransientStateLibrary reaches NonzeroDeltaCount.sol, which
+    uses tstore/tload and DOES NOT COMPILE at this repo's 0.8.24/paris settings -- an
+    extension of the §15.2 constraint that only v4's non-transient libraries are importable
+    here. StateLibrary reads through extsload and compiles, which is why getLiquidity stands
+    in for the delta as the trigger."""
     imports = _anchor(s, 'import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";')
     s = s.replace(
         imports,
         imports + '\n'
-        'import {TransientStateLibrary} from "@uniswap/v4-core/src/libraries/TransientStateLibrary.sol"; // MUTATED\n'
         'import {Currency} from "@uniswap/v4-core/src/types/Currency.sol"; // MUTATED\n'
         'import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol"; // MUTATED',
     )
-    using = _anchor(s, "    using StateLibrary for IPoolManager;")
-    s = s.replace(using, using + "\n    using TransientStateLibrary for IPoolManager; // MUTATED")
 
     a = _anchor(s, "        // ⚠ NOTHING IS SETTLED HERE, AND THAT IS THE POINT.")
     return s.replace(
         a,
-        "        { // MUTATED: the settle path the header forbids\n"
-        "            int256 d0 = poolManager.currencyDelta(address(this), key.currency0);\n"
-        "            if (d0 < 0) {\n"
-        "                poolManager.sync(key.currency0);\n"
-        "                IERC20(Currency.unwrap(key.currency0)).transfer(address(poolManager), uint256(-d0));\n"
-        "                poolManager.settle();\n"
-        "            } else if (d0 > 0) {\n"
-        "                poolManager.take(key.currency0, address(this), uint256(d0));\n"
-        "            }\n"
-        "            int256 d1 = poolManager.currencyDelta(address(this), key.currency1);\n"
-        "            if (d1 < 0) {\n"
-        "                poolManager.sync(key.currency1);\n"
-        "                IERC20(Currency.unwrap(key.currency1)).transfer(address(poolManager), uint256(-d1));\n"
-        "                poolManager.settle();\n"
-        "            } else if (d1 > 0) {\n"
-        "                poolManager.take(key.currency1, address(this), uint256(d1));\n"
-        "            }\n"
+        "        if (poolManager.getLiquidity(key.toId()) > 0) { // MUTATED: the forbidden settle path\n"
+        "            poolManager.sync(key.currency0);\n"
+        "            IERC20(Currency.unwrap(key.currency0)).transfer(address(poolManager), 1);\n"
+        "            poolManager.settle();\n"
         "        }\n" + a,
     )
 
