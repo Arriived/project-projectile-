@@ -478,6 +478,8 @@ isolation check fired.
 **The docs path is `/arc/references/evm-differences`. `/arc/evm-differences` 404s.**
 Verify Arc/Circle claims against `docs.arc.io` and `developers.circle.com`, never memory.
 
+**Circle's own `use-arc` skill is vendored at [`docs/CIRCLE_use-arc.md`](docs/CIRCLE_use-arc.md)** — a byte-for-byte snapshot (sha256 `c67e5e9dd4fe40fd`), NOT a live source, and it names the undocumented `rpc.testnet.arc.network` where we deliberately use `.io` (§9.5, §18.6).
+
 | fact | status |
 |---|---|
 | `PREVRANDAO` always returns `0` | Confirmed. We use no randomness anywhere. |
@@ -4055,3 +4057,31 @@ than a repo-level plugin config.
 skills matter to a workflow, establish how they are actually provided before depending on
 them — and note `arc-docs` (§9's MCP server) is a *different* thing and is configured in
 `.mcp.json`.
+
+### ⚠ CORRECTED, 10 September 2026 — the skill CONTENT is now in the repo
+
+The paragraph above stands exactly as written: nothing was installed by `/plugin`, and
+that is still true. What changed is a different thing, and the difference is the point.
+
+**`docs/CIRCLE_use-arc.md` is Circle's `use-arc` SKILL.md, fetched byte-for-byte and
+committed** — 8,081 bytes, sha256 `c67e5e9dd4fe40fd`, from
+`raw.githubusercontent.com/circlefin/skills/master/plugins/circle/skills/use-arc/SKILL.md`
+(HTTP 200). **It survives a fresh clone.** The ambient `circle:*` availability recorded
+above does not.
+
+⚠ **TWO DIFFERENT THINGS, AND CONFLATING THEM IS THE ERROR THIS SECTION EXISTS TO
+PREVENT.** A file in `docs/` is content anyone can read, diff and cite. Ambient skill
+availability is a property of whoever is running the assistant, is invisible to the repo,
+and cannot be relied on by a session that does not happen to have it. Having either one
+tells you nothing about the other.
+
+⚠ **THE COPY IS A SNAPSHOT, NOT A SUBSCRIPTION.** Nothing updates it and nothing checks
+it against upstream. The sha256 above is what makes drift detectable; re-fetch before
+trusting it on anything time-sensitive.
+
+⚠ **AND IT DISAGREES WITH US ON THE RPC HOST — DELIBERATELY NOT RECONCILED.** The skill
+gives `rpc.testnet.arc.network` (its lines 19, 31, 32). We use `rpc.testnet.arc.io`
+(`app/src/chain.ts:58`) because §9.5 found `.io` is the DOCUMENTED host and `.network` an
+undocumented alias carrying no compatibility promise. Both answer `eth_chainId` with
+`0x4cef52`. The file is committed VERBATIM rather than corrected, so a future session must
+not read it as licence to "fix" `chain.ts` back to the alias.
