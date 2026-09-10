@@ -3753,3 +3753,305 @@ unbounded, attacker-sized, sandwichable trade §16's design report argued agains
 
 Detail, the design question about who supplies the target price, and the test results are in
 the contract's own header and in `test/Fork.v4.corrector.test.js`.
+
+---
+
+# 18. SESSION OF 9-10 SEPTEMBER 2026 — read-only audit, the gas-floor fix, and the phase-2 design
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§17. Nothing above this line was
+deleted.
+
+⚠ **THE HOOK IS NOT BUILT.** §18.4 records design decisions and one blocking consequence.
+No Solidity was written for phase 2. `contracts/` gained nothing this session;
+`BallistaV4Adapter.sol` and `LFX1.sol` are untouched.
+
+One commit of code: `8114f32`, entirely in `app/`.
+
+## 18.1 The audit — seven questions, read-only, with the evidence
+
+### 1. The USDC side of the PoolKey is the ERC-20 address, and the native sentinel cannot reach it
+
+The adapter never chooses a USDC address; it wraps what it is handed
+(`BallistaV4Adapter.sol:159-160`), sorted from the caller's arguments (`:142-146`). LFX1
+supplies `address(usdc)` (`LFX1.sol:658`), an immutable (`:114`, assigned `:213`) whose
+deployed value is `0x3600000000000000000000000000000000000000`
+(`deployments/arcTestnet.json`). **So Uniswap's Arc policy — reject `address(0)`, require
+0x3600 — is satisfied, and the second 1e12 never arises.**
+
+⚠ There is **no explicit zero-address guard** (`:115-117` checks deadline, identical
+tokens, non-zero amounts). It does not matter: `safeTransferFrom` runs at `:130-131`, two
+lines before the key is built, and OZ's `_safeTransferFrom` ends
+`success := and(success, and(iszero(returndatasize()), gt(extcodesize(token), 0)))`
+(`SafeERC20.sol:239`). A call to `address(0)` returns empty with zero code size, so it
+reverts `SafeERC20FailedOperation`.
+
+### 2. tickSpacing 60, aligned to ±887220 by TRUNCATION TOWARD ZERO
+
+`TICK_SPACING = 60` (`BallistaV4Adapter.sol:58`, used `:162`). The ticks are **not passed
+raw** — both sites go through TickMath (`:268-269` for the liquidity computation, `:311-312`
+for the mint):
+
+```
+TickMath.sol:20   MIN_TICK = -887272        TickMath.sol:41   (MAX_TICK / tickSpacing) * tickSpacing
+TickMath.sol:23   MAX_TICK =  887272        TickMath.sol:48   (MIN_TICK / tickSpacing) * tickSpacing
+```
+
+⚠ **Solidity divides toward zero, not toward negative infinity, and that is load-bearing.**
+Both ends move *inward* to **±887220**. A true floor on the negative side would give
+−887280, which is **below MIN_TICK and invalid**. Do not "fix" the asymmetry.
+
+⚠ **The misalignment guard is in v4-core's TickBitmap, not in PositionManager.**
+`Pool.checkTicks` (`Pool.sol:94-98`) only bounds-checks. Alignment reverts
+`TickMisaligned` from `TickBitmap.sol:57-59` (error declared `:13`), reached via
+`Pool.sol:176` and `:179` on the mint path.
+
+### 3. ⚠ A `hooks: address(0)` pool can NEVER become a hooked pool
+
+`fee: 0` (`BallistaV4Adapter.sol:51`, `:161`) and `hooks: IHooks(address(0))` (`:163`).
+
+* **`hooks` is a member of PoolKey** — `PoolKey.sol:21`, the fifth and last field.
+* **PoolId is keccak over all five slots** — `PoolId.sol:14`, `keccak256(poolKey, 0xa0)`,
+  with `:13` naming `0xa0` as "5 slots of 32 bytes" and `:10` stating it equals
+  `keccak256(abi.encode(poolKey))`.
+
+**So changing `hooks` changes the preimage, hence the id. It is a different pool, always.**
+There is no re-key path: `_pools` is keyed by PoolId (`PoolManager.sol:93`) and the entire
+external surface (`:104-339`) contains nothing that alters a key — `updateDynamicLPFee`
+writes only the fee inside an existing pool (`:345`).
+
+⚠ **AND OUR LIQUIDITY CANNOT FOLLOW IT.** Phase 1 mints full-range to `0x…dEaD`, so it can
+never be withdrawn and therefore never migrated. **This is recorded as §18.4's blocking
+consequence, not as a curiosity.**
+
+### 4. The chain-level fee override never reached a wallet write — fixed
+
+See §18.3. Finding, evidence and fix are recorded there rather than split.
+
+### 5. No native balance is read anywhere, so the 18/6 mixing hazard is structurally absent
+
+`rg "getBalance|useBalance|eth_getBalance" app/src` finds **no native read**. The only hits
+are our own `useBalances` hook and a comment explaining the avoidance
+(`useBalances.ts:4`). Everything is ERC-20 via `useReadContracts` (`:42-70`).
+**There is no site where an 18dp native figure meets a 6dp ERC-20 one, because the native
+view is never fetched.**
+
+The gas reserve is **units × live price, never a fixed USDC figure**: `GAS_RESERVE_UNITS =
+249_546n` (`gas.ts:53`), `reserveCostWei = units * maxFeePerGas` (`:69-71`), priced from
+`useFees()` on a 10s refetch. The 1000x hazard §11.5 warns about is avoided. The 18→6
+conversions round **up** (`gas.ts:84`, `:116`, `:132`) so rounding withholds more.
+
+### 6. LFX1 has no sweep, rescue or recover function — nothing to disclose
+
+`rg "function .*(sweep|rescue|recover|withdraw|skim|drain|salvage)"` → **none**, checked
+against the full external/public list (`LFX1.sol:111-841`). Every USDC outflow is bounded
+by accounting: `:580` (sell quote), `:633` (`treasuryFeesAccrued`), `:641`
+(`creatorFeesAccrued[msg.sender]`).
+
+⚠ **This matters more on Arc than elsewhere and the absence is the answer.** A contract's
+ERC-20 USDC balance and its native balance are ONE balance, so a generic
+`rescueToken(address)` would also drain native USDC. There is no address-parameterised
+token mover here to point at USDC — which is also why R14 (donations permanently stranded)
+is true.
+
+### 7. ⚠ `beforeInitialize` sees PositionManager, NOT the adapter
+
+Followed through the source rather than inferred from the interface:
+
+1. `BallistaV4Adapter.sol:239` — `positionManager.initializePool(key, sqrtPriceX96)`
+2. `PoolInitializer_v4.sol:13-19` — an `external` function **on PositionManager**, whose
+   body calls `poolManager.initialize(...)`. A plain external call, so `msg.sender` inside
+   `PoolManager.initialize` is **PositionManager**.
+3. `PoolManager.sol:130` — `key.hooks.beforeInitialize(key, sqrtPriceX96)`
+4. `Hooks.sol:178-181` — an **internal library function**, inheriting PoolManager's frame,
+   which encodes `msg.sender` into the hook call at `:180`.
+
+**So a hook's `sender` is the PositionManager address.**
+
+⚠ **`sender == adapter` CANNOT WORK**, and gating on PositionManager is worthless because
+`initializePool` is permissionless — it identifies the router, not the caller.
+
+⚠ **`IHooks.sol:17` documents `sender` as "The initial msg.sender for the initialize call",
+which is misleading.** It is the *immediate* caller of `PoolManager.initialize`, not the
+originating account. A phase-2 designer reading only the interface would get this wrong.
+
+Making `sender == adapter` true would require the adapter to call `poolManager.initialize`
+directly — which conflicts with why it uses the wrapper: `PoolInitializer_v4.sol:14-18`
+swallows `PoolAlreadyInitialized`, and `BallistaV4Adapter.sol:203-205` depends on that.
+
+## 18.2 ⚠ The gate that replaces it, and the window it leaves
+
+`beforeInitialize` reads the PoolKey's currencies, identifies the non-USDC one, calls
+`LFX1.curves(token)`, and requires the curve exists **and** is `GRADUATION_READY`.
+
+**The state is available and correctly ordered.** `enum CurveState { ACTIVE,
+GRADUATION_READY, GRADUATED }` (`LFX1.sol:74`), so **`GRADUATION_READY == 1`**; the field is
+`CurveState state` (`:83`), field 7 of 22 in the struct returned by `curves()` (`:111-112`).
+
+Set **before** the router call on both paths, and only cleared after:
+
+```
+LFX1.sol:464   c.state = CurveState.GRADUATION_READY;     <- threshold path
+LFX1.sol:466   if (!_performGraduation(token)) ...         <- the router call, same frame
+LFX1.sol:693   if (!(c.state == CurveState.GRADUATION_READY)) revert NotReadyToGraduate  <- retry path
+LFX1.sol:695   if (!(_performGraduation(token))) revert GraduationFailed();
+LFX1.sol:676   c.state = CurveState.GRADUATED;            <- only after the router returns
+```
+
+Those are the **only two** `c.state = ` writes in the file.
+
+⚠ **`curves()` does not revert for an unknown token** (`:112` is a bare mapping read) — it
+returns a zero-filled struct, so `token == address(0)` and `state == 0 == ACTIVE`. Test
+existence with `c.token == token`, which is LFX1's own idiom (`:268`, `:420`, `:476`, `:508`).
+
+**What the gate closes:** §16.1's pre-emptive attack, completely. Under phase 2 the
+poisonable key carries the hook, and initialising it before the token exists now fails —
+no curve record, `state == ACTIVE`. The 51,508-gas × N bulk attack has no entry point.
+
+⚠ **The window that remains is the parked curve.** Between a *failed* graduation and a
+successful retry the state sits at `GRADUATION_READY` for arbitrary duration, and the gate
+**passes for an attacker** during it. But the window only opens if graduation already
+failed, and with the gate in place poisoning cannot cause that failure — so there is **no
+attacker-controlled trigger that this session could find.** That is not the same as closed:
+an unrelated revert, gas exhaustion, or something swallowed by LFX1's `try/catch` would
+open it.
+
+⚠ **Two things the gate does not cover and the hook must:**
+1. **Pin `fee` and `tickSpacing`** to the adapter's constants. Otherwise an attacker
+   initialises the same currencies with `tickSpacing: 1`, passes the gate, and registers a
+   junk pool in the hook's cache. Different PoolId so it cannot block graduation, but it
+   pollutes the accrual accounting.
+2. **Identify USDC by comparing against the hardcoded address**, never "whichever is not
+   currency0". Both orderings occur.
+
+⚠ **A HOOK REJECTION AND A POISONED POOL PRODUCE THE IDENTICAL REVERT.**
+`PoolInitializer_v4.sol:14-18` swallows the hook's error and returns `type(int24).max`, so
+the pool stays uninitialised and the adapter fails its own equality check with
+**`PoolPriceMismatch(expected, 0)`** — the hook's reason never propagates. The two cases are
+distinguishable only by `actual == 0`. **Tests must assert on that distinction or they are
+not testing the gate** (§16.4).
+
+## 18.3 ⚠ The 20 Gwei floor never reached a wallet transaction — `8114f32`
+
+`chain.ts` declares a `fees.estimateFeesPerGas` override with the floor, and its comment
+claimed pinning it there "applies it ONCE, to every write in the app, rather than at each
+call site where one omission is silent."
+
+**That was false for every user-facing transaction, and it was false the whole time.**
+Followed through viem 2.56.0: `sendTransaction` branches at
+`actions/wallet/sendTransaction.js:92` on `account?.type === 'json-rpc'`, builds the request
+from the **passed parameters only** (`maxFeePerGas`/`maxPriorityFeePerGas` at `:116-117`)
+and calls `eth_sendTransaction` at `:126-131`. `prepareTransactionRequest` — the only thing
+that applies the override — is reached inside `if (account?.type === 'local')` at `:165`, at
+`:190`. **Every injected and WalletConnect account is json-rpc.**
+
+⚠ **Arc is where this bites:** below 20 Gwei a transaction "may remain pending indefinitely
+or fail outright", and pending indefinitely is the bad outcome — no error, no receipt, never
+mined.
+
+**What the override DID still cover is any public-client fee read**, which is where the
+affordability and gas-reserve math get their price (`useFees` → wagmi's
+`useEstimateFeesPerGas`). So the floor protected the arithmetic and not the transaction —
+the half that cannot strand anyone.
+
+**Fixed:** `writeFees(maxFeePerGas)` in `chain.ts` is now the single place that decides the
+sent fee, passed at all five write call sites (Create approve + createToken, TradePanel
+approve-USDC + approve-token + buy/sell).
+
+⚠ **The undefined fallback is the substance, not a nicety.** `useFees()` returns `undefined`
+until it resolves, and `maxFeePerGas: undefined` is **indistinguishable to viem from not
+passing the field** — a naive spread would reintroduce the bug on precisely the first click
+after a page load. `writeFees()` falls back to the floor.
+
+Both false comments are corrected in place and each says what it used to say.
+
+**`verify:chain` 11 → 17 checks**, asserting what is *sent* rather than what the estimator
+returns — the old check read `estimateFeesPerGas`, which is exactly the function viem never
+calls. Includes a source scan requiring every `writeContract` site to pass `writeFees`, and
+a companion check requiring the scan to have **found** sites, because a scan matching
+nothing makes "none are missing" trivially true. Comments are stripped first (§11.7).
+
+Red-proofs, all three: dropping `writeFees` from one site → RED naming the file; removing
+the flooring → RED; breaking the scan regex → RED **on both**, the guard reporting "NO CALL
+SITES FOUND -- the scan is broken, not the code".
+
+⚠ **Not changed: the EIP-5792 `sendCalls` batch path in `Create.tsx`.** Different mechanism,
+wallet-priced, and §12.4 measured it unreachable on Arc because no wallet lists the chain.
+
+## 18.4 Phase-2 decisions — recorded, NOT built
+
+`BallistaMemeHook`, singleton, ownerless: no owner, no admin, no pause, no upgrade, no
+withdraw. Permissions **`beforeInitialize` and `afterSwap` only**, plus whatever delta-return
+flag `afterSwap` needs; every other callback disabled and reverting.
+
+| decision | value |
+|---|---|
+| fee | **100 bps**, taken on the **unspecified** currency in `afterSwap` |
+| split | **50/50** protocol / creator, **immutable**, protocol recipient set at construction |
+| accrual | **accrual-only** — per-poolId, per-currency mapping. No conversion, no swap, no external call on the swap path |
+| sweep | `sweep(poolId)`, **permissionless**, no slippage parameter, credits the escrow, zeroes the accrual |
+| escrow | **pull-based**, per-recipient balances in USDC and each launch token, `claim()` / `claimToken(address)`, no push payouts, ownerless |
+| recipient transfer | `transferFeeRecipient(poolId, newRecipient)`, current recipient only, **immediate, no timelock** |
+
+**Why `transferFeeRecipient` exists and why it has no timelock:** LFX1's `creator` is written
+once in a struct literal (`LFX1.sol:342`) with **no setter anywhere** — zero matches for
+`.creator =` — so a lost key would otherwise strand half of every graduated pool's fees
+forever. A timelock on a recovery lever protects nobody and delays the only remedy.
+
+⚠ **THE EVENT SURFACE IS A FIRST-CLASS DELIVERABLE AND CANNOT BE ADDED LATER.** A hook that
+returns a delta in `afterSwap` makes PoolManager's own `Swap` event **not reflect what the
+trader paid** — Uniswap Foundation flags this class in their v4 analytics disclosure. The
+hook is immutable, so events not designed in are gone for good. Cover: pool registered
+(with token, creator, USDC index — the acceptance path is where the diagnostic value is,
+since a rejection reverts), fee accrued per swap, fees swept with the split, recipient
+transferred.
+
+**Deployment needs a mined CREATE2 salt**, because the permission flags live in the low bits
+of the hook's own address (`v4-core/src/libraries/Hooks.sol`). ⚠ **Mine for exactly the flags
+used and no others** — an unused flag that is set is a live callback nobody wrote.
+
+### ⚠ BLOCKING CONSEQUENCE: the adapter must NOT go live as the router before the hook exists
+
+This follows from §18.1 item 3 and it is the most important line in this section.
+
+`hooks` is part of the PoolKey, so a phase-1 pool and a phase-2 pool are **different pools,
+permanently**. Phase-1 liquidity is burned to `0x…dEaD` and can never be withdrawn, so it
+can never migrate. **Every token that graduates through the hookless adapter is stranded in
+a hookless pool for good, earns the protocol nothing, and cannot be moved.**
+
+So `activateRouter(adapter)` before the hook ships is not a reversible sequencing choice —
+it permanently forfeits fee capture on every token graduated in the interval. Either ship
+the hook first, or accept that interval knowingly. **Merging this branch does not create the
+exposure; `proposeRouter` / `activateRouter` does.**
+
+## 18.5 Arc facts a phase-2 implementer needs, with honest provenance
+
+⚠ **Most of these were established in earlier sessions and are cited here for convenience,
+not re-measured this session.** The provenance column says which is which, because "verified
+this session" applied to a carried-forward fact is exactly the drift §12.5 and §14.1 record.
+
+| fact | provenance |
+|---|---|
+| **20 Gwei mempool floor, silent drop** — below it a transaction "may remain pending indefinitely or fail outright" | Circle docs `/arc/references/gas-and-fees`, quoted at `app/src/chain.ts:16-18`. **Acted on this session** (§18.3) |
+| **Base fee sitting at 20 Gwei** | **Measured this session**: `verify:chain` reports `maxFeePerGas 25 Gwei` — 20 × viem's 1.2 multiplier + 1 Gwei tip |
+| **Dual-interface USDC: 18dp native, 6dp ERC-20, ONE balance** | §2, §9; cited `chain.ts:124-127`. **Confirmed structurally this session** by finding no native read anywhere (§18.1 item 5) |
+| **30,000,000 gas per block** | §15.8, measured on Arc Testnet across three consecutive blocks. Not re-measured |
+| **Timestamps non-decreasing, not strictly increasing** — order by block number | §2, §9.3. Not re-measured |
+| **`PREVRANDAO` returns 0** | §2, §9.1. Not re-measured. We use no randomness |
+| **Local EVM simulation cannot reproduce Arc** — blocklist, EIP-7708, truncating `balanceOf` | §4, §9; Arc's own docs. **This is why §16's attack pass ran on a Base fork and is explicitly not Arc assurance** |
+
+## 18.6 Circle publishes Claude Code skills — but the install did NOT happen here
+
+⚠ **RECORDED AS MEASURED, NOT AS INTENDED.** `/plugin marketplace add circlefin/skills`
+returned **"/plugin isn't available in this environment"**. Nothing was installed by that
+command, and **nothing in the repo records an install** — `.claude/` holds only
+`launch.json` and `settings.local.json`, and `.mcp.json` carries only the `arc-docs` server.
+
+What *is* true: a set of `circle:*` skills was available to the assistant in this session
+(`use-arc`, `use-usdc`, `use-circle-cli`, `use-gateway`, `bridge-stablecoin`,
+`use-smart-contract-platform` and others), so they reach the tool by some mechanism other
+than a repo-level plugin config.
+
+**A future session should not read this as "the skill is installed in this repo".** If the
+skills matter to a workflow, establish how they are actually provided before depending on
+them — and note `arc-docs` (§9's MCP server) is a *different* thing and is configured in
+`.mcp.json`.
