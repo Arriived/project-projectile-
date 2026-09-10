@@ -24,7 +24,8 @@ import { useAccount, usePublicClient, useWalletClient, useReadContract } from "w
 import { decodeEventLog, erc20Abi, type Address } from "viem";
 import { useT } from "../i18n";
 import { useToast } from "../providers/ToastProvider";
-import { arc } from "../chain";
+import { arc, writeFees } from "../chain";
+import { useFees } from "../hooks/useFees";
 import { lfx1Abi } from "../abi/lfx1";
 import { FACTORY_ADDRESS, USDC_ADDRESS } from "../config";
 import { useChain } from "../providers/ChainProvider";
@@ -55,6 +56,9 @@ export function Create() {
   const { guard } = useChain();
   const client = usePublicClient({ chainId: arc.id });
   const { data: wallet } = useWalletClient();
+  // Live fee reading, floored at the call site by writeFees(). Undefined while it
+  // loads, which writeFees() treats as "use the floor" rather than "send nothing".
+  const { maxFeePerGas } = useFees();
 
   const [name, setName] = useState("");
   const [symbol, setSymbol] = useState("");
@@ -170,6 +174,9 @@ export function Create() {
           abi: erc20Abi,
           functionName: "approve",
           args: [FACTORY_ADDRESS, amount],
+          // ⚠ The 20 Gwei floor has to travel with the call. chain.ts's
+          // fees.estimateFeesPerGas never runs for a wallet write -- see writeFees().
+          ...writeFees(maxFeePerGas),
         });
         await client.waitForTransactionReceipt({ hash: approveHash });
       }
@@ -289,6 +296,7 @@ export function Create() {
           functionName: "createToken",
           args,
           gas: gasLimitFor(estimate),
+          ...writeFees(maxFeePerGas),
         });
       }
 

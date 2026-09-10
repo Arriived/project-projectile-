@@ -17,7 +17,7 @@ import { erc20Abi } from "viem";
 import { lfx1Abi } from "../../abi/lfx1";
 import { lfx1TokenAbi } from "../../abi/lfx1Token";
 import { FACTORY_ADDRESS, USDC_ADDRESS } from "../../config";
-import { arc, LAUNCH_TOKEN_DECIMALS, USDC_ERC20_DECIMALS } from "../../chain";
+import { arc, LAUNCH_TOKEN_DECIMALS, USDC_ERC20_DECIMALS, writeFees } from "../../chain";
 import type { TokenData } from "../../hooks/useCurve";
 import { useQuote, type Side } from "../../hooks/useQuote";
 import { useBalances } from "../../hooks/useBalances";
@@ -274,6 +274,9 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           functionName: "approve",
           args: [FACTORY_ADDRESS, amount],
           chainId: arc.id,
+          // ⚠ The 20 Gwei floor has to travel with the call. chain.ts's
+          // fees.estimateFeesPerGas never runs for a wallet write -- see writeFees().
+          ...writeFees(maxFeePerGas),
         });
         await client.waitForTransactionReceipt({ hash: h });
       }
@@ -285,6 +288,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           functionName: "approve",
           args: [FACTORY_ADDRESS, amount],
           chainId: arc.id,
+          ...writeFees(maxFeePerGas),
         });
         await client.waitForTransactionReceipt({ hash: h });
       }
@@ -341,6 +345,7 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
         args: [token, amount, freshMinOut],
         chainId: arc.id,
         gas,
+        ...writeFees(maxFeePerGas),
       });
       setTxHash(h);
       setStatus(t("trade.submitted"));

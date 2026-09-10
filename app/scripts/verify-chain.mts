@@ -14,10 +14,15 @@
 // rpcUrls at the .network host, and re-run. Each assertion below fails independently.
 
 import { createPublicClient, http, formatGwei, getAddress } from "viem";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { stripComments } from "./lib/strip-comments.mts";
 import {
   arc,
   ARC_CHAIN_ID_HEX,
   MIN_BASE_FEE_WEI,
+  PRIORITY_FEE_WEI,
+  writeFees,
   LAUNCH_TOKEN_DECIMALS,
   USDC_ERC20_DECIMALS,
   USDC_NATIVE_DECIMALS,
@@ -106,6 +111,120 @@ check(
   "factory has code (24,033 bytes, frozen)",
   !!factoryCode && factoryCode !== "0x",
   factoryCode ? `${(factoryCode.length - 2) / 2} bytes` : "NO CODE"
+);
+
+
+// ── WHAT IS ACTUALLY SENT ──────────────────────────────────────────────────────
+//
+// ⚠ THE CHECK ABOVE READS THE ESTIMATOR, NOT THE TRANSACTION, AND THAT DISTINCTION IS
+// THE WHOLE REASON THIS SECTION EXISTS. `estimateFeesPerGas` is chain.ts's override, and
+// for a wallet write viem NEVER CALLS IT: sendTransaction branches at
+// actions/wallet/sendTransaction.js:92 on `account?.type === 'json-rpc'`, builds the
+// request from the passed parameters only, and calls eth_sendTransaction at :126-131.
+// `prepareTransactionRequest`, which is what would apply the override, is reached only
+// inside `if (account?.type === 'local')` at :165. Every injected and WalletConnect
+// account is json-rpc.
+//
+// So for a long time the suite asserted a floor that held for the arithmetic and not for
+// a single user transaction, and it went green throughout. These checks assert the thing
+// that reaches the wire.
+
+const FLOOR = MIN_BASE_FEE_WEI + PRIORITY_FEE_WEI;
+
+// ⚠ THE UNDEFINED CASE IS THE ONE THAT MATTERS. useFees() is async and returns undefined
+// until it resolves, and `maxFeePerGas: undefined` is indistinguishable to viem from not
+// passing the field at all -- so a naive `...{ maxFeePerGas }` would reintroduce the bug
+// on precisely the first click after a page load.
+check(
+  "writeFees(undefined) still floors -- an unresolved estimate cannot send nothing",
+  writeFees(undefined).maxFeePerGas >= MIN_BASE_FEE_WEI,
+  `${formatGwei(writeFees(undefined).maxFeePerGas)} Gwei`
+);
+check(
+  "writeFees() raises a below-floor estimate to the floor",
+  writeFees(1n).maxFeePerGas === FLOOR,
+  `1 wei in -> ${formatGwei(writeFees(1n).maxFeePerGas)} Gwei out`
+);
+check(
+  "writeFees() passes an above-floor estimate through untouched",
+  writeFees(FLOOR + 12_345n).maxFeePerGas === FLOOR + 12_345n,
+  `${formatGwei(FLOOR + 12_345n)} Gwei preserved`
+);
+check(
+  "writeFees() always sets the priority tip",
+  writeFees(undefined).maxPriorityFeePerGas === PRIORITY_FEE_WEI &&
+    writeFees(FLOOR * 2n).maxPriorityFeePerGas === PRIORITY_FEE_WEI,
+  `${formatGwei(PRIORITY_FEE_WEI)} Gwei`
+);
+
+// ⚠ AND THE STRUCTURAL ONE: every write call site must actually pass it.
+//
+// The unit checks above prove writeFees() is correct; they say nothing about whether it
+// is USED. A call site added later without it is silent -- the transaction is accepted by
+// the wallet, priced by the wallet, and if the wallet lowballs it the transaction is
+// never mined and never errors. This walks the real source instead.
+//
+// Comments are stripped first (§11.7's self-matching trap: verify:claims once matched its
+// own explanatory prose, and a comment mentioning writeFees must not satisfy a check that
+// the code calls it).
+function tsFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...tsFiles(full));
+    else if (/\.(ts|tsx)$/.test(entry)) out.push(full);
+  }
+  return out;
+}
+
+/** Body of the object literal opened at `from`, by brace matching. */
+function objectBody(src: string, from: number): string {
+  let depth = 0;
+  for (let i = from; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}") {
+      depth--;
+      if (depth === 0) return src.slice(from, i + 1);
+    }
+  }
+  return src.slice(from);
+}
+
+const writeSites: { file: string; index: number; hasFees: boolean }[] = [];
+for (const file of tsFiles("src")) {
+  const src = stripComments(readFileSync(file, "utf8"));
+  const re = /\bwriteContract(?:Async)?\s*\(\s*\{/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    const open = src.indexOf("{", m.index + m[0].length - 1);
+    const body = objectBody(src, open);
+    writeSites.push({
+      file: file.replace(/\\/g, "/"),
+      index: m.index,
+      hasFees: /writeFees\s*\(/.test(body),
+    });
+  }
+}
+
+const missing = writeSites.filter((w) => !w.hasFees);
+check(
+  "every writeContract call site passes writeFees()",
+  writeSites.length > 0 && missing.length === 0,
+  writeSites.length === 0
+    ? "NO CALL SITES FOUND -- the scan is broken, not the code"
+    : missing.length
+      ? `missing at: ${missing.map((w) => w.file).join(", ")}`
+      : `${writeSites.length} call sites, all floored`
+);
+
+// ⚠ A scan that finds nothing must FAIL, not pass. If the regex stops matching -- viem
+// renames the action, the call is refactored behind a helper -- `missing.length === 0` is
+// trivially true and the check goes green while covering zero call sites. The
+// `writeSites.length > 0` conjunct above is what stops that, and this check names it.
+check(
+  "the call-site scan actually found call sites",
+  writeSites.length >= 5,
+  `${writeSites.length} found (expected at least the 5 known: 2 in Create, 3 in TradePanel)`
 );
 
 // ── Report ─────────────────────────────────────────────────────────────────────

@@ -67,11 +67,30 @@ export const arc: Chain = {
   //    STRUCTURALLY, because Arc enforces the floor on the base fee itself and viem's
   //    default multiplier (1.2) is >= 1, so the product cannot sink below it.
   //
-  //    The floor is pinned anyway, for two reasons. Arc's docs say the parameters
-  //    "reflect the current Arc Testnet configuration" and "may change before mainnet
-  //    launch" -- so the structural argument rests on a value that is documented as
-  //    movable. And pinning it here applies it ONCE, to every write in the app, rather
-  //    than at each call site where one omission is silent.
+  //    The floor is pinned anyway, because Arc's docs say the parameters "reflect the
+  //    current Arc Testnet configuration" and "may change before mainnet launch" -- so
+  //    the structural argument rests on a value documented as movable.
+  //
+  // ⚠  THIS OVERRIDE DOES NOT REACH A WALLET WRITE, AND THIS COMMENT USED TO CLAIM IT
+  //    DID. It said pinning the floor here "applies it ONCE, to every write in the app,
+  //    rather than at each call site where one omission is silent." That was false for
+  //    every user-facing transaction, and it was false the whole time it was written.
+  //
+  //    Followed through viem 2.56.0 rather than inferred from the interface:
+  //    `sendTransaction` branches at actions/wallet/sendTransaction.js:92 on
+  //    `account?.type === 'json-rpc'`, builds the request from the PASSED parameters
+  //    only (maxFeePerGas / maxPriorityFeePerGas at :116-117) and calls
+  //    `eth_sendTransaction` at :126-131. `prepareTransactionRequest` -- the thing that
+  //    runs this function -- is reached only inside `if (account?.type === 'local')` at
+  //    :165, at :190. Every injected and WalletConnect account is json-rpc.
+  //
+  //    What this DOES still cover is any public-client fee read, which is where the
+  //    affordability and gas-reserve math get their price (`useFees` -> wagmi's
+  //    `useEstimateFeesPerGas`). So the floor protected the arithmetic and not the
+  //    transaction -- the half that cannot strand anyone.
+  //
+  // ⚠  The floor reaches a transaction only because `writeFees()` below is passed at
+  //    every write call site. Neither one covers the other; do not delete either.
   fees: {
     async estimateFeesPerGas({ block, client, multiply }) {
       const b = block ?? (await getBlock(client));
@@ -123,3 +142,40 @@ export const USDC_ERC20_DECIMALS = 6;
  * where 18 belongs renders a balance a trillion times too large (rule 9, trap 4).
  */
 export const LAUNCH_TOKEN_DECIMALS = 18;
+
+/**
+ * Fee fields for a WALLET write. Pass this at every `writeContract` call site.
+ *
+ * ⚠ IT EXISTS BECAUSE THE CHAIN-LEVEL OVERRIDE ABOVE NEVER RUNS FOR A WALLET. viem
+ * 2.56.0's `sendTransaction` takes the `account?.type === 'json-rpc'` branch
+ * (actions/wallet/sendTransaction.js:92) for every injected and WalletConnect account,
+ * builds the request from the PASSED parameters only, and calls `eth_sendTransaction`
+ * without ever invoking `prepareTransactionRequest` -- which is the only thing that
+ * would have applied `chain.fees.estimateFeesPerGas`. So the floor has to travel with
+ * the call, and this is the single place that decides it.
+ *
+ * ⚠ THE FALLBACK IS THE POINT, NOT A CONVENIENCE. `useFees()` is async and returns
+ * `undefined` until it resolves, and passing `maxFeePerGas: undefined` to viem is
+ * INDISTINGUISHABLE FROM NOT PASSING IT AT ALL -- it would reintroduce exactly the bug
+ * this function closes, on precisely the first click after a page load, which is when
+ * most people trade. So an unresolved estimate falls back to the floor rather than to
+ * nothing.
+ *
+ * The floor matters more than the ceiling here: Arc's docs say a transaction below
+ * 20 Gwei "may remain pending indefinitely or fail outright", and pending indefinitely
+ * is the bad outcome -- no error, no receipt, never mined. Sending ABOVE the floor
+ * costs nothing, because unused gas is refunded and the base fee is what is actually
+ * charged.
+ *
+ * @param maxFeePerGas the live estimate from `useFees()`, or undefined while it loads
+ */
+export function writeFees(maxFeePerGas?: bigint): {
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
+} {
+  const floor = MIN_BASE_FEE_WEI + PRIORITY_FEE_WEI;
+  return {
+    maxFeePerGas: maxFeePerGas !== undefined && maxFeePerGas > floor ? maxFeePerGas : floor,
+    maxPriorityFeePerGas: PRIORITY_FEE_WEI,
+  };
+}

@@ -5,8 +5,17 @@
 // 1000x exactly when the network is busy. The docs also say the parameters "may change
 // before mainnet launch", so nothing here is hardcoded.
 //
-// The floor itself is applied at chain level (chain.ts `fees.estimateFeesPerGas`), so
-// every write inherits it without each call site remembering.
+// ⚠ WHAT THIS VALUE IS FOR, AND WHAT IT IS NOT. This comment used to say the floor "is
+// applied at chain level (chain.ts `fees.estimateFeesPerGas`), so every write inherits
+// it without each call site remembering." That was false: viem 2.56.0's sendTransaction
+// takes the `account?.type === 'json-rpc'` branch for every injected and WalletConnect
+// account and never calls prepareTransactionRequest, so the chain override never runs
+// for a wallet write. See chain.ts for the traced call path.
+//
+// The value below IS floored, because it comes from a public-client read where the
+// override does run -- which is why the affordability and gas-reserve math were always
+// correct even while transactions were not. To floor a TRANSACTION, pass this through
+// `writeFees()` at the call site; it is the only thing that puts the floor on the wire.
 
 import { useEstimateFeesPerGas } from "wagmi";
 import { arc } from "../chain";
