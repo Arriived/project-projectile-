@@ -19,9 +19,14 @@
 //   b) make a long symbol severity "error"                -> C4 fails
 //   c) drop the gas reserve from the affordability check  -> C7 fails
 //   d) let cooldown pass while still cooling              -> C6 fails
+//   e) creationFeeNeedsApproval back to `allowance < fee` -> C12, C12b, C12e fail
+//   f) Create.tsx's gate back to `allowance < fee`        -> C13 fails
+//   g) keep the call, put `allowance < fee &&` back       -> C13 fails (its inline half)
+//   h) make C13's forbidden pattern unmatchable           -> C13b fails; C13 stays green
 
 import {
   creationFeeApprovalAmount,
+  creationFeeNeedsApproval,
   validateDraft,
   blocksSubmission,
   launchBlocker,
@@ -29,9 +34,14 @@ import {
   WATCH_ASSET_SYMBOL_MAX,
 } from "../src/lib/create.ts";
 import { GAS_RESERVE_UNITS } from "../src/lib/gas.ts";
+import { stripComments } from "./lib/strip-comments.mts";
 
 let failures = 0;
+// Counted, not declared. The summary used a hardcoded `total`, which goes wrong the first
+// time a row is added without updating it (CLAUDE.md §13.7).
+let checks = 0;
 const check = (label: string, pass: boolean, detail = "") => {
+  checks++;
   if (!pass) failures++;
   console.log(`  ${pass ? "PASS" : "FAIL"}  ${label}${detail ? `  — ${detail}` : ""}`);
 };
@@ -54,6 +64,41 @@ console.log("── R13: the creation-fee approval ──");
     creationFeeApprovalAmount(9_999n) === 9_999n
   );
   check("C3  a zero fee approves zero, not unlimited", creationFeeApprovalAmount(0n) === 0n);
+}
+
+// ── R13: the shared allowance ───────────────────────────────────────────────
+//
+// C1-C3 prove the approval AMOUNT is exact. They cannot see whether that approval is SENT,
+// and the bound is the allowance, not the amount. The USDC allowance to the factory is one
+// number shared with the trade panel, which approves an unlimited amount, and createToken
+// pulls whatever creationFeeUsdc is at execution against it. Skipping the exact approval
+// because the allowance "already covers" the fee is how R13's bound became whatever trade
+// approval had been left standing. CLAUDE.md §22.
+console.log("\n── R13: the shared USDC allowance ──");
+{
+  // THE ROW THAT MATTERS. approve() overwriting a standing unlimited allowance is the only
+  // thing that caps the launch.
+  check(
+    "C12 a standing UNLIMITED allowance still gets the exact re-approval",
+    creationFeeNeedsApproval(MAX_UINT256, FEE) === true,
+    "skipping leaves createToken uncapped against a fee raised in flight"
+  );
+  check(
+    "C12b an allowance ABOVE the fee still re-approves -- the live bug's shape",
+    creationFeeNeedsApproval(FEE * 200n, FEE) === true,
+    "a 100 USDC trade approval left standing capped nothing at 0.5"
+  );
+  check("C12c an allowance BELOW the fee approves", creationFeeNeedsApproval(FEE - 1n, FEE) === true);
+  check(
+    "C12d an allowance of EXACTLY the fee skips -- the only safe skip",
+    creationFeeNeedsApproval(FEE, FEE) === false,
+    "an allowance of exactly the fee cannot cover a raised one"
+  );
+  check(
+    "C12e a zero fee still overwrites a standing allowance (to zero)",
+    creationFeeNeedsApproval(MAX_UINT256, 0n) === true,
+    "the fee can be raised while the launch is in flight"
+  );
 }
 
 // ── symbol length: warn, never block ────────────────────────────────────────
@@ -146,10 +191,40 @@ console.log("\n── economics hash freshness ──");
     /creationFeeApprovalAmount\(/.test(src) && !/maxUint256|MAX_UINT256/.test(src),
     "R13"
   );
+
+  // ⚠ C13 READS THE SOURCE WITH COMMENTS STRIPPED, and has to: Create.tsx's own comment
+  // quotes the condition this replaced, so a raw scan fails on the explanation (CLAUDE.md
+  // §12.6). C10 and C11 above still read it raw.
+  //
+  // Two halves, because either alone passes with the bug back: the gate must CALL
+  // creationFeeNeedsApproval, AND nothing may compare allowance and fee directly --
+  // `allowance < fee && creationFeeNeedsApproval(allowance, fee)` keeps the call and
+  // restores the skip.
+  const code = stripComments(src);
+  const INLINE_COMPARE = /\ballowance\s*[<>]=?\s*fee\b|\bfee\s*[<>]=?\s*allowance\b/;
+  const callsRule = /creationFeeNeedsApproval\(\s*allowance\s*,\s*fee\s*\)/.test(code);
+  const inline = code.match(INLINE_COMPARE);
+  check(
+    "C13 the create approval is gated by creationFeeNeedsApproval, never by comparing allowance and fee",
+    callsRule && inline === null,
+    !callsRule
+      ? "the gate does not call creationFeeNeedsApproval(allowance, fee)"
+      : inline
+        ? `inline comparison in the code: "${inline[0]}"`
+        : "R13 -- `<` skipped the exact approval whenever any standing allowance covered it"
+  );
+  // A negative check whose pattern cannot match proves nothing. This one must match the
+  // condition it forbids, in both directions and both strictnesses.
+  check(
+    "C13b C13's pattern matches the condition it forbids",
+    ["allowance < fee", "allowance >= fee", "fee > allowance", "fee <= allowance"].every((s) =>
+      INLINE_COMPARE.test(s)
+    ) && !INLINE_COMPARE.test("creationFeeNeedsApproval(allowance, fee)"),
+    "otherwise its negative half is vacuous"
+  );
 }
 
-const total = 13;
-console.log(`\n${total - failures}/${total} checks passed`);
+console.log(`\n${checks - failures}/${checks} checks passed`);
 // ⚠ process.exitCode, NOT process.exit(). process.exit() tears the event loop down
 // while the console.log lines above may still be flushing, and on Windows that races
 // libuv into "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)" and an exit code

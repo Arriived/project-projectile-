@@ -159,6 +159,33 @@ Without the flag the script defaults to `address(0)`, `createToken` reverts `Rou
 (`LFX1.sol:310`), and the only route to a live router is `proposeRouter` + 24h. **The
 untimelocked path is always an explicit flag, never a default.**
 
+### `creationFeeUsdc` — set it once, before announcing, and leave it
+
+**Decision: leave it at the source default, `5e5` (0.5 USDC).** That is the initializer at
+`LFX1.sol:62`, so a fresh deployment starts there without a transaction.
+
+⚠ **IT IS READ AT EXECUTION TIME AND IS NOT IN `currentEconomicsHash()`.** `createToken`
+pulls whatever `creationFeeUsdc` is when the transaction runs (`LFX1.sol:322-323`). The
+hash a creator pins covers twelve other values, but not this one (`LFX1.sol:285-299`). So
+`setCreationFee` — owner-only, **no bounds, no timelock** (`LFX1.sol:797-800`) — **lands on
+launches that are already signed and in flight**, and `expectedEconomicsHash` cannot
+catch it. That is R13.
+
+**The frontend limits the damage, but that is not a reason to use the setter.** The create
+flow re-approves exactly the fee it read, unless the allowance already equals it, so a fee
+raised in flight makes the launch revert instead of being paid (CLAUDE.md §22). That
+protects creators using this frontend. It does not protect anyone calling the contract
+directly with a standing allowance. And a revert mid-launch is still a failed launch that
+someone watched happen.
+
+**So if the fee is going to change, change it before the addresses are announced, then
+leave it.** Treat any later change as an announced event with notice, never a quiet setter
+call.
+
+`launchCooldown` is the only other value outside the hash. A change to it also lands in
+flight, but it can only cause a revert (`LaunchCooldownActive`, `LFX1.sol:314`), never an
+overcharge.
+
 ---
 
 ## 4. Pre-flight, and its abort conditions
@@ -282,6 +309,7 @@ exact opposite (§7, R11).
 | `lfx1.currentEconomicsHash()` | recorded — the frontend pins against it |
 | snipe tax table | `[9800, 9500, 9000, 8000, 6000, 4000, 2000, 0]` |
 | `symbolLockDuration` / `launchCooldown` | as intended (testnet ran 0 / 5) |
+| `creationFeeUsdc` | **500000** (0.5 USDC), the source default — set once, before announcing (§3) |
 | the seven binding reads | re-run **from a different caller**, in a separate transaction |
 
 ⚠ **Re-running the binding reads from a different address is not superstition.** Step 6 ran

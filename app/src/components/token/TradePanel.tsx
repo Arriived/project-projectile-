@@ -12,7 +12,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, usePublicClient } from "wagmi";
-import { parseUnits, formatUnits, decodeEventLog, type Address, type Log } from "viem";
+import { parseUnits, formatUnits, decodeEventLog, maxUint256, type Address, type Log } from "viem";
 import { erc20Abi } from "viem";
 import { lfx1Abi } from "../../abi/lfx1";
 import { lfx1TokenAbi } from "../../abi/lfx1Token";
@@ -42,6 +42,18 @@ import { Figure } from "../Figure";
 // lib/slippage.ts. Every use below reads the STATE, and `minOutFromQuote` is called
 // exactly as before -- no quote math changed.
 const BUY_PRESETS = ["1", "5", "25", "100"];
+
+/**
+ * Whether a trade must approve first. ⚠ UNREADABLE MEANS APPROVE.
+ *
+ * `allowance` is undefined while it loads or when the read fails. That used to count as "no
+ * approval needed", so the trade went straight to a gas estimate that reverted on the
+ * missing allowance and told the user the trade "would fail" -- a false reason. An
+ * unneeded approve costs one prompt; a skipped one costs a wrong answer.
+ */
+function tradeNeedsApproval(allowance: bigint | undefined, amount: bigint): boolean {
+  return amount > 0n && (allowance === undefined || allowance < amount);
+}
 
 export function TradePanel({ token, data }: { token: Address; data: TokenData }) {
   const { t, fmt } = useT();
@@ -246,51 +258,84 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
 
   const minOut = quote ? minOutFromQuote(quote.out, slippageBps) : 0n;
 
-  const needsUsdcApproval =
-    side === "buy" && balances.usdcAllowance6 !== undefined && balances.usdcAllowance6 < amount;
+  // For the button LABEL only -- submit() decides from a fresh read. Unreadable counts as
+  // "approve" here too, so the label matches what submit() will actually do.
+  const needsUsdcApproval = side === "buy" && tradeNeedsApproval(balances.usdcAllowance6, amount);
   const needsTokenApproval =
-    side === "sell" && balances.tokenAllowance18 !== undefined && balances.tokenAllowance18 < amount;
+    side === "sell" && tradeNeedsApproval(balances.tokenAllowance18, amount);
 
   const submit = async () => {
     // Re-entrancy guard. A disabled button can still be activated by keyboard in some
     // browsers, and a second submit would send a SECOND transaction.
     if (submitting) return;
+    // ⚠ ABOVE setSubmitting(true), not below it. This return used to follow it, outside
+    // the try/finally, so taking it would have stranded the button disabled for good.
+    // `address` joined it for the fresh allowance read below.
+    if (!data.curve || !client || !address) return;
     setSubmitting(true);
     setStatus(null);
     setSettled(null);
-    if (!data.curve || !client) return;
 
     try {
-      // Approvals first. The USDC approval is a TRADING approval and may be budgeted;
-      // rule 1's exact-amount requirement is about the CREATION FEE, which is a different
-      // hazard (R13: creationFeeUsdc is not covered by the economics hash). Trading fees
-      // ARE hashed and snapshotted per curve, so a standing trading approval is bounded
-      // by terms that cannot move underneath it.
-      if (needsUsdcApproval) {
-        setStatus(t("trade.approvingUsdc"));
-        const h = await writeContractAsync({
-          address: USDC_ADDRESS,
+      // ── Approval, decided from a FRESH read ───────────────────────────────────────
+      //
+      // Not from useBalances' 8-second poll, which now drives only the button label. A
+      // launch resets the USDC allowance to exactly its fee and spends it (Create.tsx), so
+      // the poll can still be showing an unlimited allowance that is already zero.
+      // Unreadable counts as "approve" -- see tradeNeedsApproval.
+      const allowance = await client
+        .readContract({
+          address: side === "buy" ? USDC_ADDRESS : token,
           abi: erc20Abi,
-          functionName: "approve",
-          args: [FACTORY_ADDRESS, amount],
-          chainId: arc.id,
-          // ⚠ The 20 Gwei floor has to travel with the call. chain.ts's
-          // fees.estimateFeesPerGas never runs for a wallet write -- see writeFees().
-          ...writeFees(maxFeePerGas),
-        });
-        await client.waitForTransactionReceipt({ hash: h });
-      }
-      if (needsTokenApproval) {
-        setStatus(t("trade.approvingToken", { symbol }));
-        const h = await writeContractAsync({
-          address: token,
-          abi: lfx1TokenAbi,
-          functionName: "approve",
-          args: [FACTORY_ADDRESS, amount],
-          chainId: arc.id,
-          ...writeFees(maxFeePerGas),
-        });
-        await client.waitForTransactionReceipt({ hash: h });
+          functionName: "allowance",
+          args: [address, FACTORY_ADDRESS],
+        })
+        .catch(() => undefined);
+
+      if (tradeNeedsApproval(allowance, amount)) {
+        if (side === "buy") {
+          // ⚠ CORRECTED, 10 September 2026. This comment said the USDC approval "is a
+          // TRADING approval and may be budgeted", the creation fee being "a different
+          // hazard", and a standing trading approval "bounded by terms that cannot move
+          // underneath it". True of what each function PULLS. False of the ALLOWANCE, which
+          // is one number per (owner, spender): this approve and the creation-fee approve
+          // are USDC to the same spender, and createToken pulls an owner-settable, unhashed
+          // fee against whatever is standing. Even with exact approvals, R13's bound was
+          // whatever trade approval had been left unspent -- not the fee.
+          //
+          // ⚠ UNLIMITED IS SAFE HERE ONLY BECAUSE Create.tsx RE-APPROVES EXACTLY THE FEE
+          // before every launch (creationFeeNeedsApproval: `!==`, never `<`), and approve()
+          // overwrites. The two ship together or not at all. CLAUDE.md §22.
+          setStatus(t("trade.approvingUsdc"));
+          const h = await writeContractAsync({
+            address: USDC_ADDRESS,
+            abi: erc20Abi,
+            functionName: "approve",
+            args: [FACTORY_ADDRESS, maxUint256],
+            chainId: arc.id,
+            // ⚠ The 20 Gwei floor has to travel with the call. chain.ts's
+            // fees.estimateFeesPerGas never runs for a wallet write -- see writeFees().
+            ...writeFees(maxFeePerGas),
+          });
+          await client.waitForTransactionReceipt({ hash: h });
+        } else {
+          // Unlimited, once per token. The factory spends this allowance in exactly one
+          // place, sell() (LFX1.sol:577), for at most the tokensIn its caller passes, and no
+          // owner-settable amount reaches it -- the exposure the USDC side has, it does not.
+          setStatus(t("trade.approvingToken", { symbol }));
+          const h = await writeContractAsync({
+            address: token,
+            abi: lfx1TokenAbi,
+            functionName: "approve",
+            args: [FACTORY_ADDRESS, maxUint256],
+            chainId: arc.id,
+            ...writeFees(maxFeePerGas),
+          });
+          await client.waitForTransactionReceipt({ hash: h });
+        }
+        // So the label stops offering an approval that just landed if the trade below
+        // bails; otherwise it lags by up to one poll.
+        balances.refetch();
       }
 
       // TRAP 6: RE-QUOTE immediately before signing. The quote on screen may be a second

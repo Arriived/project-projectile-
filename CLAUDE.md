@@ -628,7 +628,7 @@ test that cannot go red. Each entry: **structure** (closed by construction), **p
 | R10 | `SELFDESTRUCT` beneficiary push can put sub-6dp native dust in the factory | **OPEN — trivial** | Permanently stranded (no native-send path out). Does **not** corrupt the delta check — see 1.6. |
 | R11 | `license_type: none` on the explorer | **CLOSED — `none` is the correct value** | Settled: the project is UNLICENSED, and `none` is the only entry on Blockscout's fixed list consistent with that. Nothing to change and nothing pending. **Do not "fix" this to `unlicense`** — see §8. |
 | R12 | Router approval was **permanent, not single-use** — a compromised owner key could skip the 24h timelock by re-activating any previously-approved address, emitting only `RouterActivated` | **CLOSED — structure** | Fixed in two halves, both required and both red-proved (`regress-router-single-use`, `regress-router-bootstrap`). `activateRouter` now consumes `routerProposedAt`; the constructor no longer banks one for the bootstrap router. Clearing on activation alone was **not** enough — the constructor seeds the mapping without routing through `activateRouter`, so the bootstrap router stayed permanently approved under that partial fix. **+12 bytes** (24,018 → 24,030). Every route to a live router now passes a fresh `RouterProposed` and a full wait. |
-| R13 | **`creationFeeUsdc` is absent from `currentEconomicsHash()`** — the one fee the creator pays directly is the one pinning does not cover | **OPEN** | Owner can raise it between the creator seeing terms and their transaction landing; the pinned hash is unchanged so the guard cannot fire. Proven: creator pinned the old terms and paid a 1000x fee. **Exposure is bounded by the creator's approval** — an exact-amount approval is safe, `MaxUint256` is not. The frontend must not approve max for the creation fee. |
+| R13 | **`creationFeeUsdc` is absent from `currentEconomicsHash()`** — the one fee the creator pays directly is the one pinning does not cover | **OPEN** | Owner can raise it between the creator seeing terms and their transaction landing; the pinned hash is unchanged so the guard cannot fire. Proven: creator pinned the old terms and paid a 1000x fee. **Exposure is bounded by the creator's approval** — an exact-amount approval is safe, `MaxUint256` is not. The frontend must not approve max for the creation fee. ⚠ **§22: the bound is the ALLOWANCE, not the approval amount.** One USDC allowance to the factory is shared with the trade panel, so an exact approval that was skipped because some standing allowance already covered the fee capped nothing — the live bound was whatever trade approval had been left standing. The create flow now re-approves exactly the fee unless the allowance already equals it. |
 | R14 | USDC or launched tokens sent directly to the factory are **permanently stranded** | **OPEN — unrecoverable** | Every payout path is bounded by accounting, never by balance, so nothing can pay a donation out. Also means §1.10's exact conservation is a **closed-system** property: a donation breaks the equality on-chain, though nothing in the handler performs one. Do not read it as "the factory can never hold unaccounted USDC". |
 | R15 | The one-balance configuration: gas and settlement are the SAME balance | **LARGELY CLOSED — executed on Arc testnet, 13/13** | `scripts/smoke-r15.js`, run against the live deployment. What it proved, on chain rather than arithmetically: a wallet that can afford a trade cannot afford the trade PLUS its gas; a holder left with 0.0016 USDC holds 471 trillion tokens and **cannot afford to sell them**; §1.6's truncation lemma holds on the real token with genuine sub-6dp dust present (726,808,615,422 wei); and `_settleBuy`'s balance-delta check measures **exactly** `actualUsdcIn` against real Arc USDC, in both the 6dp and 18dp views. **Residual:** the delta check ran against a factory carrying NO dust — the factory has no `receive()`, so only a SELFDESTRUCT push (R10) can give it any, and the dusty-factory case is still arithmetic-only. Circle-side controls stay unreachable (R1 pause, R2 user-side blocklist), and Arc mainnet USDC does not exist yet, so testnet-equals-mainnet is unverifiable rather than verified. |
 | R17 | `renounceOwnership()` was inherited from `Ownable` and live — one transaction would have permanently frozen every setter, including `revokeRouter()`, the only hard stop against a malicious router | **CLOSED for the labelled path — the CLASS remains open** | Overridden to revert, **+3 bytes** (24,030 → 24,033), no gas impact on any hot path. Six tests, red-proved via `redproof.py r17-unblock-renounce`. Confirmed reverting on the live deployment. **DO NOT READ THIS AS "the owner cannot brick the contract."** R17 closes the labelled path, not the class: `transferOwnership` to a dead or mistyped address is the same permanent freeze one step removed, and is **not** protected — `Ownable` rejects only `address(0)`, so any other address is accepted. Two of the six tests exist solely to pin that residual, showing `revokeRouter` and `pause` both reverting `OwnableUnauthorizedAccount` afterwards. The unlabelled path is also the more likely mistake: `renounceOwnership()` at least announces itself, while a wrong address in a routine transfer looks like an ordinary transaction and produces an identical outcome — and it is the path the multisig migration will actually use. |
@@ -2204,6 +2204,13 @@ trade panel approves the exact trade amount, and that is bounded by terms which 
 and snapshotted per curve — so a standing trading approval cannot be moved underneath the
 user. R13 is specifically about the creation fee.
 
+⚠ **WRONG IN THE DIRECTION THAT MATTERS — see §22.** True of what each function *pulls*;
+false of the *allowance*, which is one number per (owner, spender) and is shared by the
+trade approval and the creation-fee approval — same token, same spender. A standing trading
+approval is exactly what a raised creation fee gets pulled against. The trade panel's
+approval comment (formerly `TradePanel.tsx:264-268`) made the same claim and is corrected
+in place.
+
 **Metadata:** one "Image or metadata URL" box became Image / Description / X / Telegram,
 assembled into the JSON the token page and indexer already read. A bare image URL with
 nothing else stays **unwrapped**, so a creator with only a picture gets a URI any other
@@ -2409,6 +2416,11 @@ Same standing as §6.
 - **A sell is sized in PERCENT, a buy in dollars.** Nobody holds a position in units.
 - **The creation fee is approved for an EXACT amount (R13); trading approvals are a
   different hazard** and are bounded by the economics hash instead.
+  ⚠ **THE SECOND HALF IS WRONG — see §22.** The first half stands. The two approvals share
+  ONE allowance (same token, same spender), so what is settled now is: the create flow
+  **re-approves exactly the fee unless the allowance already equals it**
+  (`creationFeeNeedsApproval`, `!==`, never `<`), and only because of that may trading
+  approvals be unlimited.
 - **The economics hash is fetched in the same action that sends the transaction.**
 - **Affordability always covers the trade PLUS gas from one balance.** USDC is the gas
   token; this keeps reappearing and any new payment path must price it.
@@ -5795,3 +5807,176 @@ abort — the mined salt is already invalid.
    every run. One line in `.gitattributes` fixes it.
 8. Everything in §12.8 this work did not touch — Terms of Use, registrar hardening, zh-Hans,
    the Healthchecks ping URL.
+
+---
+
+# 22. SESSION OF 10 SEPTEMBER 2026 — R13's bound was never "the fee": the shared USDC allowance
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§21. Nothing above this line was
+deleted. Forward pointers were ADDED at §3's R13 row, §11.14 and §11.18 — the three places
+that assert the premise corrected here — and every original sentence survives.
+
+## 22.1 ⚠ THE FINDING — live BEFORE any change, not a consequence of one
+
+**R13's exposure was bounded by whatever USDC allowance to the factory was left standing,
+not by the fee.** Every earlier description — the R13 row, §11.14, §11.18, `lib/create.ts`
+and the trade panel's approval comment — said the creator's exact approval bounds it. The
+exact *amount* was right. The gap was whether that approval was ever *sent*.
+
+The mechanism, from source:
+
+1. **An ERC-20 allowance is ONE number per (owner, spender).** The trade panel's buy-side
+   approve and the create flow's fee approve are **the same token (USDC `0x3600…`) to the
+   same spender (the factory)**. One allowance; both flows read and write it.
+2. **`Create.tsx` skipped its exact approval whenever `allowance < fee` was false** — that
+   is, whenever *any* standing allowance already covered the fee.
+3. **`createToken` pulls `creationFeeUsdc` as it stands AT EXECUTION** (`LFX1.sol:322-323`).
+   `setCreationFee` has **no bounds and no timelock** (`:797-800`), and the fee is **not** one
+   of the twelve values in `currentEconomicsHash()` (`:285-299`), so `expectedEconomicsHash`
+   cannot protect a launch already in flight.
+
+So the standing allowance *was* the bound. And the trade panel left allowances standing
+routinely, because it approved **before** re-quoting and estimating:
+
+| path | left standing |
+|---|---|
+| approve lands, re-quote yields a zero floor (`cannotFill`) | the whole trade approval |
+| approve lands, the gas estimate reverts (`wouldFail`) | the whole trade approval |
+| approve lands, the user rejects the trade signature | the whole trade approval |
+| the trade reverts on chain (slippage) | the whole trade approval |
+| a clamped buy pulls `actualUsdcIn` below the amount approved (`LFX1.sol:456`) | the difference |
+
+`approve` overwrites and spends only reduce the allowance, so what was standing was at most
+**the largest single trade approval the user had made**. Concretely: approve 100 USDC to buy,
+the estimate reverts, launch a token later. The create flow read `100 >= 0.5`, skipped its
+approval, and a fee raised in flight would be pulled against 100.
+
+⚠ **THE TRADE PANEL'S APPROVAL COMMENT (formerly `TradePanel.tsx:264-268`) WAS WRONG IN
+THE DIRECTION THAT MATTERS.** It called the trading approval "a different hazard" that "may
+be budgeted", because trading terms are hashed and "cannot move underneath it". **True of
+what each function PULLS** — `buy()` and `sell()` take at most what their caller passes.
+**False of the ALLOWANCE they share**, which is exactly what `createToken` pulls an unhashed,
+owner-settable fee against. Corrected in place; the correction quotes what it replaced.
+
+⚠ **Why nothing caught it.** `verify:create` C1–C3 test the approval *amount* as a pure
+function, and C11 scans `Create.tsx` for an unlimited literal. Nothing asserted whether the
+exact approval was *sent*, and nothing in `app/scripts` looked at trade approvals at all.
+**A check that the amount is exact is not a check that the bound holds.**
+
+## 22.2 The change — two halves that ship together or not at all
+
+| | before | now |
+|---|---|---|
+| USDC, trade panel | exact trade amount | **`maxUint256`, once** |
+| launch token, trade panel | exact sell amount | **`maxUint256`, once per token** |
+| creation fee | exact fee, **sent only if `allowance < fee`** | exact fee, **sent unless `allowance === fee`** |
+
+The create-side rule is `creationFeeNeedsApproval(allowance, fee)` in `lib/create.ts`:
+**`allowance !== fee`**. **`approve` OVERWRITES**, so re-approving exactly the fee replaces a
+standing unlimited allowance, or any leftover, with the fee itself. A fee raised in flight
+then exceeds the allowance and `createToken` **reverts** — that revert is the bound working.
+Equality is the only state in which skipping is safe.
+
+⚠ **THE USDC HALF WITHOUT THE CREATE HALF WOULD MAKE THE LIVE BUG UNBOUNDED.** An unlimited
+standing allowance plus the old `<` skip puts the creator's whole USDC balance behind every
+launch. C12 and C13 exist so that cannot ship silently.
+
+**The token half has no equivalent exposure.** The factory spends a token allowance in one
+place — `sell()`, `LFX1.sol:577`, for at most the caller's own `tokensIn` — and no
+owner-settable amount reaches it. The factory pulls user funds at exactly three sites, all
+from `msg.sender` (`:323`, `:456`, `:577`); there is no plain `transferFrom` anywhere in
+`LFX1.sol`. OZ 5.6.1 also skips the allowance write when it is max (`ERC20.sol:294-304`),
+so each sell after the first saves a storage write.
+
+**The cost:** a user with a standing USDC allowance gets one extra prompt per launch, and
+the first buy after a launch prompts once more, because `createToken` spends the exact fee
+and leaves zero. Otherwise it is one approval per token, ever.
+
+**Also changed in the trade panel, alongside:**
+
+* ⚠ **Unreadable now means "approve".** An unloaded or failed allowance read used to count
+  as "no approval needed". The trade then went on to a gas estimate that reverted on the
+  allowance and told the user it **"would fail"** — a false reason. An unneeded approve
+  costs a prompt; a skipped one costs a wrong answer.
+* **`submit()` reads the allowance fresh.** The 8-second `useBalances` poll now drives only
+  the button label, and is refetched when an approval lands. The fresh read matters more
+  after this change: a launch resets the USDC allowance to the fee and spends it, so the poll
+  can show an unlimited allowance that is already zero.
+* **`submit()`'s early return moved above `setSubmitting(true)`.** It sat below it and outside
+  the `try/finally`, so taking it would have stranded the button disabled. That was
+  practically unreachable while `blocked` covers a missing curve, but `address` was being
+  added to the same return.
+
+## 22.3 The check, and its red-proofs
+
+`verify:create` went from 13 rows to **20**, and its summary is now counted rather than a
+hardcoded `total`:
+
+* **C12–C12e**, behavioural, on `creationFeeNeedsApproval`: a standing unlimited allowance
+  re-approves (**the row that matters**); an allowance above the fee re-approves (**the live
+  bug's shape**); an allowance below the fee approves; **exactly equal is the only skip**;
+  and a zero fee still overwrites a standing allowance, to zero.
+* **C13**, on `Create.tsx` **with comments stripped**: the gate calls
+  `creationFeeNeedsApproval(allowance, fee)` **and** nothing compares `allowance` and `fee`
+  directly. Both halves are needed, because either alone passes with the bug back:
+  `allowance < fee && creationFeeNeedsApproval(...)` keeps the call and restores the skip.
+* **C13b** proves C13's forbidden pattern can match the condition it forbids, so the
+  negative half cannot rot into a vacuous pass.
+
+⚠ **C13 MUST STRIP COMMENTS, and that was measured, not assumed.** `Create.tsx`'s corrected
+comment quotes the old condition. Run over the raw file, C13's pattern matches
+`allowance < fee` in that comment; with comments stripped, it matches nothing. That is
+§12.6's rule biting a fourth time.
+
+**Red-proofs, 10 September 2026 — one mutation each, each restored byte-identical:**
+
+| mutation | result |
+|---|---|
+| `lib/create.ts`: `allowance !== fee` → `allowance < fee` | **RED** — C12, C12b, C12e (17/20) |
+| `Create.tsx`: the gate back to `allowance < fee` | **RED** — C13, "does not call creationFeeNeedsApproval" (19/20) |
+| `Create.tsx`: `allowance < fee &&` added back, **call kept** | **RED** — C13, "inline comparison" (19/20) |
+| `verify-create.mts`: C13's pattern made unmatchable | **RED** — **only** C13b. C13 stays green, which is the vacuous pass C13b exists to catch (19/20) |
+
+Every run also asserted the rows that must **stay green**, so each mutation hit only the
+check written for it.
+
+⚠ **Done by script under the repo's lease, NOT through `redproof.py` — deliberately.**
+`redproof.py` restores from git and refuses a dirty target, and these targets carried the
+uncommitted change under test, so a git restore would have destroyed it (§5). Each mutation:
+
+1. took `.mutation-lease` via `scripts/mutation_lease.py`;
+2. applied exactly one replacement, aborting if the string was not found exactly once (a
+   no-op mutation "survives" trivially);
+3. restored from a byte-exact backup;
+4. released the lease only after the sha256 matched.
+
+⚠ **The trade-side rules are NOT pinned by any check** — unreadable-means-approve, the fresh
+read, and the unlimited amounts. None was pinned before either. Their failure modes are an
+extra prompt or a wrong message, not funds. The fund-safety rule is on the create side, and
+that one is pinned.
+
+**Rendered in the dev server afterwards:** the token page, including a Sell-tab switch, and
+`/create` both load with **zero console errors**. ⚠ **No approval path has run against a
+wallet.** The in-app browser has none, so the approve-then-trade sequence is verified only by
+construction and by `tsc`.
+
+## 22.4 Residuals — what this does NOT close
+
+* ⚠ **The allowance is shared across TABS.** Suppose the create flow's exact approval has
+  landed but `createToken` has not. A buy in another tab of the same wallet re-approves
+  unlimited, and the launch then runs against that. It needs the user's own concurrent trade
+  **and** an owner fee change inside the same few seconds.
+* **The EIP-5792 batch approves `fee + launchBuy6`.** `approve` overwrites, so a standing
+  allowance cannot leak into it. But `creatorLaunchBuy` clamps to the 2.5% allocation
+  (`LFX1.sol:482-487`) while `parseLaunchBuyUsdc` caps only at the balance, so a fee raised in
+  flight is absorbed up to whatever part of the launch buy the clamp leaves unspent. That is
+  bounded by the creator's own launch-buy figure, and dormant: no wallet offers the batch on
+  Arc (§12.4).
+* **The lever itself is unchanged.** `setCreationFee` is still unbounded, instant and
+  unhashed; this change only makes the creator's allowance the cap it was always described
+  as. The fee stays at the source default `5e5`, and `CONTRACT_DEPLOY_RUNBOOK.md` §3 now says
+  to set it once before announcing and leave it.
+* ⚠ **C10 still reads `Create.tsx` unstripped**, so a comment could satisfy it — a positive
+  check a comment can pass, the dangerous direction of §12.6. Noticed, **not changed**. C11
+  also reads raw, but that can only fail safe: a comment naming an unlimited literal turns it
+  red.

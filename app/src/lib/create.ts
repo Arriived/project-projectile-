@@ -20,6 +20,11 @@
  * approval caps the loss at the fee they agreed to; `MaxUint256` removes the cap entirely
  * and hands the owner an unbounded claim on the wallet.
  *
+ * ⚠ CORRECTED, 10 September 2026: "an exact-amount approval caps the loss" holds only if
+ * that approval is actually SENT. The bound is the ALLOWANCE, not the amount this returns,
+ * and the allowance is shared with the trade panel -- `creationFeeNeedsApproval` below
+ * decides whether it is sent.
+ *
  * This function exists so the amount can never be "convenience-optimised" into an
  * unlimited approve without a test failing.
  */
@@ -29,6 +34,32 @@ export function creationFeeApprovalAmount(creationFeeUsdc: bigint): bigint {
 
 /** The sentinel this flow must never approve. Exported so the test can assert against it. */
 export const MAX_UINT256 = (1n << 256n) - 1n;
+
+/**
+ * ⚠ R13's OTHER HALF: SEND the exact approval unless the allowance ALREADY EQUALS the fee.
+ * `!==`, never `<`.
+ *
+ * An ERC-20 allowance is ONE number per (owner, spender), and the trade panel approves USDC
+ * to the same spender -- the factory. So buying and creating share one allowance, and
+ * `createToken` pulls `creationFeeUsdc` as it stands at EXECUTION against whatever it holds
+ * (LFX1.sol:322-323).
+ *
+ * This was `allowance < fee`, which skipped the exact approval whenever ANY standing
+ * allowance covered the fee -- a trade approval that landed before its trade bailed, a trade
+ * signature the user rejected, the unspent part of a clamped buy. So R13's bound was
+ * whatever trade approval had been left standing, never "the fee"; with the trade panel now
+ * approving an unlimited amount, `<` would make it the creator's whole balance.
+ *
+ * `approve` OVERWRITES, so re-approving exactly the fee replaces any standing allowance with
+ * the fee itself. Equality is the only state in which skipping is safe: an allowance of
+ * exactly the fee cannot cover a raised one, so `createToken` reverts instead of paying it.
+ *
+ * Cost: one extra prompt on a launch when an allowance is standing, and one on the first buy
+ * after it, because `createToken` spends the fee and leaves zero. CLAUDE.md §22.
+ */
+export function creationFeeNeedsApproval(allowance: bigint, fee: bigint): boolean {
+  return allowance !== fee;
+}
 
 /**
  * Symbols longer than this cannot be added to a wallet in one click.

@@ -12,6 +12,12 @@
 //    already paid a 1000x fee in precisely that scenario. An unlimited approve here is a
 //    real, demonstrated loss, not a theoretical one.
 //
+//    ⚠ AND IT IS SENT UNLESS THE ALLOWANCE ALREADY EQUALS THE FEE (creationFeeNeedsApproval,
+//    `!==`). The exact amount is not the bound; the ALLOWANCE is, and it is one number shared
+//    with the trade panel, which approves an unlimited amount to the same spender. A skip on
+//    "the allowance already covers the fee" lets createToken pull a raised fee against that.
+//    approve() overwrites, so re-approving exactly the fee is what applies the bound.
+//
 // 2. The economics hash is fetched INSIDE the submit handler, in the same action that
 //    sends the transaction. Never from a hook, never cached. A hash read at page load is
 //    stale by definition; submitting it either reverts EconomicsChanged (the good case)
@@ -44,6 +50,7 @@ import {
   blocksSubmission,
   launchBlocker,
   creationFeeApprovalAmount,
+  creationFeeNeedsApproval,
   type Issue,
 } from "../lib/create";
 
@@ -163,10 +170,19 @@ export function Create() {
       const { usdc6: launchBuy6 } = parseLaunchBuyUsdc(launchBuyRaw, usdcBalance as bigint | undefined);
       const batching = canBatchLaunchBuy({ supportsAtomicBatch: canBatch, launchBuyUsdc6: launchBuy6 });
 
-      // ⚠ THE APPROVAL IS SKIPPED HERE WHEN BATCHING, because the batch carries its own.
+      // ⚠ THE APPROVAL IS SKIPPED HERE WHEN BATCHING, because the batch carries its own --
+      // an approve() too, so it overwrites a standing allowance exactly as this one does.
       // Approving separately first would land in an earlier block, which is harmless, but
       // it would also mean two prompts -- and the entire point of the batch is one.
-      if (!batching && allowance < fee) {
+      //
+      // ⚠ `!==`, NOT `<`. This read `allowance < fee` until 10 September 2026, which skipped
+      // the exact approval whenever ANY standing allowance covered the fee. That allowance is
+      // shared with the trade panel -- same token, same spender -- and createToken pulls
+      // creationFeeUsdc as it is at execution: owner-settable, instant, outside the economics
+      // hash. So the skip left each launch bounded by whatever allowance happened to be
+      // standing, not by the fee. approve() overwrites; re-approving the exact fee is what
+      // applies the bound. creationFeeNeedsApproval in lib/create.ts; CLAUDE.md §22.
+      if (!batching && creationFeeNeedsApproval(allowance, fee)) {
         setPhase("approving");
         const amount = creationFeeApprovalAmount(fee);
         const approveHash = await wallet.writeContract({
