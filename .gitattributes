@@ -1,1 +1,4 @@
 CLAUDE.md text eol=lf
+# Generated with LF by scripts/gen-inventory.js; without this, core.autocrlf reports it
+# modified after every regeneration.
+CONTRACT_INVENTORY.md text eol=lf

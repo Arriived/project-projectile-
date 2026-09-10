@@ -16,9 +16,17 @@ const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
 const OUT = path.join(ROOT, "CONTRACT_INVENTORY.md");
+// ⚠ ALL FIVE PRODUCTION CONTRACTS. This listed only LFX1 and LFX1Token until 10 September
+// 2026, so the adapter, the hook and the corrector -- the hook above all, immutable and
+// ownerless and on every swap for ever -- sat outside the one mechanism that exists to
+// catch an exposed identifier CLAUDE.md never explains (CLAUDE.md §21.10 item 6).
+// GraduationHelper is deliberately absent: inert on testnet and not in the v4 stack.
 const TARGETS = [
   ["LFX1", "contracts/LFX1.sol", "artifacts/contracts/LFX1.sol/LFX1.json"],
   ["LFX1Token", "contracts/LFX1Token.sol", "artifacts/contracts/LFX1Token.sol/LFX1Token.json"],
+  ["BallistaV4Adapter", "contracts/BallistaV4Adapter.sol", "artifacts/contracts/BallistaV4Adapter.sol/BallistaV4Adapter.json"],
+  ["BallistaFeeHook", "contracts/BallistaFeeHook.sol", "artifacts/contracts/BallistaFeeHook.sol/BallistaFeeHook.json"],
+  ["BallistaPoolCorrector", "contracts/BallistaPoolCorrector.sol", "artifacts/contracts/BallistaPoolCorrector.sol/BallistaPoolCorrector.json"],
 ];
 
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
@@ -56,7 +64,42 @@ function sourceFacts(src) {
     [...hashBody.matchAll(/^\s{12}(\w+),?$/gm)].map((x) => x[1])
   );
 
-  return { ownerOnly, consts, defaults, noDefault, hashed };
+  // ⚠ ACCESS, AS FAR AS THIS FILE CAN SEE -- AND NO FURTHER.
+  //
+  // This reads ONE source file. A function, error or event inherited from another file has
+  // its gate, its revert and its emit THERE: Ownable's `transferOwnership` is onlyOwner in
+  // Ownable.sol, and BaseHook's ten IHooks callbacks are onlyPoolManager in BaseHook.sol.
+  // Until 10 September 2026 anything without `onlyOwner` in this file was printed
+  // "Permissionless" -- which called transferOwnership permissionless (R17's unguarded
+  // path) and would have called every hook callback permissionless too -- and any error or
+  // event not raised in this file was printed "never thrown" / "never emitted". So: report
+  // what this file shows, its modifiers and any inline `msg.sender` comparison, and say
+  // "inherited" for the rest.
+  const declared = new Map();
+  const NOT_MODIFIERS = new Set([
+    "external", "public", "internal", "private", "view", "pure", "payable", "virtual",
+    "override", "returns",
+  ]);
+  const declRe = /function\s+(\w+)\s*\(([^)]*)\)([^{;]*)\{/g;
+  while ((m = declRe.exec(src))) {
+    const tail = m[3].replace(/returns\s*\([^)]*\)/g, "").replace(/override\s*\([^)]*\)/g, "");
+    const modifiers = (tail.match(/[A-Za-z_]\w*/g) || []).filter((t) => !NOT_MODIFIERS.has(t));
+    let depth = 0;
+    let end = m.index + m[0].length - 1; // the opening brace
+    for (; end < src.length; end++) {
+      if (src[end] === "{") depth++;
+      else if (src[end] === "}" && --depth === 0) break;
+    }
+    const body = src
+      .slice(m.index + m[0].length, end)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    const checksSender = /msg\.sender\s*[!=]=|[!=]=\s*msg\.sender/.test(body);
+    declared.set(m[1], { modifiers, checksSender });
+  }
+  const declaresHere = (kind, name) => new RegExp(`\\b${kind}\\s+${name}\\s*\\(`).test(src);
+
+  return { ownerOnly, consts, defaults, noDefault, hashed, declared, declaresHere };
 }
 
 function build() {
@@ -123,10 +166,17 @@ mention. That list is what to read after any contract change.
       md += `| \`${sigOf(w)}\` | owner only |\n`;
     }
 
-    md += `\n### Permissionless state-changing functions\n\n`;
-    md += `| function | mutability |\n|---|---|\n`;
+    // ⚠ NOT "Permissionless" -- see `declared` in sourceFacts. A function can be gated by a
+    // modifier or an inline check that this file shows, or by one in a parent it does not.
+    md += `\n### State-changing functions without \`onlyOwner\` in this file\n\n`;
+    md += `Not the same as permissionless. **inherited** means the function is declared in a parent\n`;
+    md += `contract, so its gate lives there and is not read here.\n\n`;
+    md += `| function | mutability | modifiers here | compares \`msg.sender\` here |\n|---|---|---|---|\n`;
     for (const w of writes.filter((x) => !f.ownerOnly.has(x.name))) {
-      md += `| \`${sigOf(w)}\` | ${w.stateMutability} |\n`;
+      const d = f.declared.get(w.name);
+      md += d
+        ? `| \`${sigOf(w)}\` | ${w.stateMutability} | ${d.modifiers.length ? d.modifiers.map((x) => `\`${x}\``).join(", ") : "—"} | ${d.checksSender ? "**yes**" : "no"} |\n`
+        : `| \`${sigOf(w)}\` | ${w.stateMutability} | **inherited** | **inherited** |\n`;
     }
 
     md += `\n### Views\n\n`;
@@ -136,6 +186,9 @@ mention. That list is what to read after any contract change.
     md += `\n### Public getters (state and constants)\n\n`;
     md += getters.map((g) => `\`${g.name}\``).join(", ") + "\n";
 
+    // "never thrown" / "never emitted" only for what THIS file declares. An inherited error or
+    // event is raised in its parent -- OZ's Transfer on every token transfer, BaseHook's
+    // NotPoolManager on every foreign callback -- and calling it dead would be false.
     const errors = abi.filter((x) => x.type === "error");
     md += `\n### Custom errors (${errors.length})\n\n`;
     md += `| error | thrown where |\n|---|---|\n`;
@@ -144,7 +197,7 @@ mention. That list is what to read after any contract change.
         .map((l, i) => [i + 1, l])
         .filter(([, l]) => l.includes(`revert ${e.name}(`))
         .map(([i]) => i);
-      md += `| \`${sigOf(e)}\` | ${lines.length ? lines.map((l) => `L${l}`).join(", ") : "declared, never thrown"} |\n`;
+      md += `| \`${sigOf(e)}\` | ${lines.length ? lines.map((l) => `L${l}`).join(", ") : f.declaresHere("error", e.name) ? "**declared here, never thrown here**" : "inherited — not in this file"} |\n`;
     }
 
     const events = abi.filter((x) => x.type === "event");
@@ -155,7 +208,7 @@ mention. That list is what to read after any contract change.
         .map((l, i) => [i + 1, l])
         .filter(([, l]) => l.includes(`emit ${e.name}(`))
         .map(([i]) => i);
-      md += `| \`${sigOf(e)}\` | ${lines.length ? lines.map((l) => `L${l}`).join(", ") : "**declared, never emitted**"} |\n`;
+      md += `| \`${sigOf(e)}\` | ${lines.length ? lines.map((l) => `L${l}`).join(", ") : f.declaresHere("event", e.name) ? "**declared here, never emitted here**" : "inherited — not in this file"} |\n`;
     }
 
     // Coverage: what CLAUDE.md never mentions.

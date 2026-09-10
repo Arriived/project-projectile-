@@ -81,19 +81,22 @@ mention. That list is what to read after any contract change.
 | `setTreasury(address treasury_)` | owner only |
 | `unpause()` | owner only |
 
-### Permissionless state-changing functions
+### State-changing functions without `onlyOwner` in this file
 
-| function | mutability |
-|---|---|
-| `buy(address token, uint256 usdcIn, uint256 minTokensOut)` | nonpayable |
-| `claimCreatorFees() -> (uint256)` | nonpayable |
-| `claimTreasuryFees() -> (uint256)` | nonpayable |
-| `createToken(string name, string symbol, string metadataURI, bytes32 expectedEconomicsHash, bool poolBoostEnabled) -> (address)` | nonpayable |
-| `creatorLaunchBuy(address token, uint256 usdcIn, uint256 minTokensOut)` | nonpayable |
-| `graduate(address token)` | nonpayable |
-| `sell(address token, uint256 tokensIn, uint256 minUsdcOut)` | nonpayable |
-| `transferOwnership(address newOwner)` | nonpayable |
-| `updateMetadataURI(address token, string newURI)` | nonpayable |
+Not the same as permissionless. **inherited** means the function is declared in a parent
+contract, so its gate lives there and is not read here.
+
+| function | mutability | modifiers here | compares `msg.sender` here |
+|---|---|---|---|
+| `buy(address token, uint256 usdcIn, uint256 minTokensOut)` | nonpayable | `nonReentrant`, `whenNotPaused` | no |
+| `claimCreatorFees() -> (uint256)` | nonpayable | `nonReentrant` | no |
+| `claimTreasuryFees() -> (uint256)` | nonpayable | `nonReentrant` | no |
+| `createToken(string name, string symbol, string metadataURI, bytes32 expectedEconomicsHash, bool poolBoostEnabled) -> (address)` | nonpayable | `nonReentrant`, `whenNotPaused` | no |
+| `creatorLaunchBuy(address token, uint256 usdcIn, uint256 minTokensOut)` | nonpayable | `nonReentrant`, `whenNotPaused` | **yes** |
+| `graduate(address token)` | nonpayable | `nonReentrant` | no |
+| `sell(address token, uint256 tokensIn, uint256 minUsdcOut)` | nonpayable | `nonReentrant`, `whenNotPaused` | no |
+| `transferOwnership(address newOwner)` | nonpayable | **inherited** | **inherited** |
+| `updateMetadataURI(address token, string newURI)` | nonpayable | — | **yes** |
 
 ### Views
 
@@ -131,8 +134,8 @@ mention. That list is what to read after any contract change.
 | `CurveMathError()` | L391, L533 |
 | `CurveNotActive(uint8 state)` | L479, L509, L560, L701, L709 |
 | `EconomicsChanged()` | L313 |
-| `EnforcedPause()` | declared, never thrown |
-| `ExpectedPause()` | declared, never thrown |
+| `EnforcedPause()` | inherited — not in this file |
+| `ExpectedPause()` | inherited — not in this file |
 | `FeeBelowCreatorShare()` | L769 |
 | `FeeExceedsCeiling()` | L767 |
 | `GraduationFailed()` | L695 |
@@ -141,14 +144,14 @@ mention. That list is what to read after any contract change.
 | `NotCreator()` | L421, L477 |
 | `NotReadyToGraduate(uint8 state)` | L693 |
 | `NothingToClaim()` | L631, L639 |
-| `OwnableInvalidOwner(address owner)` | declared, never thrown |
-| `OwnableUnauthorizedAccount(address account)` | declared, never thrown |
+| `OwnableInvalidOwner(address owner)` | inherited — not in this file |
+| `OwnableUnauthorizedAccount(address account)` | inherited — not in this file |
 | `OwnershipCannotBeRenounced()` | L834 |
-| `ReentrancyGuardReentrantCall()` | declared, never thrown |
+| `ReentrancyGuardReentrantCall()` | inherited — not in this file |
 | `RouterNotProposed()` | L751 |
 | `RouterNotSet()` | L310, L694 |
 | `RouterTimelockPending(uint256 activatableAt)` | L752 |
-| `SafeERC20FailedOperation(address token)` | declared, never thrown |
+| `SafeERC20FailedOperation(address token)` | inherited — not in this file |
 | `SlippageExceeded(uint256 received, uint256 minRequested)` | L492, L517, L567 |
 | `SnipeTaxCeilingExceeded()` | L253 |
 | `SymbolLocked(uint256 unlocksAt)` | L320 |
@@ -179,8 +182,8 @@ mention. That list is what to read after any contract change.
 | `LpRecipientSet(address oldRecipient, address newRecipient)` | L804 |
 | `MaxCreatorLaunchBpsSet(uint16 maxCreatorLaunchBps)` | L789 |
 | `MetadataURIUpdated(address token, address creator, string oldURI, string newURI)` | L425 |
-| `OwnershipTransferred(address previousOwner, address newOwner)` | **declared, never emitted** |
-| `Paused(address account)` | **declared, never emitted** |
+| `OwnershipTransferred(address previousOwner, address newOwner)` | inherited — not in this file |
+| `Paused(address account)` | inherited — not in this file |
 | `PoolBoostAccrued(address token, uint256 amount, uint256 total)` | L622 |
 | `RouterActivated(address router)` | L220, L755 |
 | `RouterProposed(address router, uint256 activatableAt)` | L218, L745 |
@@ -191,7 +194,7 @@ mention. That list is what to read after any contract change.
 | `TokenCreated(address token, address creator, string name, string symbol, string metadataURI)` | L365 |
 | `Trade(address token, address trader, bool isBuy, uint256 usdcAmount, uint256 tokenAmount)` | L460, L582 |
 | `TreasuryFeesClaimed(address treasury, uint256 amount)` | L634 |
-| `Unpaused(address account)` | **declared, never emitted** |
+| `Unpaused(address account)` | inherited — not in this file |
 
 ---
 
@@ -215,14 +218,17 @@ mention. That list is what to read after any contract change.
 | function | what it changes |
 |---|---|
 
-### Permissionless state-changing functions
+### State-changing functions without `onlyOwner` in this file
 
-| function | mutability |
-|---|---|
-| `approve(address spender, uint256 value) -> (bool)` | nonpayable |
-| `setMetadataURI(string newURI)` | nonpayable |
-| `transfer(address to, uint256 value) -> (bool)` | nonpayable |
-| `transferFrom(address from, address to, uint256 value) -> (bool)` | nonpayable |
+Not the same as permissionless. **inherited** means the function is declared in a parent
+contract, so its gate lives there and is not read here.
+
+| function | mutability | modifiers here | compares `msg.sender` here |
+|---|---|---|---|
+| `approve(address spender, uint256 value) -> (bool)` | nonpayable | **inherited** | **inherited** |
+| `setMetadataURI(string newURI)` | nonpayable | — | **yes** |
+| `transfer(address to, uint256 value) -> (bool)` | nonpayable | **inherited** | **inherited** |
+| `transferFrom(address from, address to, uint256 value) -> (bool)` | nonpayable | **inherited** | **inherited** |
 
 ### Views
 
@@ -243,25 +249,244 @@ mention. That list is what to read after any contract change.
 
 | error | thrown where |
 |---|---|
-| `ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)` | declared, never thrown |
-| `ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed)` | declared, never thrown |
-| `ERC20InvalidApprover(address approver)` | declared, never thrown |
-| `ERC20InvalidReceiver(address receiver)` | declared, never thrown |
-| `ERC20InvalidSender(address sender)` | declared, never thrown |
-| `ERC20InvalidSpender(address spender)` | declared, never thrown |
+| `ERC20InsufficientAllowance(address spender, uint256 allowance, uint256 needed)` | inherited — not in this file |
+| `ERC20InsufficientBalance(address sender, uint256 balance, uint256 needed)` | inherited — not in this file |
+| `ERC20InvalidApprover(address approver)` | inherited — not in this file |
+| `ERC20InvalidReceiver(address receiver)` | inherited — not in this file |
+| `ERC20InvalidSender(address sender)` | inherited — not in this file |
+| `ERC20InvalidSpender(address spender)` | inherited — not in this file |
 
 ### Events (2)
 
 | event | emitted at |
 |---|---|
-| `Approval(address owner, address spender, uint256 value)` | **declared, never emitted** |
-| `Transfer(address from, address to, uint256 value)` | **declared, never emitted** |
+| `Approval(address owner, address spender, uint256 value)` | inherited — not in this file |
+| `Transfer(address from, address to, uint256 value)` | inherited — not in this file |
+
+---
+
+## BallistaV4Adapter
+
+### Constants (immutable by construction — changing one is a redeploy)
+
+| name | value |
+|---|---|
+| `POOL_FEE` | `0` |
+| `TICK_SPACING` | `60` |
+| `BURN_ADDRESS` | `0x000000000000000000000000000000000000dEaD` |
+
+### State variables that govern behaviour
+
+| name | type | declared default | owner-settable via | in economics hash |
+|---|---|---|---|---|
+| `lfx1` | `address` | `—` | **no setter — redeploy** | no |
+
+### Owner-gated functions
+
+| function | what it changes |
+|---|---|
+
+### State-changing functions without `onlyOwner` in this file
+
+Not the same as permissionless. **inherited** means the function is declared in a parent
+contract, so its gate lives there and is not read here.
+
+| function | mutability | modifiers here | compares `msg.sender` here |
+|---|---|---|---|
+| `addLiquidity(address tokenA, address tokenB, uint256 amountADesired, uint256 amountBDesired, uint256, uint256, address to, uint256 deadline) -> (uint256, uint256, uint256)` | nonpayable | `nonReentrant` | **yes** |
+
+### Views
+
+| function |
+|---|
+| `hook() -> (address)` |
+| `permit2() -> (address)` |
+| `poolManager() -> (address)` |
+| `positionManager() -> (address)` |
+
+### Public getters (state and constants)
+
+`BURN_ADDRESS`, `POOL_FEE`, `TICK_SPACING`, `lfx1`
+
+### Custom errors (16)
+
+| error | thrown where |
+|---|---|
+| `AmountRatioOutOfRange()` | L548 |
+| `DeadlineExpired()` | L224 |
+| `HookFlagsWrong(uint160 flags, uint160 required)` | L157 |
+| `HookNotBoundToThis(address hookThinksAdapterIs)` | L175 |
+| `IdenticalCurrencies()` | L225 |
+| `NoLiquidityMinted()` | L301, L445 |
+| `NotLfx1(address caller)` | L223 |
+| `NothingConsumed()` | L293 |
+| `PoolPriceMismatch(uint160 expectedSqrtPriceX96, uint160 actualSqrtPriceX96)` | L415 |
+| `PositionNotMinted(uint256 tokenId, address expectedOwner, address actualOwner)` | L304 |
+| `ReentrancyGuardReentrantCall()` | inherited — not in this file |
+| `SafeERC20FailedOperation(address token)` | inherited — not in this file |
+| `SqrtPriceOutOfRange(uint256 sqrtPriceX96)` | L552 |
+| `ZeroAddress()` | L128 |
+| `ZeroAmount()` | L226 |
+| `ZeroHook()` | L145 |
+
+### Events (1)
+
+| event | emitted at |
+|---|---|
+| `PoolSeeded(address currency0, address currency1, uint256 tokenId, uint160 sqrtPriceX96, uint128 liquidity, uint256 consumed0, uint256 consumed1, address recipient)` | L307 |
+
+---
+
+## BallistaFeeHook
+
+### Constants (immutable by construction — changing one is a redeploy)
+
+| name | value |
+|---|---|
+| `FEE_BPS` | `100` |
+| `BPS_DENOMINATOR` | `10_000` |
+| `REQUIRED_FEE` | `0` |
+| `REQUIRED_TICK_SPACING` | `60` |
+
+### State variables that govern behaviour
+
+| name | type | declared default | owner-settable via | in economics hash |
+|---|---|---|---|---|
+| `usdc` | `address` | `—` | **no setter — redeploy** | no |
+| `protocolRecipient` | `address` | `—` | **no setter — redeploy** | no |
+| `adapter` | `address` | `—` | **no setter — redeploy** | no |
+| `launches` | `mapping(PoolId => Launch)` | `—` | **no setter — redeploy** | no |
+| `pendingUsdc` | `mapping(PoolId => uint256)` | `—` | **no setter — redeploy** | no |
+| `pendingToken` | `mapping(PoolId => uint256)` | `—` | **no setter — redeploy** | no |
+| `owedUsdc` | `mapping(address => uint256)` | `—` | **no setter — redeploy** | no |
+| `owedToken` | `mapping(address => mapping(address => uint256))` | `—` | **no setter — redeploy** | no |
+
+### Owner-gated functions
+
+| function | what it changes |
+|---|---|
+
+### State-changing functions without `onlyOwner` in this file
+
+Not the same as permissionless. **inherited** means the function is declared in a parent
+contract, so its gate lives there and is not read here.
+
+| function | mutability | modifiers here | compares `msg.sender` here |
+|---|---|---|---|
+| `afterAddLiquidity(address sender, tuple key, tuple params, int256 delta, int256 feesAccrued, bytes hookData) -> (bytes4, int256)` | nonpayable | **inherited** | **inherited** |
+| `afterDonate(address sender, tuple key, uint256 amount0, uint256 amount1, bytes hookData) -> (bytes4)` | nonpayable | **inherited** | **inherited** |
+| `afterInitialize(address sender, tuple key, uint160 sqrtPriceX96, int24 tick) -> (bytes4)` | nonpayable | **inherited** | **inherited** |
+| `afterRemoveLiquidity(address sender, tuple key, tuple params, int256 delta, int256 feesAccrued, bytes hookData) -> (bytes4, int256)` | nonpayable | **inherited** | **inherited** |
+| `afterSwap(address sender, tuple key, tuple params, int256 delta, bytes hookData) -> (bytes4, int128)` | nonpayable | **inherited** | **inherited** |
+| `beforeAddLiquidity(address sender, tuple key, tuple params, bytes hookData) -> (bytes4)` | nonpayable | **inherited** | **inherited** |
+| `beforeDonate(address sender, tuple key, uint256 amount0, uint256 amount1, bytes hookData) -> (bytes4)` | nonpayable | **inherited** | **inherited** |
+| `beforeInitialize(address sender, tuple key, uint160 sqrtPriceX96) -> (bytes4)` | nonpayable | **inherited** | **inherited** |
+| `beforeRemoveLiquidity(address sender, tuple key, tuple params, bytes hookData) -> (bytes4)` | nonpayable | **inherited** | **inherited** |
+| `beforeSwap(address sender, tuple key, tuple params, bytes hookData) -> (bytes4, int256, uint24)` | nonpayable | **inherited** | **inherited** |
+| `claim()` | nonpayable | — | no |
+| `claimToken(address token)` | nonpayable | — | no |
+| `sweep(bytes32 poolId)` | nonpayable | — | no |
+| `transferFeeRecipient(bytes32 poolId, address newRecipient)` | nonpayable | — | **yes** |
+
+### Views
+
+| function |
+|---|
+| `getHookPermissions() -> (tuple)` |
+| `lfx1() -> (address)` |
+| `owedToken(address, address) -> (uint256)` |
+| `poolManager() -> (address)` |
+
+### Public getters (state and constants)
+
+`BPS_DENOMINATOR`, `FEE_BPS`, `REQUIRED_FEE`, `REQUIRED_TICK_SPACING`, `adapter`, `launches`, `owedUsdc`, `pendingToken`, `pendingUsdc`, `protocolRecipient`, `usdc`
+
+### Custom errors (14)
+
+| error | thrown where |
+|---|---|
+| `HookNotImplemented()` | inherited — not in this file |
+| `NoUsdcSide(address currency0, address currency1)` | L230 |
+| `NotAdapter(address sender)` | L215 |
+| `NotFeeRecipient(address sender)` | L408 |
+| `NotPoolManager()` | inherited — not in this file |
+| `NothingOwed()` | L384, L392 |
+| `SafeERC20FailedOperation(address token)` | inherited — not in this file |
+| `UnknownCurve(address token)` | L237 |
+| `UnknownPool(bytes32 poolId)` | L351, L407 |
+| `WrongFee(uint24 fee)` | L220 |
+| `WrongHook(address hooks)` | L222 |
+| `WrongTickSpacing(int24 tickSpacing)` | L221 |
+| `ZeroAddress()` | L163, L409 |
+| `ZeroCreator(address token)` | L242 |
+
+### Events (5)
+
+| event | emitted at |
+|---|---|
+| `Claimed(address recipient, address currency, uint256 amount)` | L387, L395 |
+| `FeeAccrued(bytes32 poolId, address currency, uint256 feeAmount, int128 amount0, int128 amount1)` | L327 |
+| `FeeRecipientTransferred(bytes32 poolId, address previous, address next)` | L413 |
+| `FeesSwept(bytes32 poolId, address token, address feeRecipient, uint256 usdcToProtocol, uint256 usdcToCreator, uint256 tokenToProtocol, uint256 tokenToCreator)` | L377 |
+| `PoolRegistered(bytes32 poolId, address token, address creator, bool usdcIsCurrency0, uint24 fee, int24 tickSpacing)` | L251 |
+
+---
+
+## BallistaPoolCorrector
+
+### Constants (immutable by construction — changing one is a redeploy)
+
+| name | value |
+|---|---|
+
+### State variables that govern behaviour
+
+| name | type | declared default | owner-settable via | in economics hash |
+|---|---|---|---|---|
+
+### Owner-gated functions
+
+| function | what it changes |
+|---|---|
+
+### State-changing functions without `onlyOwner` in this file
+
+Not the same as permissionless. **inherited** means the function is declared in a parent
+contract, so its gate lives there and is not read here.
+
+| function | mutability | modifiers here | compares `msg.sender` here |
+|---|---|---|---|
+| `correct(tuple key, uint160 targetSqrtPriceX96) -> (bool)` | nonpayable | — | no |
+| `unlockCallback(bytes data) -> (bytes)` | nonpayable | — | **yes** |
+
+### Views
+
+| function |
+|---|
+| `poolManager() -> (address)` |
+
+### Public getters (state and constants)
+
+
+
+### Custom errors (2)
+
+| error | thrown where |
+|---|---|
+| `NotPoolManager(address caller)` | L128 |
+| `PoolNotInitialized()` | L108 |
+
+### Events (1)
+
+| event | emitted at |
+|---|---|
+| `PoolCorrected(bytes32 poolId, uint160 fromSqrtPriceX96, uint160 toSqrtPriceX96, address caller)` | L119 |
 
 ---
 
 ## CLAUDE.md coverage
 
-Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **73**.
+Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **102**.
 
 Not every one needs prose — a getter for a constant that is already described by
 its constant does not. But anything here that changes BEHAVIOUR and is unexplained
@@ -340,3 +565,32 @@ is the shape of the symbol-lock gap, and should be read as a candidate.
 - `LFX1Token.ERC20InvalidReceiver`
 - `LFX1Token.ERC20InvalidSender`
 - `LFX1Token.ERC20InvalidSpender`
+- `BallistaV4Adapter.POOL_FEE`
+- `BallistaV4Adapter.DeadlineExpired`
+- `BallistaV4Adapter.IdenticalCurrencies`
+- `BallistaV4Adapter.NoLiquidityMinted`
+- `BallistaV4Adapter.NothingConsumed`
+- `BallistaV4Adapter.PositionNotMinted`
+- `BallistaV4Adapter.SqrtPriceOutOfRange`
+- `BallistaV4Adapter.ZeroAddress`
+- `BallistaV4Adapter.ZeroAmount`
+- `BallistaV4Adapter.PoolSeeded`
+- `BallistaFeeHook.REQUIRED_FEE`
+- `BallistaFeeHook.REQUIRED_TICK_SPACING`
+- `BallistaFeeHook.afterAddLiquidity`
+- `BallistaFeeHook.afterDonate`
+- `BallistaFeeHook.afterInitialize`
+- `BallistaFeeHook.afterRemoveLiquidity`
+- `BallistaFeeHook.beforeAddLiquidity`
+- `BallistaFeeHook.beforeDonate`
+- `BallistaFeeHook.beforeRemoveLiquidity`
+- `BallistaFeeHook.pendingToken`
+- `BallistaFeeHook.pendingUsdc`
+- `BallistaFeeHook.NotFeeRecipient`
+- `BallistaFeeHook.NotPoolManager`
+- `BallistaFeeHook.NothingOwed`
+- `BallistaFeeHook.UnknownPool`
+- `BallistaFeeHook.ZeroAddress`
+- `BallistaPoolCorrector.NotPoolManager`
+- `BallistaPoolCorrector.PoolNotInitialized`
+- `BallistaPoolCorrector.PoolCorrected`

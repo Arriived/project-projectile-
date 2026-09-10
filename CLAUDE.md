@@ -5803,8 +5803,10 @@ abort — the mined salt is already invalid.
 6. `CONTRACT_INVENTORY.md` is **blind to three of the five contracts** —
    `gen-inventory.js:20-21` targets only `LFX1` and `LFX1Token`, so the adapter, the hook and
    the corrector sit outside the mechanism that exists to catch exactly this.
+   ✅ **CLOSED 10 September 2026 — §22.5.** All five are targets; the count went 73 → 102.
 7. `npm run inventory` writes LF while `core.autocrlf` wants CRLF, so it shows as modified on
    every run. One line in `.gitattributes` fixes it.
+   ✅ **CLOSED 10 September 2026 — §22.5.** The line is in.
 8. Everything in §12.8 this work did not touch — Terms of Use, registrar hardening, zh-Hans,
    the Healthchecks ping URL.
 
@@ -5980,3 +5982,61 @@ construction and by `tsc`.
   check a comment can pass, the dangerous direction of §12.6. Noticed, **not changed**. C11
   also reads raw, but that can only fail safe: a comment naming an unlimited literal turns it
   red.
+
+## 22.5 The inventory now covers all five contracts, and no longer claims what it cannot see
+
+`scripts/gen-inventory.js` targeted only `LFX1` and `LFX1Token` (§21.10 item 6). It now
+targets all five production contracts, adding `BallistaV4Adapter`, `BallistaFeeHook` and
+`BallistaPoolCorrector`. `CONTRACT_INVENTORY.md` is pinned to LF in `.gitattributes`
+(§21.10 item 7).
+
+Regenerating with the OLD generator after §22.1–§22.4 produced a byte-identical file, so the
+regenerations skipped earlier in this session had cost nothing. The widened targets are what
+move the number.
+
+**The count of exposed identifiers `CLAUDE.md` never mentions went 73 → 102.** The hook
+adds **16**, the adapter **10** and the corrector **3**; `LFX1` (64) and `LFX1Token` (9)
+are unchanged. These are candidates, not defects — read the list in `CONTRACT_INVENTORY.md`
+before assuming any of them is explained here.
+
+⚠ **The hook's two per-pool accrual mappings are on that list, and that is NOT a naming
+error in §21.2.** The hook has per-pool accruals, which `sweep` empties, AND the
+per-recipient escrow §21.2 names, which the claims drain. Both exist. This was checked
+against the source before being written down, because at first glance it read like drift.
+
+⚠ **ADDING THE TARGETS ALONE WOULD HAVE PUBLISHED FALSE ACCESS CLAIMS ABOUT THE HOOK.** The
+generator reads ONE source file per contract, and it listed every state-changing function
+without `onlyOwner` in that file under "Permissionless". The hook's ten IHooks callbacks are
+declared in `BaseHook` and gated by `onlyPoolManager` there, so all ten would have been
+listed as permissionless.
+
+**The committed file already carried this error.** It listed `transferOwnership` as
+permissionless, because its `onlyOwner` lives in `Ownable.sol`. That is R17's unguarded
+path — and the one document meant to be the exhaustive WHAT described it as open to anyone.
+
+The same one-file blindness produced **17 "declared, never thrown / never emitted" claims**
+about errors and events that inherited code does raise. Examples: Ownable's
+unauthorized-account error on every owner setter, and OZ `ERC20`'s `Transfer` on every token
+transfer.
+
+**What it does now:**
+
+* Every state-changing function without `onlyOwner` shows the modifiers declared in its own
+  file, and whether its body compares `msg.sender`. A function whose body lives in a parent
+  reads **inherited**, and the file says outright that this is not the same as
+  permissionless.
+* Errors and events raised only by a parent read "inherited — not in this file". The bold
+  "never thrown / never emitted" is kept only for what a file declares itself and never
+  raises — currently **none**.
+* Every row was checked against the source. `transferFeeRecipient`, the adapter's
+  `addLiquidity` and the corrector's `unlockCallback` show their `msg.sender` checks;
+  `sweep`, `claim` and `correct` show none, which is right.
+
+**What it still does not do:**
+
+* **It does not read parent contracts.** "inherited" says where to look, not what is there.
+* ⚠ **Its setter matching is a fuzzy name prefix, and it is wrong at least once:**
+  `creatorFeesAccrued` is attributed to `setDefaultCreatorFees`, which never writes it.
+  Pre-existing, **not changed** here.
+* **`GraduationHelper` is deliberately not a target.** It is inert on testnet (§7) and absent
+  from the v4 stack the runbook deploys.
