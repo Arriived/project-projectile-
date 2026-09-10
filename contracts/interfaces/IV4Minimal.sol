@@ -24,9 +24,13 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 interface IV4PositionManager {
     function modifyLiquidities(bytes calldata unlockData, uint256 deadline) external payable;
 
-    // Swallows a PoolAlreadyInitialized revert and returns type(int24).max instead --
-    // PoolInitializer_v4.sol:13-19. The adapter relies on that documented behaviour
-    // rather than wrapping the call in a try/catch of its own.
+    // ⚠ CORRECTED. This previously read "Swallows a PoolAlreadyInitialized revert and
+    // returns type(int24).max instead". It does not discriminate: PoolInitializer_v4.sol:16
+    // is a BARE `catch {}` that returns type(int24).max for ANY revert -- a hook
+    // rejection, a tick-spacing error, currencies out of order. Relying on it therefore
+    // collapses several distinct failures into one indistinguishable outcome, and it
+    // makes PositionManager (not the adapter) the msg.sender that a hook's
+    // beforeInitialize observes.
     function initializePool(PoolKey calldata key, uint160 sqrtPriceX96) external payable returns (int24);
 
     function nextTokenId() external view returns (uint256);
@@ -40,4 +44,13 @@ interface IV4PositionManager {
 // Selector verified against the deployed Permit2 on Base: 0x87517c45.
 interface IPermit2Allowance {
     function approve(address token, address spender, uint160 amount, uint48 expiration) external;
+}
+
+// The one function BallistaV4Adapter reads on its hook, at construction only.
+//
+// Declared minimally rather than importing BallistaFeeHook so that the adapter does not
+// drag the hook (and through it LFX1, and through that all of OpenZeppelin's ERC20 and
+// Ownable) into its own compilation unit for a single view call.
+interface IHookBinding {
+    function adapter() external view returns (address);
 }

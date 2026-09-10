@@ -10,13 +10,15 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
+import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 
 import {IDEXRouter} from "./interfaces/IDEXRouter.sol";
-import {IV4PositionManager, IPermit2Allowance} from "./interfaces/IV4Minimal.sol";
+import {IV4PositionManager, IPermit2Allowance, IHookBinding} from "./interfaces/IV4Minimal.sol";
 
 // Seeds a Uniswap v4 pool through the ONE method the frozen LFX1 factory calls.
 //
@@ -43,6 +45,14 @@ contract BallistaV4Adapter is IDEXRouter, ReentrancyGuard {
     IV4PositionManager public immutable positionManager;
     IPermit2Allowance public immutable permit2;
 
+    // The ONLY address permitted to call addLiquidity. See the gate comment there.
+    address public immutable lfx1;
+
+    // The fee hook every pool this adapter creates will carry. Part of the PoolKey, so it
+    // is fixed for the life of this contract: a different hook is a different PoolId and
+    // therefore a different pool (PoolId.sol:14).
+    IHooks public immutable hook;
+
     // Zero LP fee. The rationale is recorded in CLAUDE.md section 6 and is NOT
     // "Uniswap charges a fee on top of ours" -- it is that anyone can add liquidity to
     // a permissionless pool and take a pro-rata share of LP fees, so a fee here would
@@ -68,6 +78,13 @@ contract BallistaV4Adapter is IDEXRouter, ReentrancyGuard {
     uint256 private constant MAX_PRECISE_RATIO = 1 << 63;
     uint256 private constant MAX_AMOUNT_RATIO = 1 << 191;
 
+    // Derived from v4-core's own constants, never written as a literal 0x2044. A v4-core
+    // bump that moved a bit would otherwise leave this silently describing the old layout
+    // -- the same failure scripts/mine-hook-salt.js avoids by parsing Hooks.sol at run
+    // time instead of hardcoding the target.
+    uint160 private constant REQUIRED_HOOK_FLAGS =
+        Hooks.BEFORE_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG;
+
     error ZeroAmount();
     error IdenticalCurrencies();
     error DeadlineExpired();
@@ -77,6 +94,11 @@ contract BallistaV4Adapter is IDEXRouter, ReentrancyGuard {
     error NoLiquidityMinted();
     error PositionNotMinted(uint256 tokenId, address expectedOwner, address actualOwner);
     error NothingConsumed();
+    error ZeroAddress();
+    error NotLfx1(address caller);
+    error ZeroHook();
+    error HookFlagsWrong(uint160 flags, uint160 required);
+    error HookNotBoundToThis(address hookThinksAdapterIs);
 
     event PoolSeeded(
         address indexed currency0,
@@ -89,14 +111,100 @@ contract BallistaV4Adapter is IDEXRouter, ReentrancyGuard {
         address recipient
     );
 
-    constructor(IPoolManager poolManager_, IV4PositionManager positionManager_, IPermit2Allowance permit2_) {
+    // ⚠ `lfx1` is the OUTER HALF OF A TWO-ENDED GATE and is not a convenience field.
+    // See the comment on addLiquidity. Zero-checked because an adapter with lfx1 ==
+    // address(0) is an adapter nothing can ever call.
+    //
+    // ⚠ THE THREE HOOK CHECKS BELOW EXIST BECAUSE A WRONG HOOK IS THE ONLY FAILURE IN
+    // THIS DEPLOYMENT THAT IS SILENT AT BOTH ENDS. They are ordered cheapest-first and
+    // each catches something the others do not.
+    constructor(
+        IPoolManager poolManager_,
+        IV4PositionManager positionManager_,
+        IPermit2Allowance permit2_,
+        address lfx1_,
+        IHooks hook_
+    ) {
+        if (lfx1_ == address(0)) revert ZeroAddress();
+
+        // 1. ZERO HOOK. This is the dangerous one and it does NOT announce itself.
+        //    Hooks.isValidHookAddress(IHooks(0), fee) returns TRUE for a static fee --
+        //    a hookless pool is perfectly legal v4 -- so an adapter built with
+        //    hooks: address(0) graduates SUCCESSFULLY, creates the pool, burns the LP,
+        //    and then takes no fee for the rest of time. Nothing reverts, nothing logs,
+        //    and the pool looks healthy. Liquidity is burned, so it can never migrate to
+        //    a corrected pool either.
+        //
+        //    ⚠ IT IS DELIBERATELY REDUNDANT WITH CHECK 2, and the red-proof showed why
+        //    that is worth stating: removing this line does NOT let a zero hook through,
+        //    because uint160(0) & ALL_HOOK_MASK is 0 and 0 != REQUIRED_HOOK_FLAGS, so
+        //    check 2 rejects it anyway -- with HookFlagsWrong(0, 0x2044), which reads
+        //    like a mis-mined salt rather than the far more likely truth that someone
+        //    passed address(0). This check exists to NAME the failure, not to be the only
+        //    barrier against it. Do not delete it as redundant.
+        if (address(hook_) == address(0)) revert ZeroHook();
+
+        // 2. FLAG BITS. A v4 hook's permissions ARE its address: PoolManager calls only
+        //    the callbacks whose bit is set (Hooks.sol, hasPermission). A non-zero hook
+        //    at a wrongly-flagged address passes check 1 and then simply never has
+        //    afterSwap invoked -- the same silent failure by another route.
+        //
+        //    ⚠ THIS IS NOT REDUNDANT WITH BaseHook's OWN CONSTRUCTOR CHECK. That one
+        //    asserts OUR HOOK's address matches the permissions our hook DECLARES. It is
+        //    a fact about the hook, and it never runs for whatever address THIS contract
+        //    was handed. The two constrain different things.
+        uint160 flags = uint160(address(hook_)) & Hooks.ALL_HOOK_MASK;
+        if (flags != REQUIRED_HOOK_FLAGS) revert HookFlagsWrong(flags, REQUIRED_HOOK_FLAGS);
+
+        // 3. THE BINDING ITSELF. Checks 1 and 2 are satisfied by any correctly-flagged
+        //    address, including one produced by a mis-predicted deployment nonce. This
+        //    asks the hook who IT thinks its adapter is and requires the answer to be us.
+        //
+        //    ⚠ THIS IS WHAT MAKES THE NONCE PREDICTION SELF-VERIFYING. The hook is mined
+        //    and deployed first, carrying this contract's PREDICTED CREATE address. If
+        //    that prediction was wrong -- a stray transaction moved the nonce -- this
+        //    deployment reverts here instead of succeeding into a pair that can never
+        //    graduate. address(this) is already final inside a constructor.
+        //
+        //    It does not prove the hook is a BallistaFeeHook, only that it names us. A
+        //    crafted impostor could answer correctly; a mistyped or mis-predicted address
+        //    cannot. Deliberate mis-binding stays out of scope -- only the deployer can
+        //    choose this argument. CLAUDE.md section 20.7's post-deploy read-back remains
+        //    the check that proves the pair in BOTH directions.
+        address boundTo = IHookBinding(address(hook_)).adapter();
+        if (boundTo != address(this)) revert HookNotBoundToThis(boundTo);
+
         poolManager = poolManager_;
         positionManager = positionManager_;
         permit2 = permit2_;
+        lfx1 = lfx1_;
+        hook = hook_;
     }
 
     // The only entry point. The signature is IDEXRouter's, unchanged, because LFX1 is
     // frozen and calls exactly this.
+    //
+    // ⚠️​ DO NOT REMOVE THE msg.sender == lfx1 GATE BELOW. IT IS THE OUTER HALF OF A
+    // TWO-ENDED GATE AND REMOVING IT REOPENS A HOLE NOTHING WILL REPORT.
+    //
+    // BallistaFeeHook.beforeInitialize admits only `sender == adapter`. On its own that
+    // proves nothing, because it would mean only that SOMEONE routed through this
+    // contract. If this function is callable by anyone, an attacker buys dust off a live
+    // curve and calls it with their own two amounts at a ratio of their choosing -- and
+    // this contract obediently initialises that token's pool at the attacker's price,
+    // for the entire ACTIVE phase of the curve, days or weeks before graduation. The
+    // real graduation then fails its own price check and the curve parks at
+    // GRADUATION_READY with both sides closed and holders frozen.
+    //
+    // With the gate, the only caller is LFX1._performGraduation, which is reachable only
+    // on a threshold crossing or from the permissionless graduate() -- and both pass the
+    // curve's TRUE reserves (LFX1.sol:656-664), never an attacker's ratio. That closes
+    // the pre-token window, the whole ACTIVE window and the parked window together.
+    //
+    // Nothing reverts, nothing logs and every other test still passes if this line is
+    // deleted. `A_addLiquidity_rejects_a_caller_that_is_not_LFX1` in the fork suite is
+    // the only thing standing between a future edit and a silently reopened hole.
+    // CLAUDE.md section 20.6.
     //
     // amountAMin / amountBMin are ACCEPTED AND NOT ENFORCED AS WRITTEN. That is the
     // one place this contract knowingly departs from its v2 counterpart. See "the
@@ -112,6 +220,7 @@ contract BallistaV4Adapter is IDEXRouter, ReentrancyGuard {
         address to,
         uint256 deadline
     ) external override nonReentrant returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
+        if (msg.sender != lfx1) revert NotLfx1(msg.sender);
         if (block.timestamp > deadline) revert DeadlineExpired();
         if (tokenA == tokenB) revert IdenticalCurrencies();
         if (amountADesired == 0 || amountBDesired == 0) revert ZeroAmount();
@@ -160,7 +269,7 @@ contract BallistaV4Adapter is IDEXRouter, ReentrancyGuard {
             currency1: Currency.wrap(currency1),
             fee: POOL_FEE,
             tickSpacing: TICK_SPACING,
-            hooks: IHooks(address(0))
+            hooks: hook
         });
 
         // 3 and 4. Price from the amounts actually held, then initialise and verify.
@@ -200,9 +309,27 @@ contract BallistaV4Adapter is IDEXRouter, ReentrancyGuard {
         );
     }
 
-    // 4. Initialise, then verify. initializePool swallows PoolAlreadyInitialized and
-    //    returns type(int24).max instead (PoolInitializer_v4.sol:13-19), so the call
-    //    is safe whether or not the pool already exists.
+    // 4. Initialise, then verify.
+    //
+    // ⚠ CORRECTED. This comment previously read "initializePool swallows
+    // PoolAlreadyInitialized and returns type(int24).max instead". That overstated the
+    // wrapper's precision in the direction that matters. PoolInitializer_v4.sol:14-18 is
+    // a BARE `catch {}`:
+    //
+    //     try poolManager.initialize(key, sqrtPriceX96) returns (int24 tick) { return tick; }
+    //     catch { return type(int24).max; }
+    //
+    // It swallows EVERY revert, not PoolAlreadyInitialized specifically -- a hook
+    // rejection, a tick-spacing error, currencies out of order, all of it. So this
+    // contract cannot presently tell "the pool already existed" from "something refused
+    // us", and every one of those surfaces below as PoolPriceMismatch(expected, 0). That
+    // is the same class of defect as a comment asserting a protection that does not hold,
+    // and it is why the hook's own revert reason can never reach a caller today.
+    //
+    // The fix is to call poolManager.initialize directly and catch the 4-byte
+    // Pool.PoolAlreadyInitialized selector specifically, re-raising everything else --
+    // which is also what makes a `sender == adapter` gate possible in the hook, since the
+    // wrapper otherwise makes PositionManager the msg.sender that beforeInitialize sees.
     //
     // THE STRICT-MIN SUBSTITUTE.
     //
@@ -236,7 +363,52 @@ contract BallistaV4Adapter is IDEXRouter, ReentrancyGuard {
         returns (uint160 sqrtPriceX96)
     {
         sqrtPriceX96 = _sqrtPriceX96(amount0, amount1);
-        positionManager.initializePool(key, sqrtPriceX96);
+
+        // ⚠ DIRECT, NOT THROUGH positionManager.initializePool, AND FOR TWO REASONS.
+        //
+        // 1. msg.sender. PoolManager passes its OWN caller to the hook
+        //    (PoolManager.initialize calls key.hooks.beforeInitialize, and Hooks.sol
+        //    encodes msg.sender into that call). Routing through the PositionManager
+        //    wrapper therefore makes POSITION MANAGER the `sender` a hook observes --
+        //    which is permissionless and identifies nothing. Calling PoolManager
+        //    directly is what makes `sender == adapter` mean anything at all.
+        //
+        // 2. The wrapper's catch is BARE. PoolInitializer_v4.sol:14-18 returns
+        //    type(int24).max for ANY revert, so a hook rejection, a tick-spacing error
+        //    and an already-existing pool are indistinguishable, and the hook's own
+        //    reason can never reach a caller or a test.
+        //
+        // So the already-initialised case is caught HERE, by selector, and everything
+        // else is re-raised verbatim.
+        try poolManager.initialize(key, sqrtPriceX96) returns (int24) {
+            // Fresh pool, initialised at our price. Fall through to the check anyway --
+            // it is nearly free and it is the one assertion that matters.
+        } catch (bytes memory reason) {
+            // ⚠ Pool.sol:101 throws through CustomRevert.revertWith(bytes4), which is
+            // `mstore(0, selector); revert(0, 0x04)` -- a BARE four-byte body with no
+            // ABI wrapper and no arguments. Matching on length AND selector is what
+            // stops this from swallowing a longer revert that merely happens to start
+            // with the same four bytes.
+            bytes4 selector;
+            if (reason.length == 4) {
+                assembly ("memory-safe") {
+                    selector := mload(add(reason, 0x20))
+                }
+            }
+            if (selector != Pool.PoolAlreadyInitialized.selector) {
+                // Not ours to interpret. Re-raise verbatim so the hook's own error --
+                // NotAdapter, WrongFee, UnknownCurve -- survives to the caller and to
+                // the tests that must name it (CLAUDE.md section 16.4).
+                assembly ("memory-safe") {
+                    revert(add(reason, 0x20), mload(reason))
+                }
+            }
+            // Already initialised. That is reachable on exactly one path: a previous
+            // graduation attempt whose addLiquidity RETURNED but produced zero
+            // liquidity, which LFX1 treats as a non-reverting failure (LFX1.sol:672-674)
+            // so the adapter's effects commit while the curve parks. The retry lands
+            // here, and the price check below is what decides whether it may proceed.
+        }
 
         (uint160 poolSqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
         if (poolSqrtPriceX96 != sqrtPriceX96) {

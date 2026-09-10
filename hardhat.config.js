@@ -10,6 +10,20 @@ require("dotenv").config();
 // Both were tested against the live factory before switching: same chainId, same reads.
 const ARC_TESTNET_RPC_URL = process.env.ARC_TESTNET_RPC_URL || "https://rpc.testnet.arc.io";
 const ARC_TESTNET_RPC_ALIAS = "https://rpc.testnet.arc.network"; // working, undocumented
+
+// ⚠ NAMED BLANKS FOR ARC MAINNET. Both are intentionally undefined until supplied.
+//
+// ARC_MAINNET_RPC_URL   -- from Circle directly (docs.arc.io / developers.circle.com) or a
+//                          Circle-NAMED provider. Never from a search result.
+// MAINNET_DEPLOYER_PRIVATE_KEY
+//                       -- a DEDICATED key that signs nothing else, ever. The v4 stack
+//                          deploys across three CONSECUTIVE nonces and the hook's mined
+//                          salt embeds addresses predicted from them, so a single stray
+//                          transaction from this key invalidates the salt and produces a
+//                          stack that deploys cleanly and can never graduate. The existing
+//                          testnet deployer is at nonce 237 and cannot be used.
+const ARC_MAINNET_RPC_URL = process.env.ARC_MAINNET_RPC_URL || "";
+const MAINNET_DEPLOYER_PRIVATE_KEY = process.env.MAINNET_DEPLOYER_PRIVATE_KEY || "";
 const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY;
 const MAINNET_RPC_URL = process.env.MAINNET_RPC_URL;
 
@@ -95,10 +109,40 @@ module.exports = {
       chainId: 5042002,
       accounts: DEPLOYER_PRIVATE_KEY ? [DEPLOYER_PRIVATE_KEY] : [],
     },
+
+    // ⚠ ARC MAINNET. THE CHAIN ID IS MEASURED; THE OTHER TWO VALUES ARE NAMED BLANKS.
+    //
+    // chainId 5042 is settled (CLAUDE.md 20.4): primary-sourced from circlefin/arc-node
+    // and since MEASURED on the chain itself as 0x13b2. Three places in this file's
+    // documentation still said UNSOURCED and are superseded there.
+    //
+    // ⚠ THE RPC URL MUST COME FROM CIRCLE DIRECTLY OR FROM A CIRCLE-NAMED PROVIDER.
+    // Not from a search result, not from a chain-list aggregator, not from a model. That
+    // is CLAUDE.md section 2's standing rule and it has already paid for itself: section
+    // 9.5 found the documented testnet host is rpc.testnet.arc.io while an undocumented
+    // .network alias also answers, and section 18.6 records Circle's own vendored skill
+    // giving the alias. An RPC that answers is not evidence it is the right one.
+    //
+    // ⚠ AND THE EXPLORER TARGET IS UNSETTLED, NOT MERELY UNKNOWN. The etherscan block
+    // below is configured for Blockscout because that is what Arc TESTNET runs. Uniswap's
+    // own Arc playbook flags confirming whether Arcscan is Etherscan-compatible or
+    // Blockscout BEFORE deploying, and Circle's contract-addresses page still says mainnet
+    // addresses are not yet available. Treat the testnet shape as an assumption to be
+    // checked, never as a mainnet fact -- a wrong verifier is discovered after the
+    // bytecode is already immutable on chain.
+    arcMainnet: {
+      url: ARC_MAINNET_RPC_URL, // <-- BLANK. From Circle or a Circle-named provider only.
+      chainId: 5042,
+      accounts: MAINNET_DEPLOYER_PRIVATE_KEY ? [MAINNET_DEPLOYER_PRIVATE_KEY] : [],
+    },
   },
   etherscan: {
     apiKey: {
       arcTestnet: "empty", // Blockscout doesn't require a real key, but the field must be non-empty
+      // ⚠ UNSETTLED. If Arcscan turns out to be Etherscan-compatible rather than
+      // Blockscout, this needs a real key and the urls below change shape. Confirm before
+      // deploying, not after.
+      arcMainnet: process.env.ARC_MAINNET_EXPLORER_KEY || "empty",
     },
     customChains: [
       {
@@ -107,6 +151,27 @@ module.exports = {
         urls: {
           apiURL: "https://testnet.arcscan.app/api",
           browserURL: "https://testnet.arcscan.app",
+        },
+      },
+      // ⚠ ARC MAINNET VERIFICATION — SHAPE UNCONFIRMED, VALUES BLANK.
+      //
+      // The two URLs below mirror the TESTNET shape, which is Blockscout. That is an
+      // ASSUMPTION carried across, not a mainnet fact:
+      //   - Uniswap's own Arc playbook flags confirming whether Arcscan is
+      //     Etherscan-compatible or Blockscout BEFORE deploying;
+      //   - Circle's contract-addresses page still states mainnet addresses are not yet
+      //     available, so there is no published mainnet explorer endpoint to copy.
+      //
+      // If it is Etherscan-compatible the apiURL shape and the key requirement both
+      // change. Confirm from Circle or a Circle-named source and fill these in. Getting it
+      // wrong is discovered only after the bytecode is immutable on chain, and an
+      // unverified factory undermines the one thing this project sells.
+      {
+        network: "arcMainnet",
+        chainId: 5042,
+        urls: {
+          apiURL: process.env.ARC_MAINNET_EXPLORER_API || "", // <-- BLANK
+          browserURL: process.env.ARC_MAINNET_EXPLORER_URL || "", // <-- BLANK
         },
       },
     ],

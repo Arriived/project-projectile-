@@ -1,5 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
+const { deployBoundPair } = require('./helpers/v4deploy');
 
 // Local, unforked unit tests for the adapter's price derivation.
 //
@@ -37,7 +38,13 @@ describe('BallistaV4Adapter — price math (local)', function () {
   let math;
 
   before(async function () {
-    math = await (await ethers.getContractFactory('V4AdapterMathHarness')).deploy();
+    // The harness inherits the adapter, so the adapter's constructor runs -- including
+    // the three hook checks. A correctly-flagged MockHookBinding bound to the harness's
+    // own predicted address is therefore required even for pure-math tests. Same
+    // sequence production uses; see test/helpers/v4deploy.js.
+    const [signer] = await ethers.getSigners();
+    const pair = await deployBoundPair(signer, 'MockHookBinding', [], 'V4AdapterMathHarness', []);
+    math = pair.adapter;
   });
 
   it('M1. _sqrt matches an independent reference across the 256-bit range', async function () {

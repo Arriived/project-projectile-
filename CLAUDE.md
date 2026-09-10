@@ -3283,6 +3283,21 @@ expresses) for a ceiling of `2**192`. That is beyond what v4 itself can represen
 now a backstop rather than a limit. Both branches are pinned as agreeing across the switch
 (`verify` M7 in `test/V4AdapterMath.test.js`).
 
+⚠ **AMENDED 10 September 2026 — THE PARAGRAPH BELOW SAYS "the arithmetic no longer breaks
+above ~54 USDC", AND THAT WORDING MISLEADS.** It reads as though ~54 USDC is still a floor.
+It is not. The wide branch removed the `2**64` bound entirely: the live constants are
+`MAX_PRECISE_RATIO = 1 << 63` and `MAX_AMOUNT_RATIO = 1 << 191`
+(`BallistaV4Adapter.sol:78-79`), which puts the arithmetic floor at **~3e-37 USDC**, with
+v4's own `MIN_SQRT_PRICE` the binding constraint at **~3e-18 USDC**. **A 10 USDC threshold
+is exercised and passing** — `V4AdapterMath` M8, "an extreme-but-real threshold prices
+correctly instead of reverting".
+
+**So 54.2 must not be quoted as a live constraint anywhere.** It was the floor before the
+fix and it is now only history. `Fork.v4.attack` A8's own comment carried the stale framing
+and has been corrected; its 60 USDC low case is kept because it is measured, not because
+anything breaks beneath it. **The paragraph's real point survives untouched and is the part
+that matters:** the threshold is snapshotted per curve and unfixable after a launch.
+
 ⚠ **OPERATIONAL CONSEQUENCE, and it belongs in the deployment runbook's parameter
 checklist (§12.8 item 2, which does not exist yet):** `setDefaultGraduationThreshold` has an
 effective floor. The arithmetic no longer breaks above ~54 USDC, but the value is still
@@ -3559,6 +3574,33 @@ the griefing race, in a new place** — and unlike R6 it can be triggered pre-em
 bulk, before the target exists.
 
 ## 16.2 ⚠ Run the two fork suites SEPARATELY — together they present as a hang
+
+⚠ **AMENDED 10 September 2026 — THIS CONSTRAINT IS NOW UNVERIFIED, NOT DISPROVED, AND IT
+IS DELIBERATELY NOT DELETED.** Everything below stands as originally written; read it with
+this first.
+
+**What was actually observed, then and since:**
+
+| | |
+|---|---|
+| when this was written | two fork suites in one mocha process timed out after 30 minutes |
+| the conditions | **not recorded.** Cache state, endpoint load and time of day are all unknown |
+| since | **FOUR fork suites plus two local ones ran together in ten minutes**, on `mainnet.base.org`, with no hang — `Fork.v4`, `Fork.v4.corrector`, `Fork.v4.attack` and `Fork.v4.hook` |
+| the difference we can name | the fork cache was **warm** from many runs that session. That is a plausible cause and it is not a measured one |
+
+**So treat it as unverified rather than as a standing fact.** A rule that was true once may
+be true again on a cold cache or a loaded endpoint, and the failure mode below — a hang
+rather than an error — is why it must not be quietly dropped: rediscovering it costs the
+same hours it cost the first time.
+
+⚠ **AND THERE IS NOW A REASON TO RUN THEM TOGETHER ANYWAY.** §20.17 records a test that
+passed standalone and failed in combination. Separate per-suite runs cannot detect that
+class at all, so the count of record comes from ONE combined run. If it hangs, set
+`BASE_RPC_URL` to a dedicated provider — which the note below already says removes the
+constraint — rather than falling back to separate runs.
+
+**The original note follows, unchanged:**
+
 
 ```bash
 FORK_BASE=1 npx hardhat test test/Fork.v4.test.js
@@ -4085,3 +4127,1671 @@ gives `rpc.testnet.arc.network` (its lines 19, 31, 32). We use `rpc.testnet.arc.
 undocumented alias carrying no compatibility promise. Both answer `eth_chainId` with
 `0x4cef52`. The file is committed VERBATIM rather than corrected, so a future session must
 not read it as licence to "fix" `chain.ts` back to the alias.
+
+---
+
+# 19. SESSION OF 10 SEPTEMBER 2026 — the third architecture, the Pons read, and the launch-venue decision
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§18. Nothing above this line was
+deleted. Where a section above is narrowed rather than overturned, the correction says so
+and names what it used to claim.
+
+Three read-only investigations, no contract written and none modified. `contracts/` is
+byte-identical to `9add6d7`. Third-party source was read in a scratchpad **outside the
+repo** and none of it was copied in.
+
+## 19.1 ⚠ THE DECISION: **v2 at launch.** v4 remains the destination, unhurried
+
+**Operator decision, 10 September 2026.** §17 settled that v4 is the graduation *venue*;
+this settles the *date*, and the two are not the same question.
+
+* **Arc mainnet opens on the V2 router.** LFX1's frozen `addLiquidity` is a V2-signature
+  call and `0x1f7d7550b1b028f7571e69a784071f0205fd2efa` is a V2 router (§14.1), so this
+  needs **no new contract and no contract change**.
+* **The hook is built afterwards, unhurried, on the Base fork**, to the §18.4 spec.
+* **The venue is switched through `proposeRouter` → 24h → `activateRouter`** when the hook
+  is genuinely proved, never before.
+
+⚠ **THIS DOES NOT REOPEN §17.** v4 with a fee-capturing hook is still the intended
+destination and §6's prohibition on starting phase 2 without a spec still stands. What
+changed is only that the 16 September deployment does not wait for it.
+
+⚠ **AND IT DOES NOT MAKE THE ADAPTER DEAD CODE.** `BallistaV4Adapter.sol` stays exactly
+where it is, built and attacked (§15, §16). It is one `proposeRouter` away from being the
+venue on the day the hook is ready.
+
+### ⚠ The option that was struck: hookless v4 with a burned position
+
+Ruled out explicitly so nobody re-derives it as a compromise. It pays **§18.4's permanent
+cost in full** — `hooks` is part of the `PoolKey`, so a phase-1 pool and a phase-2 pool are
+different pools forever, and phase-1 liquidity is burned and therefore cannot migrate — and
+it pays **§16.1's F1 cost in full**, for **zero fee revenue**. There is no coherent "v4 now,
+hook later": the later hook cannot reach the earlier pools. It is dominated by shipping v2
+on every axis except being nominally on v4.
+
+## 19.2 ⚠ §18.2's "`sender == adapter` CANNOT WORK" IS TOO NARROW — a production system does exactly that
+
+§18.1 item 7 traced the call path and concluded that a hook's `beforeInitialize` sees the
+**PositionManager**, not the adapter, so `sender == adapter` "CANNOT WORK". **That
+reasoning is correct for the path we chose and wrong as a general claim**, and §18.2's
+state-based gate is therefore a workaround for a constraint **we imposed on ourselves**,
+not a v4 limitation.
+
+**The counter-example is deployed, verified and live.** `PonsV2MemeHook`:
+
+```solidity
+PonsV2MemeHook.sol:429   function _beforeInitialize(address sender, PoolKey calldata, uint160) internal view override returns (bytes4) {
+PonsV2MemeHook.sol:430       if (sender != factory) revert NotFactory();
+PonsV2MemeHook.sol:431       return IHooks.beforeInitialize.selector;
+PonsV2MemeHook.sol:432   }
+```
+
+Three lines, one stored address, and their own comment (`:423-428`) states the property we
+wanted: *"Restricting initialization to the factory keeps a pool bearing this hook from
+existing without one."*
+
+**It works because their factory calls `PoolManager.initialize` DIRECTLY.** Uniswap's own
+launcher does the same — `InstantLaunchStrategy.sol:182-183`, commented *"Will revert if
+the pool is already initialized"*. Our adapter goes through
+`positionManager.initializePool` for one specific reason: `PoolInitializer_v4.sol:14-18`
+swallows `PoolAlreadyInitialized`, and `BallistaV4Adapter.sol:203-205` depends on that
+swallow.
+
+⚠ **CONSEQUENCE FOR PHASE 2, TO BE SETTLED BEFORE THE HOOK IS WRITTEN, NOT DURING.**
+§18.2's gate admits a hole it names honestly — the parked-curve window, where an attacker
+passes the `GRADUATION_READY` check between a failed graduation and a retry. **A
+`sender == adapter` gate has no such window.** The cost of switching is that the adapter
+must handle `PoolAlreadyInitialized` itself instead of leaning on the wrapper. That is a
+small, contained change to a contract that is not frozen. **Neither design is adopted here
+— the point is that §18.2 currently records the alternative as impossible, and it is not.**
+
+### Provenance of the Pons read — verified, not scraped
+
+⚠ **Blockscout for chain 4663 (`robinhoodchain.blockscout.com`) is behind a Cloudflare
+challenge. It was NOT bypassed.** The source came from **Sourcify**:
+
+| | |
+|---|---|
+| endpoint | `sourcify.dev/server/v2/contract/4663/0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044` |
+| result | `match`, `creationMatch: match`, `runtimeMatch: match` — a full match on **both** |
+| verifiedAt | `2026-08-05T10:00:13Z` |
+| contract | `PonsV2MemeHook`, `contracts/src/v2/hooks/PonsV2MemeHook.sol`, solc `0.8.35+commit.47b9dedd`, 46 sources |
+| proxy | `isProxy: false` |
+| licence | `PonsV2MemeHook.sol:1` is `// SPDX-License-Identifier: MIT` — **and the file carries no `Copyright` line at all** |
+
+**Cross-checked against the chain rather than trusted.** `eth_getCode` returns **15,167
+bytes**, and the `keccak` topic0 of every event in the source is present in that runtime
+bytecode — `PoolRegistered`, `PoolFeesSwept`, `PoolConversionSkipped`, `PoolBuybackSkipped`,
+`HookFeeCollected`, `PoolFeesRescued`, `OwnershipTransferStarted`. Live reads:
+`owner() = 0x263ed295dafae1d9aadd6e56c4b6f9f38ee019dd`,
+`factory() = 0x7ed598bcef8bd9edd8c97a195c6d13f40801ec7e`,
+`feeSweepOperator() = 0x49bbf2b70955fb3a106e084d4bfda92d334573d2`,
+`hookFeeBps() = 100`, `protocolFeeShareBps() = 3000`.
+
+⚠ **WE ARE NOT COPYING IT, AND MIT IS NOT THE REASON.** The licence permits it and there is
+no copyright notice to preserve, so attribution is nearly free. The reason is structural:
+their `beforeInitialize` is **three of roughly 43,000 bytes**. Everything else is
+buyback-earmark-at-accrual (`:474-479`), a third creator-tax ledger (`:466`, `:481`,
+`:138`), an internal conversion swap with its own `unlockCallback` (`:766-805`), the
+trusted-operator gate that exists only because of that swap (`:611-617`), and an
+`onlyOwner` fee-rescue path (`:555`) — **all of it on our "does not want" list, and the
+first three entangled with the fee path rather than bolted on.** Adapting means deleting
+~90% of a contract and inheriting the deletion risk on the remainder.
+
+⚠ **One thing their design validates rather than contradicts.** `renounceOwnership` is
+overridden to revert (`:235-237`) with the reason *"An ownerless hook could never rotate
+the fee sweep operator, so accrued fees on every graduated pool would stay stranded."*
+**That argument does not reach us.** They need an operator because they convert memecoin
+fees through an internal swap and a creator could otherwise pick a permissive minimum
+around a manipulable spot price (`:605-609`). §18.4's **accrual-only, no conversion, no
+swap on the swap path** removes the operator, which removes the reason for an owner. Our
+spec is the more conservative point on the same trade-off, deliberately.
+
+## 19.3 ⚠ OPTION A IS CLOSED: Uniswap's `FeeSplitter` CANNOT hold our positions
+
+A third architecture was costed and rejected on a hard mechanical fact, recorded here so it
+is not reopened as a fresh idea. `Uniswap/liquidity-launcher` launches into a **hookless**
+v4 pool and locks the position in a `FeeSplitter` for permissionless fee distribution —
+which removes the hook entirely and sounds like it removes our problem.
+
+**It does not work for us, for a reason no amount of design can route around:**
+
+```solidity
+FeeSplitter.sol:89    if (!poolKey.currency0.isAddressZero()) revert InvalidBaseCurrency(tokenId, poolKey.currency0);
+FeeSplitter.sol:154   if (!poolKey.currency0.isAddressZero()) revert InvalidBaseCurrency(tokenId, poolKey.currency0);
+```
+
+**`currency0` MUST be `address(0)` — native ETH.** Its own title says so (`:22`,
+*"custodian of v4 native-ETH LP positions"*). Our adapter builds its key from what LFX1
+hands it (`BallistaV4Adapter.sol:159-163`), which is `address(usdc)` = `0x3600…` and the
+launch token. **Every position we could ever mint reverts `InvalidBaseCurrency` on the
+first `collectFees` call — after the position is already locked in and unrecoverable.**
+
+Three further blockers, each independently sufficient:
+
+1. **It is shape-agnostic but currency-specific.** A full-range two-sided position would
+   collect and split fine; the native-ETH gate is the whole problem. Its single-sided shape
+   is `InstantLaunchStrategy`'s choice (`:200`, `CurrencyAmounts({amount0: 0, amount1: TOTAL_SUPPLY})`),
+   not the splitter's.
+2. ⚠ **It needs a NON-ZERO pool fee, which reverses a settled decision.**
+   `InstantLaunchStrategy.sol:42-44` pairs it with `LP_FEE = 2_500` (25 bps) and
+   `TICK_SPACING = 25`. §6 settled that our pool fee stays **0** because **LP fees are
+   dilutable** — anyone can add liquidity to a permissionless v4 pool and take a pro-rata
+   share. Adopting a splitter re-opens exactly that, on a public pool, against our own
+   revenue.
+3. **`Actions.UNWRAP` at `FeeSplitter.sol:93`** is a WETH9 unwrap, meaningless on Arc; and
+   making `currency0` native on Arc would reintroduce the 1e12 hazard §15.5 exists to
+   prevent — Arc's native view is 18dp and the ERC-20 view at `0x3600…` is 6dp
+   (`docs/CIRCLE_use-arc.md:47-48`, `:53`).
+
+**Worth keeping for the rug-proofing comparison, because it is instructive.** `FeeSplitter`
+is irrecoverable **structurally, by omission** — its entire external surface is
+`getSplits`, `collectFees`, `increaseLiquidity`, `onERC721Received` and `receive()`; there
+is no transfer, approve, withdraw or owner, and the only decrease is hardcoded to zero
+liquidity (`:160`). The same repo ships the access-controlled alternative for contrast —
+`TimelockedPositionRecipient.sol:27-33`, where **anyone** may call `approveOperator()` once
+a block height passes, after which the operator can take the position. **Our burn to
+`0x…dEaD` is the same class as the first and strictly simpler: an address with no code
+needs no bytecode review.**
+
+Licence, for the record: every file in `Uniswap/liquidity-launcher` is
+`// SPDX-License-Identifier: MIT` on line 1, and the root `LICENSE` carries
+**`Copyright (c) 2016 ` with an empty holder**.
+
+## 19.4 ✅ THE SALT-MINING TARGET, VERIFIED — three flags, and no others
+
+§18.4 says to mine for exactly the flags used and no others, because an unused flag that is
+set is a live callback nobody wrote. **This is that target, decoded rather than recalled.**
+
+Constants read from primary source, `Uniswap/v4-core/src/libraries/Hooks.sol:29-47`:
+
+| flag | bit | mask |
+|---|---|---|
+| `BEFORE_INITIALIZE_FLAG` | 13 | `0x2000` |
+| `AFTER_SWAP_FLAG` | 6 | `0x0040` |
+| `AFTER_SWAP_RETURNS_DELTA_FLAG` | 2 | `0x0004` |
+
+**So the hook address must satisfy `address & 0x3FFF == 0x2044`, and every other one of the
+fourteen bits must be clear.**
+
+⚠ **INDEPENDENTLY CONFIRMED AGAINST A PRODUCTION HOOK.** Pons's address
+`0xe5e702641ea86f4ae6cc3cdaed2b886f976be044` ends `0xe044`; its low 14 bits are **`0x2044`**;
+and its own `getHookPermissions` (`PonsV2MemeHook.sol:184-201`) declares
+`beforeInitialize: true`, `afterSwap: true`, `afterSwapReturnDelta: true` and the other
+eleven `false`. **The same three flags our spec calls for, arrived at independently.**
+
+**The delta shape, also confirmed against production.** `PonsV2MemeHook.sol:484` returns
+`int128(uint128(totalAmount))` — a **single positive `int128` on the unspecified currency**,
+equal to everything the hook took. The unspecified side is derived, not assumed:
+`bool specifiedIsCurrency0 = (params.amountSpecified < 0) == params.zeroForOne;` (`:458`),
+which is correct for all four combinations of exact-in/exact-out × `zeroForOne`. **Do not
+re-derive that line; it is the one place this is easy to get subtly wrong.**
+
+⚠ **One upstream dependency to verify rather than assume if we ever add an internal swap:**
+their comment at `:449-452` states *"v4-core skips a pool's hooks when the hook itself is
+the caller"*, which is what keeps their conversion and buyback legs from being self-taxed.
+Our §18.4 spec has no internal swap, so it does not apply today.
+
+## 19.5 The routing consequence — a COST, and today not even that
+
+Both externally-reported claims were re-verified from the raw files, and both are exactly
+right.
+
+| source | measured |
+|---|---|
+| `Uniswap/hooklist` `chains.json` (main, 2,546 bytes) | **21 entries** — `robinhood` 4663, `tempo` 4217, `megaeth` 4326, `xlayer` 196 **+ 17 others**. A case-insensitive search for `arc` or `5042` returns **zero matches** |
+| `Uniswap/routing-api` `lib/util/hooksAddressesAllowlist.ts` (main, 24,787 bytes) | **34 `ChainId` entries**, `[ChainId.XLAYER]` at `:392`, `[ChainId.TEMPO]` at `:394`, **no `ChainId.ARC`** |
+
+⚠ **THE COUNTER-EVIDENCE IS STRONGER THAN THE FINDING.**
+
+* **`ChainId.ROBINHOOD` is equally absent** from that allowlist — zero matches for
+  `robinhood` or `4663`.
+* Both chains **exist** in the SDK: `Uniswap/sdks/sdks/sdk-core/src/chains.ts:38-39` gives
+  `ARC = 5042` and `ROBINHOOD = 4663`. Neither absence is a missing chain definition.
+* **Arc is absent from routing-api ENTIRELY, not just from the hooks allowlist.**
+  `lib/util/onChainQuoteProviderConfigs.ts` carries `ChainId.TEMPO` ×2 and `ChainId.XLAYER`
+  ×14 and **zero** `ChainId.ARC` / `ChainId.ROBINHOOD`.
+* **Pons runs there regardless.** `eth_getLogs` on the hook for topic0 `PoolRegistered`,
+  deploy block to latest: **6,476 events**, blocks 27,828,161 → 59,099,213.
+
+**So a delta-flag hook does not lose us routing we currently have.** Uniswap does not route
+Arc at all. The requirement itself is real and directly sourced —
+`developers.uniswap.org/hook-allowlist`: *"You only need to fill in this form if your hook
+deployment addresses start with 0x91 or your hook uses any of the following flags:
+beforeSwapReturnsDelta, afterSwapReturnsDelta, or dynamicFees."* — i.e. **manual review by
+form, not automatic allowlisting.** It becomes a cost only if and when Uniswap adds Arc to
+routing-api, at which point we submit the form like anyone else.
+
+⚠ **NOT VERIFIED FROM PRIMARY SOURCE, recorded as second-hand:** the further criteria that
+upgradable hooks and hooks requiring custom data inputs are not approved, that audited
+hooks are prioritised, and that major pairs such as ETH↔USDC also trigger review. These
+live on `support.uniswap.org/hc/en-us/articles/48291859140621`, which returns **HTTP 403**
+to automated fetches — the whole host does. A browser is needed. **Our pool has USDC on one
+side, so the major-pair criterion probably reaches us; do not treat that as established.**
+
+⚠ **The routing question is a distraction from the real one and should not be allowed to
+dominate the phase-2 discussion.** The flag costs a future form. What actually costs us is
+§15.8: **Arc has no v4, so an immutable ownerless hook cannot be integration-tested on Arc
+at all.** Routing is a marketing problem with a known remedy; that one is an engineering
+problem, and it is the reason the hook is not shipping on the 16th.
+
+## 19.6 ⚠ RULE: `grep -c` cannot distinguish "no matches" from "the pattern was empty"
+
+**Recorded because it fired inside the byte-level CLAUDE.md check this file mandates**, on
+the append that produced this very section — the same shape as §8's "a `204` cannot tell
+refused from matched-nothing" and §5's vacuous assertion.
+
+A `grep -c` for a carriage return returns **0** when run directly against this file. The
+same expression nested inside a shell command substitution returned **4087**, which is
+**exactly the file's line count**, because the CR was stripped before `grep` saw it and an
+empty pattern matches every line. Read naively that says "this file is entirely CRLF"; the
+same failure in the other direction would have reported "clean" for a file that was not.
+
+**Count the bytes instead, with something that cannot degrade into a match-everything
+pattern:**
+
+```bash
+tr -cd '\r' < CLAUDE.md | wc -c     # 0
+tr -cd '\n' < CLAUDE.md | wc -c     # 4087
+git ls-files --eol CLAUDE.md        # i/lf  w/lf  attr/text eol=lf
+```
+
+**And keep a control in the same run.** `package.json` reports `CR=27 LF=27`, which proves
+the method discriminates rather than merely returning zero for everything — the same
+discipline §10 requires of an `eth_getCode` probe.
+
+---
+
+# 20. ⚠ DECIDED, 10 September 2026 (later the same day): **v4 WITH OUR HOOK AT LAUNCH.** §19.1 is superseded
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§19. Nothing above this line was
+deleted. §19 stands exactly as written and is **twelve hours old** — read it, then read this.
+
+## 20.1 The decision, and precisely which argument it answered
+
+**Operator decision. Arc mainnet opens on v4, with `BallistaV4Adapter` as the router and
+our own fee-capturing hook live from the first graduation.** Not v2.
+
+⚠ **§19.1 IS SUPERSEDED.** It recorded "v2 at launch, hook built unhurried on the Base
+fork, venue switched through the router timelock when proved". That is no longer the plan
+and no session should act on it. The v2 path remains the **fallback** and is unmodified
+(§17.3, §14.1), but it is not what ships.
+
+**The basis, and it is a real answer rather than an override.** §19's recommendation rested
+on one load-bearing objection, stated in §15.8 and repeated in §19.5: *Arc has no v4, so an
+immutable ownerless hook cannot be integration-tested on Arc at all before real money
+touches it.* The operator has removed that objection by arranging a **full production set —
+LFX1, adapter and hook — deployed to Arc PRIVATE MAINNET before the 16th, for integration
+testing against the real PoolManager, PositionManager and Permit2.** That is not a Base
+fork and not a mock; it is the target chain. The objection does not survive it.
+
+⚠ **BE HONEST ABOUT WHAT IS NOT ANSWERED, ONCE, AND THEN STOP RE-LITIGATING.** §19 rested
+on the Arc-testability objection *and* on schedule: an immutable, ownerless, salt-mined
+contract whose event surface cannot be extended later, built to this repo's red-proof bar,
+in under a week. **Private-mainnet testing removes the first and does nothing about the
+second.** That is recorded here so a future session knows the residual was seen and
+accepted rather than missed — **it is not an invitation to reopen the decision.** The
+mitigation is the private-mainnet phase and the test list in §20.5; the abort condition is
+that phase failing.
+
+## 20.2 Arc mainnet exists and was measured — ⚠ PROVENANCE IS THIRD-PARTY, READ THE LABELS
+
+**These figures were taken from raw `eth_` calls on Arc mainnet by a third party with
+private access, reported by the operator. This session has NO access to Arc mainnet and
+could not re-measure any of them.** They are recorded because they are decision-grade and
+because the corroboration below is real — not because they were verified here.
+
+| what | measured | corroboration available from this repo |
+|---|---|---|
+| chain id | **5042** = `0x13b2` | arithmetic checked: `hex(5042) == 0x13b2` ✓ |
+| v4 **PoolManager** `0x8366a3…40951` | 24,009 bytes, `owner` `0x33f2…51e8` | ⚠ **NOT corroborable here** — see below |
+| v4 **PositionManager** `0x6049c9…7f82b` | 23,877 bytes, slot0 decodes ASCII `"Uniswap v4 Positions NFT"` | ✅ **verbatim match** to `v4-periphery/src/PositionManager.sol:137`, `ERC721Permit_v4("Uniswap v4 Positions NFT", "UNI-V4-POSM")` — slot 0 is exactly where an ERC-721 short-string `name` lives |
+| **Permit2** canonical | 9,152 bytes | ✅ **§15.8 measured 9,152 on Arc TESTNET** |
+| **Multicall3** canonical | 3,808 bytes | ✅ **§15.8 measured 3,808 on Arc TESTNET** |
+| **USDC** `0x3600…0000` | 1,798 bytes, `decimals` 6, `symbol` `USDC` | ✅ **§2/§7 measured 1,798 on Arc TESTNET** |
+| Arachnid **CREATE2** deployer | 69 bytes, canonical bytecode | consistent with the published canonical deployer |
+| **V2 Factory** `0x89e5db…49eba` | **13,859 bytes**, `allPairsLength() = 28` | ✅ **exactly the byte count of Ethereum mainnet's canonical `UniswapV2Factory`**, measured from this session against `ethereum-rpc.publicnode.com` |
+| **V2 Router** `0x1f7d75…d2efa` | **21,902 bytes**, `factory()` → `0x89e5db…49eba` | ⚠ **canonical mainnet Router02 is 21,943 bytes — 41 MORE.** See §20.3 |
+| block gas limit | `0x1c9c380` = **30,000,000** | ✅ §15.8 measured the same on Arc TESTNET |
+| base fee | pinned **20 gwei**; `extraData` carries the next block's base fee, 8-byte big-endian | consistent with `app/src/chain.ts:16-18`'s documented floor |
+| block time | ~530 ms (two blocks 15 apart, 8 s between timestamps) | consistent with §9.5's documented ~0.48 s |
+| **LFX1 creation bytecode, real mainnet constructor args** | `eth_estimateGas` = `0x56456b` = **5,653,867 gas, NO REVERT** | ✅ arithmetic: 5,653,867 × 20 gwei = **0.113 USDC**, and the bare `CREATE` floor for a 24,033-byte runtime is ~4,838,600 — 5.65M is the right order |
+
+⚠ **THE ONE PROVENANCE ANCHOR THIS SESSION COULD NOT CHECK.** The operator's strongest
+argument is that PoolManager's `owner` `0x33f26c5d69e2c40956f22c6195b6a499cf4151e8` matches
+what Uniswap independently recorded in `playbook/chains/arc.md` on 2026-06-12. **That repo
+is not public**: `api.github.com/repos/Uniswap/playbook` returns `Not Found`, and both
+`main` and `master` raw fetches of that path return **404**. So the cross-reference cannot
+be confirmed from here and is recorded as **reported, not verified**. §6 already cites "the
+chain playbook" as a source this project has consulted, so access evidently exists
+somewhere — but not from this session, and a future session should not assume it does.
+
+**What DOES stand on its own:** four byte counts that match this repo's own independent Arc
+*testnet* measurements, one that matches Ethereum mainnet exactly, a storage-slot string
+that matches Uniswap's own source verbatim, and self-consistent gas arithmetic. That is a
+coherent picture, not a single unverifiable claim.
+
+⚠ **AND THE DECISIVE ONE FOR US: `eth_estimateGas` ON LFX1's REAL CREATION BYTECODE
+SUCCEEDS ON ARC MAINNET.** The frozen contract deploys, with the real USDC address and a
+real router, for about 0.113 USDC. That is the single largest de-risking in this file since
+the freeze.
+
+## 20.3 ⚠ THE ARC V2 ROUTER IS **NOT** BYTE-IDENTICAL TO CANONICAL MAINNET ROUTER02
+
+Measured this session against Ethereum mainnet: `0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D`
+is **21,943 bytes**. Arc's is reported at **21,902** — **41 bytes shorter** — while Arc's
+V2 *Factory* matches canonical exactly at 13,859.
+
+**Why this matters even though v2 is now only the fallback.** `UniswapV2Library.pairFor`
+(`v2-periphery/contracts/libraries/UniswapV2Library.sol:18-26`) computes the pair address
+by CREATE2 from a **hardcoded 32-byte init code hash** baked into the router's own
+bytecode, and `UniswapV2Factory.createPair` (`v2-core/contracts/UniswapV2Factory.sol:28-31`)
+deploys `type(UniswapV2Pair).creationCode` with salt `keccak256(token0, token1)`. **A
+router whose embedded hash does not match the factory's actual pair bytecode computes an
+address with no code.**
+
+**Traced failure mode:** `_addLiquidity` (`UniswapV2Router02.sol:45`) calls `getReserves` →
+`pairFor` → `.getReserves()` on a codeless address → empty returndata → decode reverts.
+That is **before** the two `safeTransferFrom` calls at `:73-74`, so **no funds move**. LFX1
+catches it (`LFX1.sol:655-687`), zeroes both approvals, emits `GraduationAttemptFailed`, and
+the curve parks at `GRADUATION_READY` with reserves intact. **Loud and recoverable, never
+silent and lossy.**
+
+**The zero-gas probe, validated in both directions this session:** search the router's
+runtime bytecode for the canonical hash
+`96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f`. Present in canonical
+mainnet Router02; **absent** in mainnet USDC (2,186 bytes) and absent in the mainnet V2
+Factory itself (13,859 bytes) — both real contracts with code, so a `false` is a real
+answer rather than an artefact of an empty response. ⚠ **Absence does not prove failure** —
+Arc's router may embed a different, correct-for-Arc hash. It escalates to: compare
+`factory.allPairs(0)` against the CREATE2 address recomputed from the router's embedded
+hash. **Arc mainnet reports `allPairsLength() = 28`, so that comparison is available and
+must be run before the v2 fallback is ever activated.**
+
+## 20.4 Four Arc mainnet facts that change something, and one that closes a contradiction
+
+### ✅ The mainnet chain ID contradiction is SETTLED: **5042**
+
+⚠ **This file has carried the disagreement in four places.** §2 (`CLAUDE.md:494`) recorded
+`5042` as **PRIMARY-SOURCED** from `circlefin/arc-node`; §9.5 (`:1591`) said *"`5042`
+remains unsourced and must not be used"*; §10 (`:1613`) said **UNSOURCED**, "do not put
+`5042` anywhere until confirmed"; §11.10 (`:1972`) said the same. **§2 was right. The other
+three are superseded** — the value is now measured on the chain itself, `0x13b2`.
+
+**§10's fetch-and-verify-at-runtime rule is untouched and still binding.** It was always
+about deployment discipline, not about doubt over the number. Do not hardcode `5042` in the
+frontend; resolve it and assert it. Confirmed clean this session: `grep '\b5042\b'` across
+`app/src` and `app/scripts` returns nothing outside `5042002`.
+
+### ⚠ ARC MAINNET USDC IS A **TRANSPARENT UPGRADEABLE PROXY**. This is new and it is not small
+
+`implementation()`, `changeAdmin()` and `admin()` selectors are present, and slot 0 holds
+`0xf5a5658b55983e2aa037cac7a8431b510e8a97f4`.
+
+**R1 in §3 records "Circle pauses USDC" as OPEN, permanent and unmitigable. Upgradeability
+is a strictly larger power than pausing and is not currently in the register.** Circle can
+change what USDC *does*, not merely stop it — including the truncating 6dp-over-18dp
+`balanceOf` semantics that §1.6's exactness proof depends on, and the settlement behaviour
+`_settleBuy`'s balance-delta check measures against.
+
+⚠ **This does NOT make §1.6 wrong.** Its lemma
+`floor((N + A·10^12)/10^12) = floor(N/10^12) + A` holds for the token as it behaves today,
+and the delta check reverts loudly rather than losing funds if behaviour ever changes. What
+changes is the *class* of the dependency: it is no longer "a token whose semantics we have
+measured" but "a token whose semantics Circle can replace without redeploying". **Candidate
+register entry, deliberately not added unilaterally — the register is the operator's.**
+It belongs in public risk copy alongside R1, which §3 already says R1 does.
+
+### ⚠ `router.WETH()` ON ARC IS A DELIBERATE TRIPWIRE — every ETH-suffixed router function is fatal
+
+It returns `0x8bceaa40…17937f`, **53 bytes whose entire runtime reverts with custom error
+`0xea3559ef` on any call.** Someone deployed a poison pill rather than a WETH9, which is
+the correct thing to do on a chain whose native asset is USDC.
+
+**Our path never reads it, and this was verified from source rather than assumed.**
+`addLiquidity` is `UniswapV2Router02.sol:61-76`; its entire external surface is
+`factory.getPair`/`createPair` (`:42-43`), `UniswapV2Library.getReserves` (`:45`), the pure
+`quote` (`:49`, `:54`) and `pairFor` (`:72`), two `safeTransferFrom` (`:73-74`) and
+`pair.mint` (`:75`). **Zero WETH references.** `WETH` is an immutable set at `:25` and first
+read at `:87`, inside `addLiquidityETH`. The only other non-ETH-function reference is
+`receive()` at `:29`, which fires solely on a plain native send we never make.
+
+⚠ **So `router.WETH()` must be RECORDED in any pre-flight and must NOT be a gate.** A
+pre-flight that aborts because WETH has no usable code would abort on a healthy chain.
+Equally: **never call any `*ETH` router function on Arc.** The selector `0xea3559ef` did not
+match any obvious error name tried here and is recorded unidentified.
+
+### ⚠ `eth_getLogs` errors above **10,000 blocks** on that provider
+
+This **contradicts Goldsky's stated 20,000 default**, which §12.8 records as still-open with
+their engineering team. It is provider-specific and unresolved. **The indexer's chunking
+must be driven by a configured value, never by a constant someone believed** — and §11.11's
+polling design is unaffected either way, because it is self-healing from the checkpoint.
+
+## 20.5 What the private-mainnet phase must prove, and what aborts it
+
+Recorded now, before the hook exists, so the bar is set by the argument rather than by
+whatever the hook turns out to do.
+
+**Deployed:** LFX1, `BallistaV4Adapter`, the hook, against Arc mainnet's real PoolManager,
+PositionManager and Permit2.
+
+**Must pass, or the launch reverts to the v2 fallback:**
+
+1. `eth_getCode` non-empty on PoolManager, PositionManager and Permit2 — **with three
+   known-good controls in the same run**, because a probe that returns empty for everything
+   proves nothing (§10, §12.8).
+2. The four hand-transcribed selectors of §15.2 answer **on Arc**, not on Base:
+   `0x87517c45` and `0x36c78516` (Permit2), `0xdd46508f` `modifyLiquidities` and
+   `0xf7020405` `initializePool` (PositionManager). §15.8 closed the Permit2 half on
+   testnet and left the PositionManager half open for want of a deployment. **This closes
+   it or the launch does not proceed.**
+3. A **full graduation** through the adapter: pool initialised at the exact derived
+   `sqrtPriceX96`, position minted full-range, LP verifiably at `0x…dEaD`, and the factory
+   left holding no unaccounted dust (§14.6 item 4).
+4. A **hooked** graduation, then a swap, then a sweep, then a claim.
+5. **Graduation gas measured on Arc**, against the 30,000,000 block limit. §15.1 measured
+   508,982 on a **Base** fork and §15.8 supplied the testnet limit; neither is an Arc
+   mainnet figure, and Zero8 already moved Arc's gas accounting once (§2).
+
+**Abort conditions:** any of 1–4 failing; or 5 landing anywhere near the block limit.
+
+⚠ **A PASS ON PRIVATE MAINNET IS NOT A PASS ON PUBLIC MAINNET, AND THE DIFFERENCE IS NOT
+COSMETIC.** §2 already records that testnet-equals-mainnet is unverifiable rather than
+verified for USDC; private-equals-public is the same shape of claim one phase later. What
+the private phase buys is **real PoolManager, real PositionManager, real Permit2, real Arc
+gas accounting** — everything a Base fork cannot reach. What it does not buy is a guarantee
+that public mainnet is configured identically. Re-run probes 1, 2 and 5 on public mainnet
+before the first real graduation.
+
+## 20.6 ⚠ ONE FACTORY : ONE ADAPTER : ONE HOOK, PERMANENTLY. All three immutable
+
+**Operator decision, 10 September 2026, recorded before the hook exists so it is a chosen
+trade rather than something discovered after deployment.**
+
+The gate is **two-ended**, settled after the analysis in §19.2 was taken further:
+
+* `BallistaV4Adapter.addLiquidity` requires `msg.sender == lfx1`.
+* The hook's `beforeInitialize` requires `sender == adapter`.
+
+⚠ **The second alone would have been WORSE than §18.2's state gate, not better**, and the
+reason is worth keeping: `addLiquidity` is `external` with no caller check
+(`BallistaV4Adapter.sol:114`), so "the sender was the adapter" proves only that *someone
+routed through our adapter*. Under a `sender == adapter` gate alone, an attacker buys dust
+off a live curve and calls `adapter.addLiquidity(token, USDC, dust, dust, …)` at a ratio of
+their choosing — **the entire ACTIVE curve phase, days or weeks, is open.** §18.2's state
+gate closes exactly that and leaves only the parked window. Swapping one for the other
+trades a narrow hole for a wide one.
+
+**Both ends together close all three windows:**
+
+| window | closed by |
+|---|---|
+| before the token exists (§16.1's bulk F1) | `addLiquidity` pulls via `safeTransferFrom`, and `SafeERC20.sol:239` requires `extcodesize(token) > 0` — a token with no code reverts |
+| the whole ACTIVE curve phase | `_performGraduation` is reachable only on a threshold crossing or from `graduate()`, which requires `GRADUATION_READY` (`LFX1.sol:693`) |
+| the parked window (§18.2's admitted hole) | in that state only `LFX1.graduate()` reaches the adapter, and it passes the true reserves (`LFX1.sol:656-664`), never an attacker's ratio |
+
+### The permanent consequence
+
+**Three contracts, three immutables, one cycle.** The adapter holds the hook's address (it
+is a `PoolKey` member) and LFX1's address (the caller gate); the hook holds the adapter's
+address (its gate) and LFX1's address (for `curves(token).creator`). None can be changed
+after deployment.
+
+⚠ **So replacing ANY ONE of them means replacing the set, and starting new pools.** `hooks`
+is part of the `PoolKey` and `PoolId` is a keccak over all five slots (`PoolId.sol:14`), so
+a new hook is a different pool; liquidity already burned into the old pool can never
+migrate (§18.1 item 3). A second factory needs its own adapter and its own hook.
+
+**This is the correct trade and it is being taken deliberately.** The alternative is a
+settable address, which means an owner, which means the hook is no longer ownerless — and
+ownerlessness is the property §18.4 chose and §19.2 defended.
+
+⚠ **Pons made the OPPOSITE choice at exactly this point, and it is the clearest available
+illustration of what ownerlessness costs.** `PonsV2MemeHook` resolves the same circular
+dependency with a one-time owner-gated setter — `setFactory(address) external onlyOwner`
+(`:211`), commented *"One-time wiring of the v2 factory, set after both are deployed since
+the factory needs this hook's mined address to build pool keys"* (`:207-210`), with an
+`AlreadySet` error (`:77`) making it single-use. That is strictly easier to deploy and it
+is precisely why their hook has an owner at all. **We are paying for ownerlessness in
+deployment discipline instead** — see the nonce dependency in §20.7.
+
+### And it must be pinned by a test, because un-gating is silent
+
+⚠ **If `addLiquidity` is ever un-gated, the ACTIVE-phase hole reopens with no error
+anywhere.** Nothing reverts, nothing logs, and every existing test still passes — the hole
+is an *absence* of a check, which is the class §5's mutation gate exists for and the class
+a green suite cannot see. A permanent comment at the gate and a test that pins the caller
+restriction are the only things standing between a future edit and a reopened hole.
+
+## 20.7 ⚠ THE NONCE DEPENDENCY — what ownerlessness costs at deploy time, and how it aborts
+
+§20.6's cycle has to be broken somewhere. With no setter anywhere, the only resolution is
+to **predict one address before it exists** and deploy into it.
+
+### The derivation, and it is PROVED rather than cited
+
+`CREATE` puts a contract at `keccak256(rlp([sender, nonce]))[12:]`. §12.4 recorded this as
+"verified exact against two live tokens" without showing the working. It is now proved
+against **three consecutive real deployments** recorded in `deployments/arcTestnet.json`,
+from deployer `0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb`:
+
+| nonce | predicted | recorded as |
+|---|---|---|
+| 156 | `0xFa6CeBb5e50FaFFD1A3bF611392fE255f9ec0cD3` | `router` (MockRouter) |
+| 157 | `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b` | `ballista` (the LFX1 factory) |
+| 158 | `0x1197BB8324F0338104a00000B043CD9193D5Cd7f` | `graduationHelper` |
+
+⚠ **And it is shown going RED**, because a predictor that returns an address for every
+input proves nothing: nonce 156 and nonce 158 both fail to predict the factory, and a
+deployer address differing by a single character predicts
+`0x68bb569a…21FA` instead. `scripts/mine-hook-salt.js --selftest` runs all of it, plus a
+hand-rolled RLP encoder cross-checked against `ethers` across 400 nonces so the check does
+not depend on one library being right.
+
+### The deployment order, and why LFX1 goes FIRST
+
+Deploying LFX1 first collapses **two** predictions into **one**:
+
+1. **Deploy LFX1** with `initialRouter_ = address(0)`. `createToken` then reverts
+   `RouterNotSet` (`LFX1.sol:310`) until a router is live, which is the correct inert state
+   — and passing zero skips the constructor's untimelocked bootstrap entirely
+   (`LFX1.sol:216-221`), so **every router this factory ever has must pass a public
+   `RouterProposed` and a full 24 hours.**
+2. **Predict the adapter's address** at the nonce it will actually occupy.
+3. **Mine the hook's CREATE2 salt** against initcode already embedding that predicted
+   adapter address, plus LFX1's now-known address.
+4. **Deploy the hook** through the canonical Arachnid CREATE2 deployer
+   `0x4e59b44847b379578588920cA78FbF26c0B4956C` — confirmed present on Arc **testnet** at
+   **69 bytes** with canonical bytecode, and reported at 69 bytes on mainnet (§20.2).
+5. **Deploy the adapter at exactly the predicted nonce**, with the mined hook address and
+   LFX1's address.
+6. **Read the binding back on chain** (below) — then and only then `proposeRouter`.
+
+⚠ **Step 4 consumes a nonce.** The CREATE2 deploy is an ordinary transaction from the
+deployer EOA, so the adapter's nonce is one past it. Any unrelated transaction from that
+key between steps 2 and 5 — a gas top-up, a stray approval, a retried broadcast — shifts
+the nonce and invalidates the mined salt.
+
+### ⚠ THE ABORT CONDITION, because the failure is SILENT
+
+If the deployer's nonce is not exactly the predicted one when the adapter is sent, the
+adapter lands at a different address and the hook's `adapter` immutable points at an
+address that will never hold it. **Both contracts deploy cleanly. Nothing reverts. Nothing
+logs.** Every graduation then reverts inside `beforeInitialize`, LFX1 catches it
+(`LFX1.sol:655-687`), and every token parks at `GRADUATION_READY` forever — unfixable,
+because both addresses are immutable.
+
+**Two gates, and neither is optional:**
+
+* **Before sending the adapter:** read `eth_getTransactionCount(deployer, "pending")` and
+  require it equals the predicted nonce. Abort if it does not. Re-predict and re-mine
+  rather than "just deploying and seeing".
+* **After both are deployed, before `proposeRouter`:** read `hook.adapter()` and
+  `adapter.hook()` on chain and require each equals the other contract's actual address.
+  Two view calls. **This is the gate that converts a silent, permanent, post-launch failure
+  into a loud pre-launch one with nothing at risk** — no token has been created, because
+  LFX1 has no router yet.
+
+⚠ **The salt is valid for exactly one `initCodeHash`.** Any change to the hook's source,
+its compiler settings, or its constructor arguments — the predicted adapter address
+included — produces a different initcode and the mined salt no longer lands on a
+flag-carrying address. `--selftest` demonstrates this directly: the same salt against an
+initCodeHash differing by one byte yields an address whose flags no longer match.
+**Re-mine after ANY change, and never carry a salt across an edit.**
+
+### Why a mis-mined salt is the worst failure in the deployment
+
+Per Uniswap's own design, a hook's permissions **are** its address: `PoolManager` reads the
+low 14 bits and calls only the callbacks whose bit is set
+(`Hooks.sol:29-47`, `hasPermission` at `Hooks.sol:186-188`). **A missing flag does not
+revert — the callback is simply never invoked.** A hook mined without `AFTER_SWAP_FLAG`
+deploys, registers pools, emits its registration event, and charges nothing, forever. The
+first symptom is a graduated pool with no fees, found days later on an immutable contract
+with live pools.
+
+That is why `scripts/mine-hook-salt.js` refuses to report success from a decoder that was
+told what to expect: it reports **every** set bit and the caller compares the whole set,
+and the selftest feeds it an address with an extra flag, an address missing `afterSwap`, an
+address missing the delta flag, an address with no flags and a real non-hook address — all
+five of which it must reject before its "yes" counts for anything.
+
+**The target is `address & 0x3FFF == 0x2044`** — `BEFORE_INITIALIZE_FLAG` (`Hooks.sol:29`,
+`1 << 13`), `AFTER_SWAP_FLAG` (`Hooks.sol:39`, `1 << 6`), `AFTER_SWAP_RETURNS_DELTA_FLAG`
+(`Hooks.sol:45`, `1 << 2`), and **no other bit set**. The miner parses those three values
+out of the pinned `node_modules` copy at run time rather than hardcoding them, so a
+`v4-core` bump cannot silently desynchronise the target from the `PoolManager` that will
+read the address.
+
+## 20.8 ⚠ THE NONCE GATE IS STANDING IN FOR AN OWNER. Treat it as the deployment's critical step
+
+§20.6 records that Pons resolves the identical circular dependency with an owner-gated
+setter. **Stated plainly, because it reframes what §20.7 is:**
+
+> **`PonsV2MemeHook` has an owner substantially BECAUSE of this exact problem.**
+> `setFactory(address) external onlyOwner` (`PonsV2MemeHook.sol:211`), single-use via
+> `AlreadySet` (`:77`), commented *"One-time wiring of the v2 factory, set after both are
+> deployed since the factory needs this hook's mined address to build pool keys"*
+> (`:207-210`). An ownerless hook cannot have that setter. **We chose ownerlessness, so we
+> pay for it in deployment discipline instead.**
+
+⚠ **THEREFORE §20.7's NONCE CHECK AND BINDING READ-BACK ARE NOT CHECKLIST ITEMS. They are
+the mechanism that replaces an owner**, and they are the single most important step in the
+deployment. Pons can fix a wrong wiring with one owner transaction. **We cannot fix it at
+all** — a wrong binding means redeploying the hook, the adapter, or both, and if any pool
+has already graduated through the wrong pair its liquidity is burned into a pool that can
+never be reached.
+
+Read it back on chain before `proposeRouter`, every time, and abort on any mismatch:
+
+```
+hook.adapter()  == <the adapter's actual deployed address>
+adapter.hook()  == <the hook's actual deployed address>
+hook.lfx1()     == <LFX1's actual deployed address>
+```
+
+## 20.9 ⚠ THE SALT ASYMMETRY: editing the ADAPTER is free, editing the HOOK is not
+
+**A hook's address is a function of its own initcode. An adapter's address is not.**
+
+| edit | effect on the mined salt |
+|---|---|
+| **the adapter** — code, comments, constructor args, compiler settings | **NONE.** Its address is `keccak256(rlp([deployer, nonce]))`, which depends only on who deploys it and at what nonce. The bytecode does not enter the derivation. |
+| **the hook** — code, **comments**, constructor args, compiler version, optimizer runs, metadata | ⚠ **INVALIDATES THE SALT.** Its address is `keccak256(0xff ‖ deployer ‖ salt ‖ keccak256(initcode))`, and the initcode carries the metadata hash of the sources. §7 already records that "any source edit, including a comment, moves the address" — that was about the deployed factory; here it moves the *flags*. |
+
+⚠ **AND THE CONSEQUENCE OF NOT RE-MINING IS THE SILENT ONE.** A hook whose address no
+longer carries `AFTER_SWAP_FLAG` deploys cleanly, registers pools, emits its registration
+event and **charges nothing, forever** — `PoolManager` simply never calls a callback whose
+bit is clear (`Hooks.sol:29-47`, `hasPermission`). Nothing reverts and nothing logs.
+
+**`scripts/mine-hook-salt.js --selftest` demonstrates this directly**: the same salt against
+an `initCodeHash` differing by one byte produces an address whose flags no longer match.
+
+**One mitigation is now in place and it is worth knowing about**, because it converts most
+of this class from silent to loud: `BallistaFeeHook` inherits v4-periphery's `BaseHook`,
+whose constructor calls `validateHookAddress(this)` → `Hooks.validateHookPermissions`,
+which compares **all fourteen** permission bits against the contract's declared
+`getHookPermissions()` and reverts `HookAddressNotValid` on any disagreement.
+
+⚠ **That is NOT a replacement for the miner, and the two catch different errors.** The
+constructor check proves *the address matches what the contract declares*. The miner proves
+*what the contract declares matches the three flags we actually need*. A hook that declares
+the wrong permissions AND is mined to match them passes the constructor check and is still
+wrong. Both, always.
+
+**The rule: re-mine after ANY change to the hook, and never carry a salt across an edit.**
+
+## 20.10 ⚠ ACCEPTED LIMITATION: a sanctioned recipient cannot reach ALREADY-CREDITED fees
+
+**Operator decision, 10 September 2026. This is a known limitation that was analysed and
+accepted, NOT an oversight. Do not reopen it as a bug.**
+
+`BallistaFeeHook` has `claim()` and `claimToken(address)` and deliberately has **no
+`claimTo(address)`**. A recipient can only ever withdraw to themselves.
+
+**The residual.** `transferFeeRecipient` moves *future* fees to a new address but leaves
+balances **already credited** with the previous recipient — deliberately, so that a new
+recipient cannot claim history they did not earn. So if a creator is added to Circle's USDC
+blocklist *after* fees were credited to them, those specific balances are unreachable until
+they are unblocked. Their launch-token balance is unaffected (the blocklist is USDC's), and
+all future fees follow `transferFeeRecipient` to a clean address immediately.
+
+**Why it was declined rather than fixed, and all four reasons matter:**
+
+1. **The window is narrow.** It is only already-credited USDC, only for an address Circle
+   has sanctioned, and only until that sanction lifts.
+2. **The remedy already exists for everything else.** `transferFeeRecipient` is immediate
+   and untimelocked precisely so a compromised or unusable key is not fatal (§18.4).
+3. ⚠ **`claimTo` widens the claim surface on an IMMUTABLE contract in the last week before
+   mainnet.** Every additional path out of the escrow is a path that has to be right the
+   first time, forever, with no owner and no upgrade.
+4. **It is R1's shape, not a new dependency.** Circle can already pause USDC entirely
+   (§3 R1) and — on Arc mainnet — upgrade it (§20.4). A blocklisted recipient losing
+   temporary access to a credited balance is strictly smaller than either.
+
+**What was verified rather than assumed:** `sweep` cannot be blocked by a hostile or
+sanctioned recipient, because it makes **no external call at all** — it only writes
+`owedUsdc` / `owedToken`. So one bad recipient cannot stop the protocol's half, cannot stop
+any other pool, and cannot stop the sweep itself. The failure is confined to that one
+address's own `claim()`.
+
+## 20.11 ⚠ §15.1's GRADUATION GAS FIGURE IS STALE. Do not quote 508,982 as current
+
+§15.1 records **508,982** as the measured cost of graduation, and §12.8 item 3 asked for
+exactly that measurement. **It is now out of date in both directions and must not be quoted
+until re-measured on Arc.**
+
+| | measured | conditions |
+|---|---|---|
+| §15.1, as recorded | buy 187,350 · buy+graduation 696,332 · **delta 508,982** | Base fork, block 50,900,000, **through `positionManager.initializePool`**, no hook |
+| re-measured 10 September 2026 | buy 187,350 · buy+graduation 694,336 · **delta 506,986** | same fork, **direct `poolManager.initialize`**, no hook |
+
+**The direct-initialize change saved ~2,000 gas** — going through PositionManager's wrapper
+was costing an extra external call for a `try/catch` we now do ourselves.
+
+⚠ **BUT THE FIGURE IS ABOUT TO GO UP, NOT DOWN, AND BY MORE THAN THAT.** `BallistaFeeHook`
+adds to the graduating transaction: a `beforeInitialize` external call, one `LFX1.curves()`
+read (a 22-field struct returned across the ABI boundary), a two-slot `Launch` SSTORE from
+cold, and a `PoolRegistered` log with three topics. **None of that is in either number
+above**, because the adapter still builds a hookless key at the time of writing.
+
+**Two places depend on this figure and both are currently reasoning from a stale number:**
+
+1. **The gas-starvation threshold.** `_performGraduation` calls the router as
+   `try IDEXRouter(router).addLiquidity(...)` with no gas parameter (`LFX1.sol:656-664`),
+   so EIP-150's 63/64 rule applies and a buyer can size a gas limit that completes the buy
+   while starving the graduation. The sub-call OOGs, `catch` catches it, the curve parks at
+   `GRADUATION_READY` and `graduate()` retries — **a delay, not a loss, and identical on
+   v2** — but the threshold at which it becomes possible moves with this number.
+2. **The runbook's gas budget** for the private-mainnet phase.
+
+⚠ **AND BASE IS NOT ARC.** Zero8 already moved Arc's gas accounting once and invalidated
+every figure in this file (§2). §15.8 measured Arc Testnet's block limit at 30,000,000, so
+there is enormous headroom either way — but the number itself has to be re-measured **on
+Arc, with the hook wired, in the private-mainnet phase** before it is quoted anywhere.
+
+## 20.12 ✅ GRADUATION GAS WITH THE HOOK WIRED — the number §20.11 said must be re-measured
+
+Measured 10 September 2026 on the Base fork at block 50,900,000, with `BallistaFeeHook`
+live in the PoolKey and the adapter calling `poolManager.initialize` directly.
+
+| configuration | buy | buy + graduation | **delta** |
+|---|---|---|---|
+| §15.1, as originally recorded — hookless, via `positionManager.initializePool` | 187,350 | 696,332 | **508,982** |
+| hookless, direct `poolManager.initialize` | 187,350 | 694,336 | **506,986** |
+| ✅ **hooked, direct initialize** | 187,350 | **777,343** | **589,993** |
+
+**The hook costs ~83,000 gas on the graduating transaction** — a `beforeInitialize`
+external call, an `LFX1.curves()` read returning a 22-field struct across the ABI boundary,
+a two-slot cold `Launch` SSTORE, and a three-topic `PoolRegistered` log. It is paid once
+per token, ever, and never on the swap path.
+
+⚠ **STILL A BASE FIGURE. Do not quote it as an Arc figure.** Zero8 already moved Arc's gas
+accounting once and invalidated every number in this file (§2). §15.8 measured Arc Testnet's
+block limit at **30,000,000**, so 589,993 is about **2.0%** of one block and the headroom is
+enormous — but the figure itself must be re-measured on Arc in the private-mainnet phase
+(§20.5 item 5).
+
+**Consequence for the starvation threshold (§20.11 item 1):** the gas a buyer must withhold
+to starve `_performGraduation` inside LFX1's `try/catch` rises with this number. It remains
+a delay rather than a loss — the curve parks at `GRADUATION_READY` and `graduate()` retries
+— and it is unchanged in character from v2.
+
+Also measured, and worth having: **a standalone `graduate()` retry costs 698,552**, and the
+two token orderings cost 793,815 (token below USDC) and 760,243 (above).
+
+## 20.13 ⚠ F1 IS STRUCTURALLY CLOSED ON HOOKED POOLS — and the evidence is that nine attack tests can no longer construct their own premise
+
+**This is a finding, not a footnote, and the FORM of the evidence is what makes it strong.**
+
+§16.1 recorded F1: a v4 pool can be poisoned for **51,508 gas, with no capital, in bulk,
+before the token exists**, because `PoolManager.initialize` never checks that a currency has
+code and LFX1 token addresses are predictable from `keccak(rlp([factory, nonce]))`. §16.1
+was explicit that it is *"a property of v4 and of CREATE addressing, not of the adapter"*,
+and that a fix could change the consequence but not the attacker's ability to do it.
+
+**The two-ended gate (§20.6) changed the ability.** `BallistaFeeHook.beforeInitialize`
+admits only `sender == adapter`; `BallistaV4Adapter.addLiquidity` admits only
+`msg.sender == lfx1`. A hooked pool can therefore be initialised by exactly one caller, on
+exactly one path, at exactly the curve's true price.
+
+### The evidence, measured 10 September 2026 on the Base fork
+
+**Nine tests written to perform this attack now fail at SETUP, unable to create the
+condition they exist to test.** Every one reverts with v4-core's `Wrap__FailedHookCall`
+(`0x90bfb865`) wrapping **`0x08b4a225` = `NotAdapter(address)`**:
+
+| suite | tests |
+|---|---|
+| `Fork.v4.attack` | A1a, A1c, A4b, A2c, A5a |
+| `Fork.v4.corrector` | C1, C3, C4, C6 |
+
+⚠ **A4b is titled *"a pool can be poisoned BEFORE the token exists — v4 never checks the
+currency has code"*. It can no longer poison anything.** `Fork.v4` test 5, which
+pre-initialised a pool at a 1e12-wrong price, likewise cannot set up.
+
+### ⚠ WHY THIS IS STRONGER THAN A TEST ASSERTING THE ATTACK IS BLOCKED
+
+A test that performs an attack and asserts it fails proves the attack was **repelled** — it
+still ran, and the assertion is only as good as its ability to name what repelled it
+(§16.4). **These tests do not get that far.** The attack cannot be *expressed*: there is no
+transaction an attacker can send that initialises a hooked pool, so there is nothing to
+repel. That is the difference between a mitigation and a structural closure, and it is
+visible as a change in the shape of the test rather than in its assertion.
+
+**Recorded this way deliberately**, because the natural instinct on seeing nine red tests
+is to repair them until they are green again — which would mean inventing a way to poison a
+hooked pool purely so the tests have something to assert. That would be exactly the failure
+§16.4 warns about, and it would destroy the evidence.
+
+### What is retained, and why
+
+The nine tests are **not deleted**. Their inner semantics — the adapter's exact price
+check, its reentrancy guard, Permit2 approval hygiene, dust bounds — are still worth
+exercising, so they are routed through `MockLfx1Caller`, a permissionless forwarder that
+sits in the adapter's `lfx1` slot and reproduces the **pre-gate world on purpose**. Each is
+paired with a sibling asserting the direct route is refused today.
+
+⚠ **That substitution is itself the record of what changed.** The attacks now require the
+token to exist, require the attacker to buy off the curve first, and require real value on
+both sides — where before they required none of those things.
+
+**One test was deleted rather than repaired: `C6`.** See the tombstone in
+`test/Fork.v4.corrector.test.js`.
+
+### ⚠ WHAT IS NOT CLOSED
+
+* **Hookless v4 pools are still poisonable by anyone.** No hook, no gate. This is why
+  `BallistaPoolCorrector` keeps a real job (§20.14).
+* **The v2 fallback path is unaffected** — §1.1's adversarial-pair attack is a different
+  mechanism and its strict-mins defence is unchanged.
+* **This says nothing about Arc.** Base is not Arc, and §15.8 measured no v4 on Arc Testnet
+  at all. Re-establish it in the private-mainnet phase (§20.5).
+
+## 20.14 `BallistaPoolCorrector` KEEPS A NARROWER JOB — retargeted, not retired
+
+**Operator decision, 10 September 2026.** §17.6 built the corrector for F1: un-poisoning an
+**empty** pool, permissionlessly, for gas alone. §20.13 closed that on hooked pools, and
+four of its six tests failed at setup as a result.
+
+**It stays, and its tests are retargeted at HOOKLESS pool keys**, because the hole it was
+built for is still open where there is no hook to close it:
+
+* **the v2 fallback is live and fully verified on Arc mainnet** (§20.2 — router 21,902
+  bytes, `factory()` matching, factory 13,859 bytes with `allPairsLength() = 28`), and
+* **any hookless v4 pool remains poisonable by anyone**, because v4 pool initialisation is
+  permissionless when no hook says otherwise.
+
+**It costs nothing to carry:** ownerless, holds no funds, has no settle path, and is **not
+in the graduation path**. It is insurance for the v2 branch, not part of the v4 one.
+
+⚠ **`C6` WAS DELETED, NOT SKIPPED. DO NOT RE-ADD IT AS MISSING COVERAGE.** It asserted
+*"after a correction the adapter's equality check PASSES and the mint succeeds"*. Its
+premise is a **poisoned hooked pool**, and that condition is now unreachable — the adapter
+only mints into a pool carrying the hook, and that pool cannot be poisoned. Repairing it
+would have meant inventing a way to poison a hooked pool purely to give the corrector
+something to fix. What it covered that still matters is covered elsewhere: the adapter's
+exact price check by name in `Fork.v4.attack` (A1c), and the parked-then-graduated recovery
+shape by `Fork.v4` test 6.
+
+## 20.15 ⚠ RULE: A STALE FIXTURE PREMISE READS AS A FUND-LOSS BUG. Suspect the fixture first
+
+**Four failures in one session, 10 September 2026, every one of which announced itself as
+money disappearing and every one of which was a test fixture describing a world that no
+longer exists.** Recorded because the next session will hit this class the moment it
+changes anything about graduation, and will otherwise spend an hour reading the contract
+for a bug that is not there.
+
+The pattern: **the two-ended gate (§20.6) changed what an attacker can do, which changed
+what the CURVE does, which invalidated setup steps that were never the subject of the
+test.** The assertions were still correct. The conditions they ran under were not.
+
+| the failure said | it actually was |
+|---|---|
+| **`tokenReserves lost`** — reserves zero after a graduation that should have parked | §1.4's **DEPLETION arm** firing correctly. The fixture's poison buy plus the graduating buy emptied the curve, and `tokenReserves == 0` is a legitimate second route to `GRADUATION_READY`. Nothing was lost. |
+| **`tokens left the factory`** — the adapter holding a token balance after a failed graduation | **the attacker's own rounding dust**, deposited when the fixture poisoned the pool THROUGH the adapter. The absolute-zero check predated a world where poisoning went through the adapter at all. |
+| **`Division or modulo division by zero`** inside `_sqrtPriceX96` | the fixture derived a target price from a curve it reached by attempting a graduation and having it **park**. Graduation now succeeds, and a graduated curve has **zeroed reserves** (`LFX1.sol:677-679`). |
+| **`graduated into a poisoned pool`** | the poisoned pool and the graduation pool were **different `PoolId`s** — one hookless, one hooked. The poison was irrelevant to the pool under test. |
+
+### The rule
+
+⚠ **When a graduation test reports missing funds, check the CURVE STATE and the POOL ID
+before you read the contract.** Three questions, in this order, and each has caught one of
+the four above:
+
+1. **Did the curve reach `GRADUATION_READY` by the threshold arm or the DEPLETION arm?**
+   Zero `tokenReserves` is the signature of depletion, not of loss. §1.4.
+2. **Whose balance is it?** A fixture that routes through the adapter leaves the
+   attacker's dust there. Measure a **delta across the operation under test**, never an
+   absolute zero, on any contract a fixture has already paid into.
+3. **Is it the same pool?** `hooks` is a `PoolKey` member and `PoolId` hashes all five
+   slots (`PoolId.sol:14`). A hookless key and a hooked key for the same two currencies
+   are different pools that share nothing.
+
+### And the second-order rule, which is the expensive one
+
+⚠ **A fixture that has to land inside a window must ASSERT THE WINDOW, at setup, in its own
+words.** Two independently-chosen constants that happen to work is the arrangement that
+breaks silently later and surfaces three tests away as something else entirely.
+
+`poisonViaForwarder` in `test/Fork.v4.attack.test.js` is the worked example. It must buy
+enough off the curve to hold tokens, but not so much that the graduating buy afterwards
+empties the curve. **Both edges produce misleading failures** — too large gives
+`tokenReserves lost`, too small gives `no GraduationAttemptFailed`. It therefore derives
+its buy from the curve's own `graduationThresholdUsdc`, names the graduating buy as a
+shared constant (`GRADUATING_BUY`), and asserts at setup that the curve is still `ACTIVE`
+and still below its threshold — so a violation says *"the poison buy alone graduated the
+curve -- the window is gone"* rather than surfacing as a fund-loss assertion somewhere else.
+
+**This is §12.6's fixture rule one level up.** That rule says fixtures use real-shaped
+values. This one says a fixture whose correctness depends on a relationship must state the
+relationship and check it, because the failure mode of an unstated one is not a broken
+fixture — it is a plausible-looking accusation against the contract.
+
+## 20.16 ⚠ THE v4 ATTACK SUITE WENT 17 → 15. THAT IS NOT A REGRESSION — read it before "restoring" coverage
+
+**A smaller suite testing a smaller attack surface.** Recorded plainly because the natural
+reading of a shrinking adversarial suite is lost coverage, and here it is the opposite.
+
+| | before the two-ended gate | after |
+|---|---|---|
+| `Fork.v4.attack` | 17 tests | **15** |
+| what the adapter was | permissionless — anyone could call `addLiquidity` | gated to LFX1, pools gated to the adapter |
+| tests asserting an attack is **impossible** rather than **repelled** | 0 | **3** (A4a, A4b, and A1a's refusal half) |
+
+**Two were deleted and neither for convenience:**
+
+* **A7 and A7b** — reentrancy through the v4 unlock. §16.3 already recorded that the guard
+  there is v4-periphery's `ContractLocked` and v4-core's `AlreadyUnlocked`, *"an UPSTREAM
+  DEPENDENCY … not a property of our code"*. A test we maintain against someone else's
+  invariant asserts nothing we control and goes red on their release rather than on our
+  mistake. Tombstones in the file.
+
+**Two were converted in place, which is why the count did not grow to offset the deletions:**
+
+* **A4a** was *"a direct caller gets a position and an arbitrary pool price, with THEIR OWN
+  money"*. There is no direct caller now. It asserts `NotLfx1` and the removal of the
+  externality it used to document.
+* **A4b** was *"a pool can be poisoned BEFORE the token exists"*. It now proves **both**
+  routes are closed — the direct one refused by the hook, and the adapter route impossible
+  because there is no token to buy.
+
+**One was narrowed:** A1a kept its refusal half and lost its recovery half, because
+recovery-for-gas-alone depended on the pool being empty, which depended on poisoning being
+free. Liquidity-backed recovery is A2b/A2d's subject and is unchanged.
+
+**One was retained against a fixture that recreates a world the gate deleted:** A3a, behind
+`PermissiveTestHook`. ⚠ **This is the most artificial thing in the suite and its cost
+shows.** It is kept for one reason only, and the reason is on the record: the `v4-no-guard`
+mutation SURVIVED the first version of A3a (§16.4), and a guard a mutation has once escaped
+needs a test that still reaches it. Getting it to reach the guard again took three
+attempts, and the decode along the way is worth keeping — pointed straight at the adapter,
+the nested call returns **`0x901d9118` `NotLfx1`**, not `0x3ee5aeb5`
+`ReentrancyGuardReentrantCall`. **The caller gate now SHADOWS the reentrancy guard.** A test
+asserting only "the nested call was refused" would have read that as the guard holding.
+
+⚠ **DO NOT ADD TESTS BACK TO REACH 17.** The number is not the measure. Three of the
+remaining fifteen assert that an attack cannot be expressed at all, which is a stronger
+claim than any of the seventeen made (§20.13). If a future change re-opens the adapter,
+the tests to restore are the ones the gate made unreachable — and the way to know is that
+their premises become constructible again.
+
+## 20.17 ⚠ RULE: THE COUNT OF RECORD COMES FROM ONE COMBINED RUN. Always
+
+**A test that passes standalone and fails in combination is not evidence for either
+result, and separate per-suite runs cannot detect it.** Recorded beside §20.15's fixture
+artefacts because it is the same family — a green result that is an artefact of the
+conditions rather than a statement about the code — but it is worse in one way: §20.15's
+failures at least announced themselves.
+
+### What happened, measured both ways
+
+`A1b` in `test/Fork.v4.attack.test.js` asserts the adapter's accepted price band is one ulp
+of `sqrtPriceX96`.
+
+| run | relative band | verdict |
+|---|---|---|
+| `Fork.v4.attack` alone | **1.626e-37** | passed |
+| all six suites together | **3.919e-21** | failed |
+
+⚠ **Sixteen orders of magnitude apart, which reads like a pricing bug and is not one.**
+
+**The cause is TOKEN ORDERING, and it was worth measuring rather than guessing** — the
+first hypothesis, that the pool's liquidity differed at the probe point, was wrong.
+`sqrtPriceX96` encodes `sqrt(amount1/amount0)` in RAW units, and the two sides of a Ballista
+pool are 18dp and 6dp. The same pool is therefore:
+
+```
+USDC  as currency0  ->  sqrtPriceX96 ~1.230e37   2/sp = 1.626e-37
+token as currency0  ->  sqrtPriceX96 ~5.103e20   2/sp = 3.919e-21
+```
+
+Both reproduce the observed numbers to four significant figures. One ulp of `sqrtPriceX96`
+is a fixed **absolute** step, so it is a far coarser **relative** step when `sp` is small.
+
+**And which ordering you get is not stable across runs.** A launched token sits at
+`keccak(rlp([LFX1, nonce]))`; LFX1's own address moves with the deployer's nonce; and the
+deployer's nonce depends on how many contracts earlier suites deployed. So the ordering is
+effectively drawn at random per run. The `< 1e-30` threshold encoded one ordering and had
+never seen the other.
+
+### The two rules
+
+⚠ **1. THE COUNT OF RECORD COMES FROM ONE COMBINED RUN.** Five separate green suites would
+have reported 71/71 and been wrong. Per-suite runs are fine while iterating; they are not
+the number to write down. If the combined run hangs, fix the endpoint (§16.2) rather than
+falling back to separate runs.
+
+⚠ **2. A THRESHOLD THAT ENCODES ONE BRANCH OF A BRANCHING FACT IS A FIXTURE ARTEFACT.**
+Roughly a fifth of real launches sort below USDC (§4, §14.6), so both orderings occur in
+production — and a test that samples whichever one the nonce happened to produce is
+sampling, not testing. `A1b` now launches until it holds one token of EACH ordering,
+graduates both, and asserts the bound that is ordering-independent: **the band is worth
+less than one raw unit of USDC** (measured 1.304e-27 and 3.143e-11 respectively). A
+relative width on its own means nothing here, because the two orderings are reciprocal
+prices; what matters is whether an attacker landing inside the band can move anything worth
+having.
+
+**This is §4's "both orderings" discipline arriving somewhere it had not been applied.**
+`Fork.v4` test 3 already launches until it has one of each. `A1b` did not, and the gap was
+invisible until two suites ran in the same process.
+
+## 20.18 ⚠ REVERSED: `initialRouter_` IS THE ADAPTER. And the deployment now has a runbook
+
+**Operator decision, 10 September 2026.** This reverses the position taken earlier the same
+day and the reason is specific rather than a change of mind.
+
+**What the earlier "clean hands" argument said:** deploy LFX1 with `initialRouter_ =
+address(0)`, leave `createToken` inert (`LFX1.sol:310`), and reach the adapter through
+`proposeRouter` + 24h — so that **no router in this contract's history is ever activated
+without a public proposal and a full timelock**, at the cost of 24 hours.
+
+⚠ **THAT ARGUMENT ASSUMED A HOOKLESS ADAPTER, AND THAT ASSUMPTION IS GONE.** It was made
+while §18.4's blocking consequence stood: bootstrapping a **hookless** adapter would
+permanently forfeit fee capture on everything graduated before a switch, because `hooks` is
+part of the `PoolKey` and burned liquidity cannot migrate. **The adapter is now hook-bound
+and its constructor refuses a zero hook, wrong flag bits, and a hook not bound back to
+itself (§20.6, §20.7).** Nothing is forfeited by activating at block zero.
+
+**So: `initialRouter_` = the deployed adapter.** Against that, 24 hours of an inert factory
+on Arc's opening day is a real cost against one first impression.
+
+⚠ **AND THE UNTIMELOCKED PATH IS STILL NEVER A DEFAULT.**
+`scripts/deploy-v4-stack.js` defaults to `address(0)` and requires an explicit
+`--bootstrap-router` to pass a live one, printing what that spends:
+
+> `--bootstrap-router` SPENDS THE CONSTRUCTOR'S ONE UNTIMELOCKED ROUTER ACTIVATION
+> (`LFX1.sol:216-221`). It exists once per factory. Every later router must pass a public
+> `RouterProposed` and a full 24 hours.
+
+### ⚠ CONSEQUENCE: TWO ADDRESSES MUST NOW BE PREDICTED, NOT ONE
+
+§20.7's sequence had LFX1 first precisely because it needed only the adapter predicted.
+**With `initialRouter_` = the adapter, LFX1 must go LAST**, and the hook — mined first —
+needs LFX1's address. The order is now three consecutive nonces:
+
+```
+nonce n     CREATE2 the hook     (initcode embeds predicted adapter AND predicted LFX1)
+nonce n+1   deploy the adapter   (hook real, LFX1 still predicted)
+nonce n+2   deploy LFX1          (adapter real -> initialRouter_)
+then        read the binding back, both directions, before anything else
+```
+
+**The nonce is re-read and asserted before EACH of the two later deploys**, and a mismatch
+is a hard abort — the mined salt is already invalid at that point.
+
+## 20.19 ✅ THE v2 INIT CODE HASH: factory half MEASURED, router half STILL OPEN
+
+§20.3 required this before the v2 fallback is ever activated. **Half of it is now done.**
+
+**Measured on Arc mainnet by the operator, and reproduced independently here from the raw
+inputs:**
+
+```
+factory.allPairs(0) = 0x573c4f9c3568cfd0c34cd58c0d91ef0704713b79
+pair.token0()       = 0x0d6b6f604c1bf5b3533c445334bb4e1044145688
+pair.token1()       = 0x4e0eeb1d206328f7f1db27fc4438507e5a2d795d
+keccak(token0‖token1) = 0x11fe9682bf9b4ae04b00b5340834f3804ce5322928d1facb86a02698d449d180
+keccak256(0xff ‖ 0x89e5db8b5aa49aa85ac63f691524311aeb649eba ‖ salt ‖ 96e8ac42…48845f)
+                    = 0x573C4F9c3568cFd0C34cd58c0d91EF0704713B79      MATCH
+```
+
+**So Arc's V2 FACTORY deploys pairs with the canonical init code hash.**
+
+⚠ **"VERIFIED END TO END" WAS WITHDRAWN BY THE OPERATOR, CORRECTLY, AND THE DISTINCTION IS
+THE WHOLE POINT.** That result proves what the **factory** does. It says nothing about what
+the **router** embeds — and `UniswapV2Library.pairFor` uses the ROUTER's hardcoded copy
+(`UniswapV2Library.sol:18-26`). ⚠ Arc's router is **21,902 bytes against canonical mainnet's
+21,943 — 41 bytes shorter**, which is precisely why the two cannot be assumed equal.
+
+**The router-side probe is the one outstanding v2 gate.** Zero gas: search the router's
+runtime bytecode for `96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f`.
+Validated in both directions — present in canonical mainnet Router02, **absent** in mainnet
+USDC (2,186 bytes) and in the mainnet V2 Factory itself (13,859 bytes), both real contracts,
+so a `false` is a real answer. Absence escalates rather than concludes: recompute
+`allPairs(0)` from whatever hash the router actually embeds and require a match.
+**Procedure in `CONTRACT_DEPLOY_RUNBOOK.md` §10.**
+
+## 20.20 ✅ `CONTRACT_DEPLOY_RUNBOOK.md` AND `arcMainnet` NOW EXIST
+
+§12.8 item 2 has asked for the contract deployment runbook since 4 September, and §12.8's
+own note that `hardhat.config.js` defined **only** `arcTestnet` meant there was no path to
+mainnet from this repo at all. Both are closed.
+
+**`hardhat.config.js` now defines `arcMainnet`** at chainId **5042** with two **named
+blanks**, each carrying its provenance rule in a comment:
+
+* `ARC_MAINNET_RPC_URL` — ⚠ **from Circle directly or a Circle-named provider. Never from a
+  search result.** §9.5 already found the documented host and an undocumented alias both
+  answer; an RPC that responds is not evidence it is the right one.
+* `MAINNET_DEPLOYER_PRIVATE_KEY` — a **dedicated** key that signs nothing else, ever.
+
+⚠ **VERIFICATION IS RECORDED AS UNSETTLED, NOT CONFIGURED.** The `arcMainnet` etherscan
+block mirrors the TESTNET shape, which is Blockscout — an assumption carried across, not a
+mainnet fact. **Uniswap's own Arc playbook flags confirming whether Arcscan is
+Etherscan-compatible or Blockscout before deploying**, and Circle's contract-addresses page
+still says mainnet addresses are not yet available. `ARC_MAINNET_EXPLORER_API` and
+`ARC_MAINNET_EXPLORER_URL` are blanks. Getting this wrong is discovered only after the
+bytecode is immutable, and an unverified factory undermines the one thing this project
+sells.
+
+**The runbook's non-obvious content**, so it is findable from here:
+
+* **§1 — the key.** A fresh dedicated mainnet deployer, generated for this and used for
+  nothing else. `0x64140EAa…B4cb` is at **nonce 237** and cannot carry a prediction. The
+  standing rule is absolute: not a test transaction, not an approval, nothing.
+* **§2 — funding.** ~9.0M gas ≈ **0.18 USDC** for the stack at Arc's 20 gwei floor; fund 5
+  USDC. ⚠ The adapter **cannot be gas-estimated before the hook exists**, because its
+  constructor calls `hook.adapter()` — the binding check working, not a defect.
+* **§3 — the ordering trap.** `adapter_` is **last** on the hook; `hook_` is **last** on the
+  adapter. Reordering either constructor silently invalidates every mined salt.
+* **§4 — a control cannot be a subject.** The pre-flight's first version used PoolManager as
+  both, and on a chain with no v4 reported "the probe is broken" when the probe was fine.
+* **§6 — the read-back is a hard stop**, seven reads in both directions, and §8 re-runs them
+  **from a different caller** because a read inside the deploying process is self-confirming.
+* **§9 — the throwaway threshold is 10 USDC**, not 54.2. See §15.4's amendment.
+* **§10 — the v2 branch**, with the router-side gate of §20.19 and the ⚠ WETH tripwire:
+  `router.WETH()` is 53 bytes that revert `0xea3559ef` on any call, `addLiquidity` never
+  reads it, so **record it and never gate on it** — and never call any `*ETH` router
+  function on Arc.
+
+---
+
+# 21. SESSION OF 10 SEPTEMBER 2026 — THE HOOK IS BUILT. Full handover
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§20. Nothing above this line was
+deleted; §15.4 and §16.2 were amended **additively**, with their original sentences intact.
+
+**This section is written so a session starting from zero can pick the work up.** It
+duplicates some of §20 deliberately — §20 is a running log of one long session, this is the
+state it left behind.
+
+## 21.1 What exists now that did not before
+
+| file | what |
+|---|---|
+| `contracts/BallistaFeeHook.sol` | **the hook.** 8,153 bytes runtime, 9,329 creation |
+| `contracts/mocks/` ×6 | `BallistaFeeHookTestable`, `PermissiveTestHook`, `RejectingTestHook`, `MockHookBinding`, `MockLfx1Caller`, `MockLfx1Curves`, `V4ExactSwapper` |
+| `scripts/mine-hook-salt.js` + `.selftest.js` | salt miner, **24 checks** |
+| `scripts/deploy-v4-stack.js` | the deployment sequence, **plan by default** |
+| `test/V4Binding.test.js` | 23 local checks |
+| `test/Fork.v4.hook.test.js` | 12 fork checks |
+| `test/helpers/v4deploy.js` | the predict/mine/deploy dance, shared |
+| `CONTRACT_DEPLOY_RUNBOOK.md` | 379 lines — **§12.8 item 2, closed** |
+| `hardhat.config.js` | `arcMainnet` added — **there was no path to mainnet before** |
+
+`contracts/LFX1.sol` is **byte-identical to `38e3e9e`** and unmodified. It was never touched.
+
+## 21.2 THE HOOK, as built
+
+`BallistaFeeHook is BaseHook`. **Ownerless: no owner, no admin, no pause, no upgrade, no
+withdraw, no rescue, no delegatecall, no selfdestruct, no receive, no fallback.** Verified by
+exhaustion of the compiled ABI, not by grepping for `Ownable`: 14 state-changing entries
+(10 `IHooks` callbacks, of which 8 revert `HookNotImplemented`, plus `sweep`, `claim`,
+`claimToken`, `transferFeeRecipient`), 15 view/pure.
+
+### The three flags, and why
+
+Read from the pinned `v4-core 1.0.2` at run time, never hardcoded:
+
+| flag | `Hooks.sol` | mask |
+|---|---|---|
+| `BEFORE_INITIALIZE_FLAG` | `:29` | `0x2000` |
+| `AFTER_SWAP_FLAG` | `:39` | `0x0040` |
+| `AFTER_SWAP_RETURNS_DELTA_FLAG` | `:45` | `0x0004` |
+
+**The hook's address must satisfy `address & 0x3FFF == 0x2044`, every other bit clear.**
+An unused flag that is *set* is a live callback nobody wrote (§18.4). Independently
+confirmed against Pons's production hook, which carries exactly the same three.
+
+⚠ **The failure is silent.** A missing flag does not revert — `PoolManager` simply never
+calls that callback. A hook mined without `AFTER_SWAP_FLAG` deploys, registers pools, emits
+its registration event, and **charges nothing for ever**. Two independent guards now exist
+and neither replaces the other: `BaseHook`'s constructor calls `validateHookAddress`, which
+checks all fourteen bits against the contract's **declared** permissions and reverts
+`HookAddressNotValid`; and the miner proves the **declaration** matches the three flags we
+actually need. A hook that declares the wrong permissions and is mined to match them passes
+the first and is still wrong.
+
+### `beforeInitialize` — the gate
+
+```
+sender != adapter                     -> NotAdapter(sender)
+already registered                    -> return the selector (IDEMPOTENT, see below)
+key.fee != 0                          -> WrongFee
+key.tickSpacing != 60                 -> WrongTickSpacing
+key.hooks != address(this)            -> WrongHook
+neither currency is the USDC immutable-> NoUsdcSide(c0, c1)
+lfx1.curves(token).token != token     -> UnknownCurve
+lfx1.curves(token).creator == 0       -> ZeroCreator
+```
+
+Then caches, once per pool for ever: the launch token, the creator as the initial
+`feeRecipient`, and **which currency index is USDC**. One expensive read per pool, never on
+the swap path.
+
+⚠ **USDC IS IDENTIFIED AGAINST THE IMMUTABLE, NEVER AS "whichever is not currency0".**
+Roughly a fifth of launched tokens sort below `0x3600…0000` and both orderings occur.
+
+⚠ **REGISTRATION IS IDEMPOTENT, NOT GUARDED BY AN "ALREADY REGISTERED" REVERT.**
+`PoolManager.initialize` calls `beforeInitialize` **before** it checks whether the pool
+exists — the hook call sits above `_pools[id].initialize(...)`, and `Pool.sol:101` is what
+throws `PoolAlreadyInitialized`. A retried graduation re-enters the hook first, and
+reverting with our own error would **mask the real reason**.
+
+### ⚠ THE GATE IS TWO-ENDED. Either half alone is worse than useless
+
+* `BallistaV4Adapter.addLiquidity` requires **`msg.sender == lfx1`**
+* `BallistaFeeHook.beforeInitialize` requires **`sender == adapter`**
+
+`sender == adapter` **alone would be worse than a curve-state check**, because
+`addLiquidity` proves only that *someone* routed through the adapter. An attacker could buy
+dust off a live curve and poison the pool for the whole ACTIVE phase.
+
+| window | closed by |
+|---|---|
+| before the token exists | `safeTransferFrom` requires `extcodesize(token) > 0` (`SafeERC20.sol:239`) |
+| the whole ACTIVE phase | `_performGraduation` is reachable only on a threshold crossing or from `graduate()` (`LFX1.sol:693`) |
+| the parked window | in that state only `LFX1.graduate()` reaches the adapter, passing the **true** reserves (`LFX1.sol:656-664`) |
+
+### `afterSwap` — 100 bps of the unspecified currency
+
+Runs on every trade for ever and **cannot be changed**. It must never revert: a revert
+bricks the pool permanently — every swap reverts, the liquidity is burned so nobody can
+withdraw, and there is no owner.
+
+The one line worth reading twice, correct for all four combinations:
+
+```solidity
+bool specifiedIsCurrency0 = (params.amountSpecified < 0) == params.zeroForOne;
+```
+
+⚠ **The magnitude is widened to `int256` before negation.** `-x` on `int128.min` overflows a
+checked `int128` and would revert *inside* `afterSwap`.
+
+Fee is `magnitude * 100 / 10_000`, **rounding down**, so the hook can never claim more than
+the swap produced. Returns a **single positive `int128`** equal to the fee, on the
+unspecified currency.
+
+⚠ **STATE IS WRITTEN BEFORE THE EXTERNAL CALL.** `poolManager.take` ends in
+`currency.transfer`, and on Arc the USDC side is a transparent upgradeable proxy whose
+implementation Circle controls — so that transfer is not categorically callback-free.
+
+### `sweep(poolId)` — permissionless, and it makes NO external call
+
+Reads both accruals, zeroes them, credits the escrow **50/50** between an immutable
+`protocolRecipient` set at construction and the cached `feeRecipient`, emits. The odd unit
+goes to the creator, deliberately.
+
+⚠ **THE ABSENCE OF AN EXTERNAL CALL IS THE SAFETY ARGUMENT, NOT AN OPTIMISATION.** Because
+sweep only moves numbers it cannot be blocked by a hostile recipient, cannot be sandwiched,
+needs no slippage parameter, and is safe to call from inside a v4 unlock. **Pons needs a
+`PoolManagerAlreadyUnlocked` guard at the equivalent point only because their sweep performs
+a conversion swap; ours has nothing to guard.** Verified, not assumed.
+
+### The escrow lives IN the hook, and that was a decision
+
+`owedUsdc[recipient]` and `owedToken[recipient][token]`, drained by `claim()` and
+`claimToken(address)`, both zeroing before transferring.
+
+**The pull-based property comes from CREDITING rather than TRANSFERRING, not from the
+balances living elsewhere.** A separate contract would need its own authorisation (only the
+hook may credit) — a new trust edge, a new immutable in both directions, and a **fourth**
+contract in §20.6's immutable cycle, for no gain. Two mappings and two functions is the
+smallest thing that works.
+
+### `transferFeeRecipient(poolId, addr)` — immediate, no timelock
+
+Current recipient only. ⚠ **LFX1 writes `creator` once in a struct literal (`LFX1.sol:342`)
+with no setter anywhere**, so without this a lost creator key would strand half of every
+graduated pool's fees for ever. A timelock on the only remedy protects nobody.
+
+Balances **already credited** stay with the previous recipient — they were earned before the
+transfer. See §20.10 for the accepted limitation that follows.
+
+### ⚠ THE EVENT SURFACE — a deliverable, because it CANNOT be added later
+
+The hook returns an `afterSwap` delta, so **PoolManager's own `Swap` event reports the
+pool's internal swap and NOT what the trader paid.** An indexer reading only `Swap`
+overstates what the trader received on an exact-input swap by exactly the fee. Uniswap
+Foundation flag this class in their v4 analytics disclosure.
+
+```solidity
+event PoolRegistered(PoolId indexed poolId, address indexed token, address indexed creator,
+                     bool usdcIsCurrency0, uint24 fee, int24 tickSpacing);
+event FeeAccrued(PoolId indexed poolId, address indexed currency, uint256 feeAmount,
+                 int128 amount0, int128 amount1);
+event FeesSwept(PoolId indexed poolId, address indexed token, address indexed feeRecipient,
+                uint256 usdcToProtocol, uint256 usdcToCreator,
+                uint256 tokenToProtocol, uint256 tokenToCreator);
+event FeeRecipientTransferred(PoolId indexed poolId, address indexed previous, address indexed next);
+event Claimed(address indexed recipient, address indexed currency, uint256 amount);
+```
+
+**`FeeAccrued` carries the pool's GROSS deltas alongside the fee, so everything is derivable
+FROM OUR LOGS ALONE, with no join against PoolManager's:**
+
+```
+trader net on currency0 = amount0 - (currency == currency0 ? feeAmount : 0)
+trader net on currency1 = amount1 - (currency == currency1 ? feeAmount : 0)
+execution price         = |amount1 / amount0|      (pool-internal, pre-fee)
+direction               = amount0 < 0  =>  zeroForOne
+```
+
+⚠ **`zeroForOne` is deliberately NOT emitted** — it is recoverable from the sign of
+`amount0`, and this event is written on every trade for ever.
+
+⚠ **GROSS vs NET is the trap here and it bit the test written to check it.**
+`poolManager.swap` returns the **post-hook** delta (`PoolManager.sol:35, :40`); the hook is
+handed the **pre-hook gross**. A calculation that compares the fee against the net is off by
+the fee itself.
+
+## 21.3 The adapter's three constructor checks
+
+```solidity
+if (address(hook_) == address(0)) revert ZeroHook();
+uint160 flags = uint160(address(hook_)) & Hooks.ALL_HOOK_MASK;
+if (flags != REQUIRED_HOOK_FLAGS) revert HookFlagsWrong(flags, REQUIRED_HOOK_FLAGS);
+address boundTo = IHookBinding(address(hook_)).adapter();
+if (boundTo != address(this)) revert HookNotBoundToThis(boundTo);
+```
+
+`REQUIRED_HOOK_FLAGS` is derived from `Hooks.BEFORE_INITIALIZE_FLAG | AFTER_SWAP_FLAG |
+AFTER_SWAP_RETURNS_DELTA_FLAG`, **never written as a literal `0x2044`**.
+
+1. ⚠ **A zero hook is the only failure in this deployment that is silent at BOTH ends.**
+   `Hooks.isValidHookAddress(IHooks(0), fee)` returns **true** for a static fee — a hookless
+   pool is legal v4 — so an adapter built with `hooks: address(0)` graduates
+   **successfully**, creates the pool, burns the LP, and takes no fee for the rest of time.
+   ⚠ The red-proof showed the zero check is **deliberately redundant** with check 2 (since
+   `0 != 0x2044`); it exists to **name** the failure, because `HookFlagsWrong(0, 0x2044)`
+   reads like a mis-mined salt rather than the far likelier truth. **Do not delete it.**
+2. **Flag bits.** ⚠ **NOT redundant with `BaseHook`'s own constructor check.** That one
+   asserts *our hook's* address matches the permissions *our hook declares*; it never runs
+   for whatever address the adapter was handed. Different facts.
+3. ⚠ **THE BINDING, AND IT IS WHAT MAKES THE NONCE PREDICTION SELF-VERIFYING.** Checks 1
+   and 2 pass for any correctly-flagged address, including one produced by a mis-predicted
+   nonce. This asks the hook who **it** thinks its adapter is and requires the answer to be
+   `address(this)` — already final inside a constructor. If a stray transaction moved the
+   nonce, **the adapter's own deployment reverts** instead of succeeding into a pair that
+   can never graduate. It does not prove the hook is a `BallistaFeeHook` — a crafted
+   impostor could answer — but a mistyped or mis-predicted address cannot.
+
+## 21.4 The adapter's other two changes
+
+**`msg.sender == lfx1` on `addLiquidity`**, the first statement, with a 20-line permanent
+comment above it. ⚠ **Nothing reverts, nothing logs, and every other test still passes if
+that line is deleted** — the hole is an *absence*, which a green suite cannot see.
+`V4Binding` row 1 is the only thing standing between a future edit and a reopened hole, and
+it is red-proved.
+
+**Direct `poolManager.initialize`, replacing `positionManager.initializePool`**, with a
+selector-exact catch:
+
+```solidity
+} catch (bytes memory reason) {
+    bytes4 selector;
+    if (reason.length == 4) { assembly ("memory-safe") { selector := mload(add(reason, 0x20)) } }
+    if (selector != Pool.PoolAlreadyInitialized.selector) {
+        assembly ("memory-safe") { revert(add(reason, 0x20), mload(reason)) }
+    }
+}
+```
+
+Two reasons, and both matter:
+
+1. ⚠ **`msg.sender`.** Routing through the PositionManager wrapper makes **PositionManager**
+   the `sender` a hook observes — which is permissionless and identifies nothing. Calling
+   `PoolManager` directly is what makes `sender == adapter` mean anything. §18.2 recorded
+   that a `sender == adapter` gate "CANNOT WORK"; that was true only for the wrapper path,
+   and Pons demonstrates the direct path in production.
+2. ⚠ **The wrapper's catch is BARE.** `PoolInitializer_v4.sol:14-18` returns
+   `type(int24).max` for **any** revert, so a hook rejection, a tick-spacing error and an
+   already-existing pool were indistinguishable, and the hook's reason could never reach a
+   caller or a test.
+
+⚠ **Match on length AND selector.** `Pool.sol:101` throws through
+`CustomRevert.revertWith(bytes4)` — `mstore(0, selector); revert(0, 0x04)`, a **bare
+four-byte body**. Length-only or selector-only would swallow a longer revert that happens to
+start with the same four bytes. `Pool.PoolAlreadyInitialized.selector` is **imported from
+v4-core**, so unlike §15.2's four PositionManager selectors it cannot drift.
+
+Also measured: **the direct call is ~2,000 gas CHEAPER** than the wrapper.
+
+## 21.5 THE ATTACK ANALYSIS — all eleven items
+
+**A. Reentrancy via the fee currency.** The only external calls in any write path are
+`poolManager.take` (once) and `safeTransfer` in the two claims. **Every one is preceded by
+its state write.** `sweep` makes none at all. Reentry into `afterSwap` is blocked by
+`onlyPoolManager`; into `sweep` it is harmless (the fee is already booked); into `claim` the
+worst case is a **revert**, not a loss. ⚠ **No reentrancy guard is added, and that is a
+positive decision** — a `nonReentrant` on `afterSwap` introduces a way for `afterSwap` to
+revert, which is item E, a worse failure than the one it prevents.
+
+**B. The sweep race.** Two sweeps in one block: the second finds zero and **returns without
+reverting** (a no-op sweep is not an error, or anyone could grief a legitimate sweeper by
+front-running). From inside a v4 unlock: fine, because sweep never calls `PoolManager`.
+**We do not need Pons's `PoolManagerAlreadyUnlocked` guard** — verified, not assumed.
+
+**C. Rounding.** `fee = magnitude / 100`, floor. Zero iff the unspecified side is **under
+100 raw units** — 0.0001 USDC. **Not exploitable by three orders of magnitude:** moving 1
+USDC of volume in sub-boundary chunks needs ~10,101 swaps, ~30 USDC of gas to avoid ~0.01
+USDC of fees. Rounding down is also what makes item F safe.
+
+**D. Griefing the creator slot.** Three independent barriers: `sender == adapter`,
+`curve.token != token`, and an explicit `creator == address(0)` check that is unreachable
+through the real LFX1 and kept because the cost of being wrong is half of every fee on that
+pool accruing to `address(0)` for ever. Tested with a mock, not argued.
+
+**E. The unregistered-pool path.** `afterSwap` returns `(selector, 0)` after one `SLOAD`.
+⚠ **A revert here bricks the pool permanently.**
+
+**F. Delta sign and magnitude.** Positive, on the unspecified currency, and
+`fee = magnitude / 100 < magnitude` **by construction**. ⚠ **The boundary "a swap whose
+entire output is smaller than the fee" CANNOT OCCUR** — the fee is derived from the output.
+The nearest reachable boundary is magnitude 100 → fee 1. Asserted the other way too: the
+trader's net is short by **exactly** the fee, so the sign is right and not just the size.
+
+**G. The pool that cannot be swept.** `sweep` cannot fail on a hostile recipient because it
+never calls one. The failure lands only on their own `claim()`. Residual accepted in §20.10.
+
+**H. F1 residual — gas starvation.** ⚠ **Verified against LFX1's source, and it IS
+possible.** `_performGraduation` calls the router as `try …addLiquidity(...)` with **no gas
+parameter** (`LFX1.sol:656-664`), so EIP-150's 63/64 rule applies and a buyer can size a gas
+limit that completes the buy while starving the graduation. **No partial state** — an OOG
+reverts the whole sub-call. **Not a denial** — `graduate()` is permissionless and retryable.
+**Identical on v2.** The threshold moves with the graduation gas figure.
+
+**I. The adapter/hook binding.** ⚠ **The `address(0)` case is silent at deploy AND silent at
+graduation** — it destroys the entire economic purpose while looking healthy. A non-zero
+codeless hook fails **loudly** (the selector check on empty returndata). This is what
+§21.3's checks and the runbook's read-back gate exist for.
+
+**J. The un-gated adapter regression.** Permanent comment plus a red-proved pinning test.
+
+**K. The deployment sequence as an attack surface.** The Arachnid deployer's derivation
+**excludes `msg.sender`**, so anyone who learns `(salt, initcode)` can deploy our hook first,
+at our exact address. ⚠ **It is harmless — but only because of an invariant now pinned by a
+test:** every immutable comes from a constructor argument and **the constructor reads
+`msg.sender` zero times**. If that ever changed, a benign front-run becomes a theft.
+**Nobody can occupy the predicted adapter address** (only our EOA at that nonce can) and
+**nobody can consume our nonce** (only the key holder can sign) — the nonce risk is entirely
+self-inflicted. A front-run makes our CREATE2 transaction revert; ⚠ **the correct response
+is to VERIFY the deployed code and continue, not to re-mine.** **Conclusion: the salt and
+initcode do NOT need to be secret**, and publishing them lets anyone verify the
+address → flags → initcode chain.
+
+## 21.6 WHAT IS CLOSED, AND HOW
+
+### ⚠ F1 is structurally closed on hooked pools
+
+§16.1 recorded F1: a pool poisoned for **51,508 gas, no capital, in bulk, before the token
+exists**. **The evidence that it is closed is the FORM of the failure, not an assertion:**
+
+**Nine attack tests failed at SETUP, unable to construct their own premise** — five in
+`Fork.v4.attack` (A1a, A1c, A4b, A2c, A5a) and four in `Fork.v4.corrector` (C1, C3, C4, C6),
+every one reverting `Wrap__FailedHookCall` wrapping **`0x08b4a225` `NotAdapter(address)`**.
+
+⚠ **A4b was titled *"a pool can be poisoned BEFORE the token exists"*. It cannot poison
+anything.**
+
+**That is stronger than a test asserting the attack is blocked.** A blocked attack still
+*ran*. These cannot be **expressed**: there is no transaction an attacker can send.
+
+⚠ **DO NOT REPAIR THEM TO GREEN BY INVENTING A PREMISE.** That would destroy the evidence.
+
+**Still open:** hookless v4 pools remain poisonable by anyone (which is why the corrector
+keeps a job, §20.14), the v2 path is unaffected, and **none of this is an Arc result** —
+Base is not Arc.
+
+### The suite went 17 → 15, and that is not a regression
+
+**A smaller suite testing a smaller attack surface**, with **three tests now asserting an
+attack is impossible rather than repelled**. A7 and A7b were **deleted** because §16.3
+already recorded their guard as an **upstream** v4-periphery guarantee, not ours. A4a and
+A4b were **converted in place**. A1a was **narrowed** (its recovery half depended on
+poisoning being free). A3a was **retained** against `PermissiveTestHook`, a fixture that
+recreates the pre-gate world, solely because the `v4-no-guard` mutation once **survived**
+it. ⚠ **DO NOT ADD TESTS BACK TO REACH 17.**
+
+## 21.7 THE NUMBERS
+
+### 71 tests, green, in ONE combined run
+
+| suite | tests |
+|---|---|
+| `V4Binding` (local) | 23 |
+| `V4AdapterMath` (local) | 10 |
+| `Fork.v4` | 6 |
+| `Fork.v4.corrector` | 5 |
+| `Fork.v4.attack` | 15 |
+| `Fork.v4.hook` | 12 |
+| **total** | **71** |
+
+Plus `scripts/mine-hook-salt.js --selftest` at **24/24**.
+
+⚠ **The count of record comes from ONE combined run** (§20.17). Per-suite runs cannot detect
+order-dependence.
+
+### Graduation gas — ⚠ ALL THREE ARE BASE FIGURES. NONE IS AN ARC FIGURE
+
+| configuration | buy | buy + graduation | delta |
+|---|---|---|---|
+| hookless, via `positionManager.initializePool` (§15.1 as recorded) | 187,350 | 696,332 | **508,982** |
+| hookless, direct `poolManager.initialize` | 187,350 | 694,336 | **506,986** |
+| **hooked, direct** | 187,350 | **777,343** | **589,993** |
+
+**The hook costs ~83,000 gas**, once per token, never on the swap path. ~2.0% of Arc's
+30,000,000 block limit. Also: standalone `graduate()` retry **698,552**; orderings 793,815
+(token below USDC) and 760,243 (above).
+
+### Deployment cost
+
+**LFX1: 5,653,867 gas, measured on Arc mainnet, = 0.113 USDC at 20 gwei.** Hook ~1,860,452;
+adapter ~1.5M (⚠ **not directly estimable before the hook exists**, because its constructor
+reads `hook.adapter()` — the binding check working). **Full stack ~0.18 USDC.** Fund 5.
+
+### Throwaway threshold: 10 USDC
+
+⚠ **THE "~54.2 USDC FLOOR" IS STALE — DO NOT SIZE ANYTHING FROM IT.** It came from the
+`2**64` ratio bound, which §15.4 records as **fixed** by the wide branch. Live constants are
+`MAX_PRECISE_RATIO = 1 << 63` and `MAX_AMOUNT_RATIO = 1 << 191`
+(`BallistaV4Adapter.sol:78-79`) → arithmetic floor ~3e-37 USDC, with v4's own
+`MIN_SQRT_PRICE` binding at ~3e-18. **`V4AdapterMath` M8 exercises 10 USDC and passes.**
+
+## 21.8 THE TRAPS — each a named finding
+
+**1. A stale fixture premise reads as a fund-loss bug (§20.15).** Four failures in one
+session all announced themselves as money disappearing and were all stale setup:
+`tokenReserves lost` was §1.4's **depletion arm** firing correctly; `tokens left the factory`
+was **the attacker's own dust**; `division by zero` was a curve reached by a graduation that
+now succeeds; `graduated into a poisoned pool` was **two different `PoolId`s**. **Three
+questions, in order: depletion arm or threshold arm? whose balance is it? is it the same
+pool?**
+
+**2. A test passing standalone and failing in combination (§20.17).** `A1b` gave 1.626e-37
+alone and 3.919e-21 combined. **Cause: token ordering, not liquidity** — `sqrtPriceX96`
+encodes raw-unit ratios and the sides are 18dp and 6dp. **Rule: the count of record comes
+from one combined run, always.**
+
+**3. A threshold encoding one branch of a branching fact (§20.17).** `A1b`'s `< 1e-30`
+encoded one ordering and had never seen the other. It now launches until it holds one token
+of **each** and asserts the ordering-independent bound.
+
+**4. ⚠ A CONTROL CANNOT BE A SUBJECT.** `deploy-v4-stack.js` first used PoolManager as both
+a known-good control and a thing to check — so on a chain with no v4 it reported *"the probe
+is broken"* when the probe was fine and the absence was real.
+
+**5. ⚠ `arm(target, payload, TRIGGER, SKIP)` — the misread that cost three turns.**
+`ReenteringToken` (`V4Attackers.sol:22-40`): the **third** argument is `trigger`
+(1 = during `transferFrom`, 2 = during `approve`), the **fourth** is `skip`, and `_fire`
+uses `seen++ < skip` so it fires on the `skip+1`-th occurrence. Changing "1, 0" to "2, 0"
+switched the *trigger*, not the skip. **Read the fixture before tuning its arguments.**
+Along the way: pointed straight at the adapter, the nested call returns `0x901d9118`
+`NotLfx1`, not `0x3ee5aeb5` `ReentrancyGuardReentrantCall` — ⚠ **the caller gate SHADOWS the
+reentrancy guard**, and a test asserting only "refused" would read that as the guard holding.
+
+**6. ⚠ THE CONSTRUCTOR ORDERING TRAP.** `adapter_` is **last** on the hook; `hook_` is
+**last** on the adapter. The miner appends the predicted adapter as the final argument by
+convention. **Reordering either constructor changes the initcode and silently invalidates
+every mined salt** — the deployment still succeeds, at a different address, with the wrong
+flags.
+
+**7. Salt asymmetry (§20.9).** Editing the **adapter** does not invalidate the salt (its
+address is `keccak(rlp([deployer, nonce]))`). Editing the **hook** does — **comments
+included**.
+
+## 21.9 THE DEPLOY ORDER as it now stands
+
+⚠ **THREE CONSECUTIVE NONCES, TWO PREDICTIONS.**
+
+```
+nonce n     CREATE2 the hook     (initcode embeds predicted adapter AND predicted LFX1)
+nonce n+1   deploy the adapter   (hook real, LFX1 still predicted)
+nonce n+2   deploy LFX1          (adapter real -> initialRouter_)
+then        read the binding back, both directions -- a HARD STOP, not a check
+```
+
+**Why the reversal changed it (§20.18):** §20.7's sequence put LFX1 **first** with
+`initialRouter_ = address(0)` precisely because that needed only the adapter predicted. With
+`initialRouter_` = the **adapter**, LFX1 must go **last**, and the hook — mined first —
+needs LFX1's address. Hence two predictions.
+
+**Why `initialRouter_` is the adapter:** the earlier clean-hands argument assumed a
+**hookless** adapter, where bootstrapping would permanently forfeit fee capture (§18.4).
+The adapter is now hook-bound and refuses a zero hook, wrong flags, and a hook not bound to
+itself. **Nothing is forfeited**, and 24 hours of an inert factory on Arc's opening day is a
+real cost.
+
+⚠ **The untimelocked path is never a default.** `deploy-v4-stack.js` defaults to
+`address(0)` and requires `--bootstrap-router`, printing that it **spends the constructor's
+one untimelocked activation** (`LFX1.sol:216-221`).
+
+⚠ **The key signs nothing else, ever.** Not a test transaction, not an approval. The nonce
+is re-read and asserted before **each** of the two later deploys, and a mismatch is a hard
+abort — the mined salt is already invalid.
+
+## 21.10 WHAT IS OPEN, in priority order
+
+1. ⚠ **THE ROUTER-SIDE INIT-CODE-HASH PROBE — the one outstanding v2 gate.** §20.19 records
+   the **factory** half as measured and reproduced. It says nothing about what the **router**
+   embeds, and `pairFor` uses the router's copy. Arc's router is **21,902 bytes against
+   canonical mainnet's 21,943**. Procedure in `CONTRACT_DEPLOY_RUNBOOK.md` §10. Needs Arc
+   mainnet access.
+2. **`ARC_MAINNET_RPC_URL` and the explorer shape** — named blanks in `hardhat.config.js`.
+   ⚠ **From Circle directly or a Circle-named provider only, never a search result.**
+   Verification is recorded as **unsettled**: Uniswap's Arc playbook flags confirming whether
+   Arcscan is Etherscan-compatible or Blockscout **before** deploying.
+3. **The two unprobed PositionManager selectors** — `0xdd46508f` `modifyLiquidities` and
+   `0xf7020405` `initializePool` have **never been probed on any Arc chain** (§15.2, §15.8).
+4. **The private-mainnet deploy**, blocked on funding and on the RPC. §20.5 and runbook §9
+   carry what it must prove and its abort conditions.
+5. ⚠ **Graduation gas must be re-measured on Arc**, with the hook wired. Every figure in
+   §21.7 is a **Base** figure, and Zero8 moved Arc's gas accounting once already (§2).
+6. `CONTRACT_INVENTORY.md` is **blind to three of the five contracts** —
+   `gen-inventory.js:20-21` targets only `LFX1` and `LFX1Token`, so the adapter, the hook and
+   the corrector sit outside the mechanism that exists to catch exactly this.
+7. `npm run inventory` writes LF while `core.autocrlf` wants CRLF, so it shows as modified on
+   every run. One line in `.gitattributes` fixes it.
+8. Everything in §12.8 this work did not touch — Terms of Use, registrar hardening, zh-Hans,
+   the Healthchecks ping URL.

@@ -1,5 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
+const { deployBoundPair } = require('./helpers/v4deploy');
 
 // BallistaPoolCorrector against REAL Uniswap v4, on a pinned Base fork.
 //
@@ -46,7 +47,7 @@ describe('BallistaPoolCorrector — real Uniswap v4 (Base fork)', function () {
   this.timeout(1800000);
 
   let owner, treasury, creator, buyer, attacker;
-  let usdc, posm, pm, lens, math, adapter, ballista, corrector;
+  let usdc, posm, pm, lens, math, adapter, ballista, forwarder, hookAddress, corrector;
 
   before(async function () {
     if (!process.env.FORK_BASE) this.skip();
@@ -78,14 +79,41 @@ describe('BallistaPoolCorrector — real Uniswap v4 (Base fork)', function () {
     pm = new ethers.Contract(POOL_MANAGER, PM_ABI, attacker);
 
     lens = await (await ethers.getContractFactory('V4PoolLens')).deploy();
-    math = await (await ethers.getContractFactory('V4AdapterMathHarness')).deploy();
-    adapter = await (await ethers.getContractFactory('BallistaV4Adapter')).deploy(
-      POOL_MANAGER, POSITION_MANAGER, PERMIT2
-    );
+    // The harness inherits the adapter, so the adapter's hook checks run on it too and it
+    // needs its own correctly-flagged, correctly-bound MockHookBinding. Deployed BEFORE
+    // the nonce is read below, so it does not shift the LFX1 prediction.
+    math = (await deployBoundPair(owner, 'MockHookBinding', [], 'V4AdapterMathHarness', [])).adapter;
+    // ⚠ THE FORWARDER IS THE ADAPTER'S `lfx1` AND ALSO LFX1'S ROUTER.
+    // The adapter accepts one caller (CLAUDE.md 20.6). These suites need BOTH a real
+    // graduation and an attacker driving the adapter directly, so a permissionless
+    // forwarder sits in the middle. That reproduces the PRE-GATE world on purpose: the
+    // attacks below are retained as defence in depth, each paired with a sibling proving
+    // the same attack is refused on the real, gated configuration.
+    forwarder = await (await ethers.getContractFactory('MockLfx1Caller')).deploy();
+    const forwarderAddr = await forwarder.getAddress();
+
+    // ⚠ EVERYTHING THAT IS NOT THE PAIR OR LFX1 IS DEPLOYED BEFORE THE NONCE IS READ.
+    // The prediction below counts transactions, so anything slipped in between silently
+    // shifts LFX1's address -- which the hook then rejects. Keep this ordering.
     corrector = await (await ethers.getContractFactory('BallistaPoolCorrector')).deploy(POOL_MANAGER);
-    ballista = await (await ethers.getContractFactory('LFX1')).deploy(
-      USDC, treasury.address, await adapter.getAddress()
+
+    const nonce0 = await ethers.provider.getTransactionCount(owner.address);
+    const predictedBallista = ethers.getCreateAddress({ from: owner.address, nonce: nonce0 + 3 });
+    const pair = await deployBoundPair(
+      owner,
+      'BallistaFeeHook',
+      [POOL_MANAGER, predictedBallista, USDC, treasury.address],
+      'BallistaV4Adapter',
+      [POOL_MANAGER, POSITION_MANAGER, PERMIT2, forwarderAddr]
     );
+    adapter = pair.adapter;
+    hookAddress = pair.hookAddress;
+    await (await forwarder.setAdapter(await adapter.getAddress())).wait();
+    ballista = await (await ethers.getContractFactory('LFX1')).deploy(
+      USDC, treasury.address, forwarderAddr
+    );
+    expect(await ballista.getAddress(), 'CREATE prediction missed -- the hook would reject this LFX1')
+      .to.equal(predictedBallista);
     for (const s of [creator, buyer, attacker]) {
       await fundUsdc(s.address, 500_000n * ONE);
       await usdc.connect(s).approve(await ballista.getAddress(), ethers.MaxUint256);
@@ -110,12 +138,52 @@ describe('BallistaPoolCorrector — real Uniswap v4 (Base fork)', function () {
     return { curve: await ballista.curves(token), graduated: parsed.find((l) => l.name === 'Graduated') };
   }
 
+  // Buys up to JUST BELOW the graduation threshold and returns the live curve.
+  //
+  // ⚠ NEEDED BECAUSE GRADUATION NOW SUCCEEDS. These tests used to reach a populated curve
+  // by attempting a graduation and having it PARK on a poisoned pool. The hooked pool is
+  // unpoisonable, so that attempt completes, and a GRADUATED curve has zeroed reserves --
+  // which made targetFor divide by zero. The failure read as a math bug and was a stale
+  // premise. This fills the curve without crossing the threshold instead.
+  async function fillCurve(token, usdcIn = 7_000n * ONE) {
+    await ethers.provider.send('evm_increaseTime', [30]);
+    await ethers.provider.send('evm_mine', []);
+    await (await ballista.connect(buyer).buy(token, usdcIn, 0)).wait();
+    const curve = await ballista.curves(token);
+    expect(curve.state, 'the curve graduated early -- reduce usdcIn').to.equal(0n);
+    expect(curve.realUsdcReserves, 'curve has no reserves, so no target can be derived')
+      .to.be.greaterThan(0n);
+    return curve;
+  }
+
+  // ⚠ THE CORRECTOR'S JOB IS NOW HOOKLESS POOLS, AND THAT IS WHY THIS EXISTS.
+  //
+  // It was built (CLAUDE.md 17.6) for CLAUDE.md 16.1's F1: an EMPTY pool poisoned for gas
+  // alone, permissionlessly, before the token even existed. The two-ended gate closed that
+  // on HOOKED pools -- BallistaFeeHook.beforeInitialize admits only `sender == adapter`,
+  // so nobody else can initialise one at any price. Four tests in this file failed at
+  // SETUP after the gate landed, unable to construct their own premise.
+  //
+  // The contract still has a real job, narrower than when it was written:
+  //   - the v2 fallback is live and fully verified on Arc mainnet (CLAUDE.md 20.2), and
+  //   - ANY hookless v4 pool remains poisonable by anyone, because v4 pool initialisation
+  //     is permissionless when there is no hook to say otherwise.
+  // It is ownerless, holds no funds and is not in the graduation path, so carrying it as
+  // insurance for the v2 branch costs nothing.
+  //
+  // So the poisoning tests below build a HOOKLESS key. That is not a workaround for the
+  // gate -- it is the configuration the contract now exists to serve.
+  function hooklessKeyFor(token) {
+    const k = poolKeyFor(token);
+    return { key: { ...k.key, hooks: ethers.ZeroAddress }, tokenIsCurrency0: k.tokenIsCurrency0 };
+  }
+
   function poolKeyFor(token) {
     const t0 = BigInt(token) < BigInt(USDC);
     return {
       key: {
         currency0: t0 ? token : USDC, currency1: t0 ? USDC : token,
-        fee: POOL_FEE, tickSpacing: TICK_SPACING, hooks: ethers.ZeroAddress,
+        fee: POOL_FEE, tickSpacing: TICK_SPACING, hooks: hookAddress,
       },
       tokenIsCurrency0: t0,
     };
@@ -146,20 +214,33 @@ describe('BallistaPoolCorrector — real Uniswap v4 (Base fork)', function () {
     };
   }
 
-  it('C1. poison, correct, graduate — end to end', async function () {
+  it('C1. poison an empty hookless pool, then correct it, in one permissionless call', async function () {
+    // ⚠ RE-SCOPED, NOT WEAKENED. This used to end "...and graduate", poisoning the pool
+    // graduation would use. It cannot any more: graduation uses the HOOKED key and that
+    // pool is unpoisonable, while the poisoned pool here carries no hook and is therefore
+    // a different PoolId entirely. Asserting graduation after correcting an unrelated
+    // pool would have been a test passing for a reason unrelated to its name (16.4).
+    //
+    // What remains is the corrector's actual job on the configuration where the hole is
+    // still open: an empty, hookless, permissionlessly-initialised pool at a hostile
+    // price, moved to an exact target by anyone, for gas alone.
     await deployAll();
     const token = await launch('C1');
-    const { key } = poolKeyFor(token);
+    const { key } = hooklessKeyFor(token);
 
-    // Poison: initialise the pool at ~1e12x the correct price, before graduation.
+    // Poison: initialise at ~1e12x the correct price. Permissionless, because no hook.
     await pm.initialize(keyTuple(key), Q96);
+    const [poisoned] = await lens.slot0(POOL_MANAGER, key);
+    expect(poisoned, 'the pool was not poisoned, so nothing below is testing a correction')
+      .to.equal(Q96);
 
-    const first = await tryGraduate(token);
-    expect(first.graduated, 'graduated into a poisoned pool').to.be.undefined;
-    expect(first.curve.state, 'not parked at GRADUATION_READY').to.equal(1n);
+    // The target is the price the curve's own reserves imply, computed with the ADAPTER's
+    // math via the harness, so there is one implementation and nothing to drift.
+    const curve = await fillCurve(token);
+    const target = await targetFor(token, curve);
+    expect(target, 'target must differ from the poison or the correction proves nothing')
+      .to.not.equal(poisoned);
 
-    // Correct it. One call, from an account with no special standing.
-    const target = await targetFor(token, first.curve);
     const rc = await (await corrector.connect(attacker).correct(keyTuple(key), target)).wait();
 
     const [after] = await lens.slot0(POOL_MANAGER, key);
@@ -171,16 +252,12 @@ describe('BallistaPoolCorrector — real Uniswap v4 (Base fork)', function () {
     expect(ev.args.toSqrtPriceX96).to.equal(target);
     expect(ev.args.fromSqrtPriceX96).to.equal(Q96);
 
-    // And graduation now completes on the same parked reserves.
-    const tokenId = await posm.nextTokenId();
-    const rc2 = await (await ballista.connect(buyer).graduate(token)).wait();
-    const g = rc2.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
-      .filter(Boolean).find((l) => l.name === 'Graduated');
-    expect(g, 'still blocked after correction').to.not.be.undefined;
-    expect((await ballista.curves(token)).state, 'not GRADUATED').to.equal(2n);
-    expect(await posm.ownerOf(tokenId), 'position not burned').to.equal(BURN);
+    // The corrector is ownerless and has no settle path; it must end holding nothing.
+    const bal = await correctorBalances(token);
+    expect(bal.token, 'corrector kept tokens').to.equal(0n);
+    expect(bal.usdc, 'corrector kept USDC').to.equal(0n);
 
-    console.log(`      C1  poisoned -> corrected (${rc.gasUsed} gas) -> graduated (${rc2.gasUsed} gas)`);
+    console.log(`      C1  poisoned -> corrected in ${rc.gasUsed} gas, by an account with no standing`);
   });
 
   it('C2. correcting a pool that HOLDS LIQUIDITY reverts with CurrencyNotSettled', async function () {
@@ -188,6 +265,9 @@ describe('BallistaPoolCorrector — real Uniswap v4 (Base fork)', function () {
     const token = await launch('C2');
     const { key } = poolKeyFor(token);
     const adapterAddr = await adapter.getAddress();
+    // The forwarder pulls from the caller and re-approves the adapter, so approvals
+    // now target the forwarder rather than the adapter itself.
+    const spender = await forwarder.getAddress();
 
     // Give the pool real liquidity at a wrong price, using the adapter itself: it derives
     // the price from the amounts it is handed, so choosing the amounts chooses the price.
@@ -196,10 +276,10 @@ describe('BallistaPoolCorrector — real Uniswap v4 (Base fork)', function () {
     await ballista.connect(attacker).buy(token, 2_000n * ONE, 0);
     const launched = new ethers.Contract(token, ERC20_ABI, attacker);
     const atkTokens = await launched.balanceOf(attacker.address);
-    await launched.approve(adapterAddr, ethers.MaxUint256);
-    await usdc.connect(attacker).approve(adapterAddr, ethers.MaxUint256);
+    await launched.approve(spender, ethers.MaxUint256);
+    await usdc.connect(attacker).approve(spender, ethers.MaxUint256);
     const deadline = (await ethers.provider.getBlock('latest')).timestamp + 3600;
-    await adapter.connect(attacker).addLiquidity(
+    await forwarder.connect(attacker).addLiquidity(
       token, USDC, atkTokens, 1_000n * ONE, 0, 0, attacker.address, deadline
     );
 
@@ -227,7 +307,7 @@ describe('BallistaPoolCorrector — real Uniswap v4 (Base fork)', function () {
   it('C3. correcting a pool ALREADY AT TARGET is a no-op, not a revert', async function () {
     await deployAll();
     const token = await launch('C3');
-    const { key } = poolKeyFor(token);
+    const { key } = hooklessKeyFor(token); // see the note on hooklessKeyFor
 
     const target = 79228162514264337593543950336n * 2n; // any valid price
     await pm.initialize(keyTuple(key), target);
@@ -251,27 +331,37 @@ describe('BallistaPoolCorrector — real Uniswap v4 (Base fork)', function () {
   it('C4. the corrector holds NO balance of anything, after success and after failure', async function () {
     await deployAll();
     const token = await launch('C4');
-    const { key } = poolKeyFor(token);
+    const { key } = hooklessKeyFor(token);
+    const hooked = poolKeyFor(token).key;
     const addr = await corrector.getAddress();
 
     const before = await correctorBalances(token);
     expect(before.token + before.usdc + before.native, 'corrector started non-empty').to.equal(0n);
 
-    // Success path.
+    // ⚠ THE CURVE IS READ BEFORE ANY GRADUATION. It used to be read from a PARKED curve,
+    // which no longer happens -- graduation succeeds now, and a graduated curve has zeroed
+    // reserves, so targetFor divided by zero. The failure looked like a math bug and was
+    // a stale premise.
+    const curve = await fillCurve(token);
+    const target = await targetFor(token, curve);
+
+    // Success path: an empty hookless pool, poisoned and corrected.
     await pm.initialize(keyTuple(key), Q96);
-    const parked = await tryGraduate(token);
-    const target = await targetFor(token, parked.curve);
     await corrector.connect(attacker).correct(keyTuple(key), target);
     let after = await correctorBalances(token);
     expect(after.token, 'held token after a successful correction').to.equal(0n);
     expect(after.usdc, 'held usdc after a successful correction').to.equal(0n);
     expect(after.native, 'held native after a successful correction').to.equal(0n);
 
-    // Failure path: a target the pool cannot reach without trading. Graduate first so the
-    // pool has real liquidity, then try to move it.
-    await ballista.connect(buyer).graduate(token);
-    const [live] = await lens.slot0(POOL_MANAGER, key);
-    await expect(corrector.connect(attacker).correct(keyTuple(key), live / 2n)).to.be.reverted;
+    // Failure path: a pool that HOLDS liquidity cannot be moved without settling, and the
+    // corrector has no settle path -- so PoolManager.unlock reverts CurrencyNotSettled.
+    // Graduation seeds the HOOKED pool, which is the one with liquidity.
+    await (await ballista.connect(buyer).buy(token, 2_000n * ONE, 0)).wait();
+    expect((await ballista.curves(token)).state, 'the curve did not graduate').to.equal(2n);
+    const [live] = await lens.slot0(POOL_MANAGER, hooked);
+    expect(live, 'the hooked pool was not seeded, so the failure path proves nothing')
+      .to.be.greaterThan(0n);
+    await expect(corrector.connect(attacker).correct(keyTuple(hooked), live / 2n)).to.be.reverted;
 
     after = await correctorBalances(token);
     expect(after.token, 'held token after a failed correction').to.equal(0n);
@@ -299,42 +389,20 @@ describe('BallistaPoolCorrector — real Uniswap v4 (Base fork)', function () {
     console.log(`      C5  NotPoolManager, from an EOA and from a contract`);
   });
 
-  it('C6. after a correction the adapter\'s equality check PASSES and the mint succeeds', async function () {
-    await deployAll();
-    const token = await launch('C6');
-    const { key, tokenIsCurrency0 } = poolKeyFor(token);
+  // ⚠ C6 WAS DELETED, NOT SKIPPED. DO NOT RE-ADD IT AS MISSING COVERAGE.
+  //
+  // It asserted: "after a correction the adapter's equality check PASSES and the mint
+  // succeeds". Its premise is a POISONED HOOKED POOL -- the adapter only ever mints into
+  // a pool carrying BallistaFeeHook, and that pool cannot be poisoned by anyone, because
+  // beforeInitialize admits only `sender == adapter` and the adapter is itself callable
+  // only by LFX1. The condition the test recovers from is unreachable.
+  //
+  // Contorting it would have meant inventing a way to poison a hooked pool purely so the
+  // corrector had something to fix, which is the shape CLAUDE.md 16.4 warns about: a test
+  // that passes for a reason unrelated to the thing it names.
+  //
+  // What it used to cover that still matters is covered elsewhere: the adapter's exact
+  // price check is asserted by name in Fork.v4.attack (A1c), and the parked-then-graduated
+  // recovery shape by Fork.v4 test 6 (a reverting router).
 
-    await pm.initialize(keyTuple(key), Q96);
-    const parked = await tryGraduate(token);
-    expect(parked.curve.state).to.equal(1n);
-
-    const target = await targetFor(token, parked.curve);
-    await corrector.connect(attacker).correct(keyTuple(key), target);
-
-    const tokenId = await posm.nextTokenId();
-    const adapterAddr = await adapter.getAddress();
-    const launched = new ethers.Contract(token, ERC20_ABI, ethers.provider);
-    const bT = await launched.balanceOf(adapterAddr);
-    const bU = await usdc.balanceOf(adapterAddr);
-
-    const rc = await (await ballista.connect(buyer).graduate(token)).wait();
-    const g = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
-      .filter(Boolean).find((l) => l.name === 'Graduated');
-    expect(g, 'the mint did not succeed after correction').to.not.be.undefined;
-
-    // ⚠ §15.6: compare the pool price against what the adapter was HANDED, never against
-    // what the mint consumed -- for a full-range mint the consumed amounts are DERIVED from
-    // the pool price, so that comparison is circular and passed at rel=-7.5e-13 on a pool
-    // priced 1e12 wrong.
-    const pulledToken = g.args[1] + ((await launched.balanceOf(adapterAddr)) - bT);
-    const pulledUsdc = g.args[2] + ((await usdc.balanceOf(adapterAddr)) - bU);
-    const [p0, p1] = tokenIsCurrency0 ? [pulledToken, pulledUsdc] : [pulledUsdc, pulledToken];
-    const [sp] = await lens.slot0(POOL_MANAGER, key);
-    const rel = Number(((sp * sp * p0 - p1 * Q96 * Q96) * 10n ** 18n) / (p1 * Q96 * Q96)) / 1e18;
-    expect(Math.abs(rel), `pool price off by ${rel} after a corrected graduation`).to.be.lessThan(1e-9);
-
-    expect(await posm.ownerOf(tokenId), 'position not burned').to.equal(BURN);
-    expect(await posm.getPositionLiquidity(tokenId), 'no liquidity minted').to.be.greaterThan(0n);
-    console.log(`      C6  adapter accepted the corrected price, rel=${rel}, LP burned`);
-  });
 });

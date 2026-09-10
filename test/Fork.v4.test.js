@@ -1,5 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
+const { deployBoundPair } = require('./helpers/v4deploy');
 
 // Graduation into a REAL Uniswap v4 pool, on a pinned Base mainnet fork.
 // Gated behind FORK_BASE=1; ordinary runs skip this file entirely.
@@ -46,7 +47,7 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
   this.timeout(1800000);
 
   let owner, treasury, creator, buyer;
-  let usdc, posm, lens, adapter, ballista;
+  let usdc, posm, lens, adapter, ballista, hookAddress;
 
   before(async function () {
     if (!process.env.FORK_BASE) {
@@ -106,14 +107,36 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
       .to.equal(6n);
 
     lens = await (await ethers.getContractFactory('V4PoolLens')).deploy();
-    adapter = await (await ethers.getContractFactory('BallistaV4Adapter')).deploy(
-      POOL_MANAGER, POSITION_MANAGER, PERMIT2
+
+    // ⚠ THREE CONTRACTS, ONE CYCLE, ALL IMMUTABLE (CLAUDE.md sections 20.6, 20.7).
+    // The adapter needs the hook (PoolKey member) and LFX1 (caller gate); the hook needs
+    // the adapter (its gate) and LFX1 (to read the creator); LFX1 wants the adapter as
+    // initialRouter_. Two of the three addresses therefore have to be predicted before
+    // they exist, and the test runs the SAME predict/mine/deploy sequence production
+    // will -- so a change that breaks the real deployment breaks this too.
+    const nonce0 = await ethers.provider.getTransactionCount(owner.address);
+    // deployBoundPair sends two transactions (CREATE2 hook, then the adapter), so LFX1
+    // lands two nonces later.
+    const predictedBallista = ethers.getCreateAddress({ from: owner.address, nonce: nonce0 + 2 });
+
+    const pair = await deployBoundPair(
+      owner,
+      'BallistaFeeHook',
+      [POOL_MANAGER, predictedBallista, USDC, treasury.address],
+      'BallistaV4Adapter',
+      [POOL_MANAGER, POSITION_MANAGER, PERMIT2, predictedBallista]
     );
+    adapter = pair.adapter;
+    hookAddress = pair.hookAddress;
+
     // The adapter goes in as initialRouter_. That constructor bypass is the documented
     // one (CLAUDE.md 1.5) and is what makes a launch-day router possible at all.
     ballista = await (await ethers.getContractFactory('LFX1')).deploy(
       USDC, treasury.address, routerOverride || (await adapter.getAddress())
     );
+    expect(await ballista.getAddress(), 'CREATE prediction missed -- the gates would reject LFX1')
+      .to.equal(predictedBallista);
+    expect((BigInt(hookAddress) & 0x3fffn), 'hook flags').to.equal(0x2044n);
 
     for (const s of [creator, buyer]) {
       await fundUsdc(s.address, 200_000n * ONE);
@@ -189,7 +212,12 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
         currency1: tokenIsCurrency0 ? USDC : token,
         fee: POOL_FEE,
         tickSpacing: TICK_SPACING,
-        hooks: ethers.ZeroAddress,
+        // ⚠ THE HOOK IS PART OF THE KEY. Leaving this at ZeroAddress computes the
+        // PoolId of a DIFFERENT, hookless pool -- which does not exist -- so every
+        // assertion reads an uninitialised slot0 and reports "pool is not initialised"
+        // when the real pool is fine. It also makes a poisoning test poison the wrong
+        // pool. PoolId.sol:14 hashes all five slots.
+        hooks: hookAddress,
       },
       tokenIsCurrency0,
     };
@@ -455,43 +483,66 @@ describe('Ballista — graduation into REAL Uniswap v4 (Base fork)', function ()
     // recoverable rather than bricked.
     const token = await launch('V4HOSTILE');
 
-    // Initialise the pool first, at a wildly wrong price -- exactly the 1e12-scale error
-    // an attacker would want us to deposit into.
+    // ⚠ THIS TEST NOW PROVES SOMETHING STRONGER THAN IT WAS WRITTEN TO PROVE, AND IT WAS
+    // THE FAILING SETUP THAT REVEALED IT.
+    //
+    // It used to pre-initialise the pool at a 1e12-wrong price and assert that the
+    // adapter's exact price check parked the curve rather than depositing into it. That
+    // premise is now UNREACHABLE. A hooked pool's key carries BallistaFeeHook, whose
+    // beforeInitialize admits only `sender == adapter` -- and PoolManager passes its own
+    // caller through, so an EOA calling initialize directly is rejected outright. The
+    // pool cannot be poisoned in the first place.
+    //
+    // That is CLAUDE.md section 16.1 (F1) closed: 51,508 gas of pre-emptive, capital-free,
+    // bulk pool poisoning against tokens that do not exist yet, gone -- not mitigated,
+    // structurally unavailable. The price check survives as defence in depth for the one
+    // route that remains (see test 6, where a reverting router parks the curve and the
+    // adapter graduates it afterwards).
     const { key } = poolKeyFor(token);
     const pm = new ethers.Contract(
       POOL_MANAGER,
       ['function initialize((address,address,uint24,int24,address) key, uint160 sqrtPriceX96) returns (int24)'],
       owner
     );
-    await pm.initialize(
-      [key.currency0, key.currency1, key.fee, key.tickSpacing, key.hooks],
-      Q96 // price 1:1 in raw units, ~1e12x wrong
-    );
+    const hook = await ethers.getContractAt('BallistaFeeHook', hookAddress);
+    await expect(
+      pm.initialize([key.currency0, key.currency1, key.fee, key.tickSpacing, key.hooks], Q96)
+    ).to.be.reverted; // v4-core wraps the hook's revert in Wrap__FailedHookCall
 
-    // Now graduate into it.
+    // Name the guard, don't just observe a revert (CLAUDE.md 16.4). Called directly, the
+    // hook says exactly why.
+    await expect(
+      hook.connect(owner).beforeInitialize(owner.address, key, Q96)
+    ).to.be.revertedWithCustomError(hook, 'NotPoolManager');
+    await expect(
+      hook.connect(owner).beforeInitialize.staticCall(owner.address, key, Q96)
+    ).to.be.reverted;
+
+    // The pool was never created, so the curve graduates normally.
     const g = await graduate(token);
-
     expect(g.ready, 'the curve never reached GRADUATION_READY').to.not.be.undefined;
-    expect(g.graduated, 'graduation SUCCEEDED into a hostile pool -- the price check did not hold')
-      .to.be.undefined;
-    expect(g.attemptFailed, 'no GraduationAttemptFailed emitted').to.not.be.undefined;
-
-    // Parked, not lost. Reserves intact, state retryable -- the v2 recovery shape.
-    expect(g.curve.state, 'curve is not GRADUATION_READY').to.equal(1n);
-    expect(g.curve.tokenReserves, 'tokenReserves were zeroed on a FAILED graduation')
-      .to.be.greaterThan(0n);
-    expect(g.curve.realUsdcReserves, 'realUsdcReserves were zeroed on a FAILED graduation')
-      .to.be.greaterThan(0n);
-
-    // Nothing left the factory.
-    const launched = new ethers.Contract(token, ERC20_ABI, ethers.provider);
-    expect(await launched.balanceOf(await adapter.getAddress()), 'the adapter kept tokens from a failed attempt')
+    expect(g.graduated, 'graduation did NOT succeed even though poisoning was refused')
+      .to.not.be.undefined;
+    // A SUCCESSFUL graduation zeroes the reserves and latches the state one way.
+    expect(g.curve.state, 'curve is not GRADUATED').to.equal(2n);
+    expect(g.curve.tokenReserves, 'tokenReserves not zeroed on a successful graduation')
+      .to.equal(0n);
+    expect(g.curve.realUsdcReserves, 'realUsdcReserves not zeroed on a successful graduation')
       .to.equal(0n);
 
-    // And the permissionless retry still reverts while the pool stays hostile, rather
-    // than half-completing. GraduationFailed, not a silent no-op.
+    // The adapter keeps only rounding dust, which is deliberate: it pulls the FULL
+    // desired amounts so nothing is stranded in the FACTORY where no payout path could
+    // ever reach it (CLAUDE.md R14), and the leftover sits here instead, in an ownerless
+    // contract, effectively burned. Bounded rather than asserted at zero -- a full-range
+    // v4 mint consumes an integer liquidity, so one side is always a little short.
+    const launched = new ethers.Contract(token, ERC20_ABI, ethers.provider);
+    const dust = await launched.balanceOf(await adapter.getAddress());
+    expect(dust, 'adapter dust is not dust -- it kept a meaningful amount')
+      .to.be.lessThan(10n ** 18n);
+
+    // And the one-way state machine holds: a second graduate() is refused by name.
     await expect(ballista.connect(buyer).graduate(token)).to.be.revertedWithCustomError(
-      ballista, 'GraduationFailed'
+      ballista, 'NotReadyToGraduate'
     );
 
     // A DIFFERENT token, launched after, is completely unaffected -- the attack is
