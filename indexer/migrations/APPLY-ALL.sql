@@ -866,6 +866,21 @@ END $$;
 -- The indexer already reads `curves(token)` after every trade (updateReservesFromChain).
 -- These two columns are written from THAT read. No extra RPC call.
 --
+-- ⚠ CORRECTED 11 September 2026: "after every trade" was not reliably true until then. The
+-- read carried no blockTag, so it returned the curve at whatever block was LATEST when the
+-- indexer reached the log -- after any later trade in the same poll, or hours later in a
+-- catch-up. Measured: 26 of 27 rows right; one GP4265 buy (block 60267961) held the state
+-- after the NEXT trade. That row has been repaired to the chain's state at its own block.
+--
+-- WHAT IS TRUE NOW: the read is pinned to the trade's own block (readCurveAtBlock in
+-- src/index.js), so from that fix forward these columns hold the BLOCK-LEVEL post-trade
+-- state -- the curve at the end of the trade's block.
+--
+-- THE LIMIT, which the frozen contract gives no way around: two trades on one token in the
+-- SAME block share that block's end state. The Trade event carries no reserves, so nothing
+-- can separate them. None of the 27 rows stored at the time shared a block.
+-- `indexer/scripts/verify-trade-reserves.js --live` checks every row against the chain.
+--
 --
 -- ═══ WHY EMPTY BUCKETS ARE NOT A GAP TO FILL ═════════════════════════════════
 --
@@ -1123,6 +1138,20 @@ COMMIT;
 -- pre-trade price was ever stored for it, and the alternative -- computing the launch
 -- price from the curve constants -- is precisely the re-derivation the rule above forbids.
 -- It affects exactly one candle per token, at the far left of the chart.
+--
+-- ⚠ CORRECTED 11 September 2026: "the POST-trade curve state" (THE BUG, above) was not
+-- reliably true when this view was written. The indexer read `curves()` at whatever block
+-- was LATEST when it reached each log, so a trade processed after a later one -- same poll,
+-- or a catch-up -- stored the LATER state. Measured: 26 of 27 rows right. One GP4265 buy at
+-- block 60267961 held the state after the next trade, so this view charted the buy at the
+-- post-sell price and collapsed the sell's candle to a dash. That row is repaired.
+--
+-- WHAT IS TRUE NOW: from that fix forward the indexer reads at the trade's own block, so a
+-- row holds the BLOCK-LEVEL post-trade state and `lag()` above yields the previous row's
+-- block-end price. THE LIMIT: two trades on one token in the SAME block share that block's
+-- end state. The Trade event carries no reserves and the contract is frozen, so nothing can
+-- separate them; the second of such a pair opens where it closes. No stored row shared a
+-- block when this was written. See migration 004's matching note.
 
 BEGIN;
 

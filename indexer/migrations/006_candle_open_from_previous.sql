@@ -41,6 +41,20 @@
 -- pre-trade price was ever stored for it, and the alternative -- computing the launch
 -- price from the curve constants -- is precisely the re-derivation the rule above forbids.
 -- It affects exactly one candle per token, at the far left of the chart.
+--
+-- ⚠ CORRECTED 11 September 2026: "the POST-trade curve state" (THE BUG, above) was not
+-- reliably true when this view was written. The indexer read `curves()` at whatever block
+-- was LATEST when it reached each log, so a trade processed after a later one -- same poll,
+-- or a catch-up -- stored the LATER state. Measured: 26 of 27 rows right. One GP4265 buy at
+-- block 60267961 held the state after the next trade, so this view charted the buy at the
+-- post-sell price and collapsed the sell's candle to a dash. That row is repaired.
+--
+-- WHAT IS TRUE NOW: from that fix forward the indexer reads at the trade's own block, so a
+-- row holds the BLOCK-LEVEL post-trade state and `lag()` above yields the previous row's
+-- block-end price. THE LIMIT: two trades on one token in the SAME block share that block's
+-- end state. The Trade event carries no reserves and the contract is frozen, so nothing can
+-- separate them; the second of such a pair opens where it closes. No stored row shared a
+-- block when this was written. See migration 004's matching note.
 
 BEGIN;
 

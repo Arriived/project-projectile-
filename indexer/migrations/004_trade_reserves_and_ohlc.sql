@@ -48,6 +48,21 @@
 -- The indexer already reads `curves(token)` after every trade (updateReservesFromChain).
 -- These two columns are written from THAT read. No extra RPC call.
 --
+-- ⚠ CORRECTED 11 September 2026: "after every trade" was not reliably true until then. The
+-- read carried no blockTag, so it returned the curve at whatever block was LATEST when the
+-- indexer reached the log -- after any later trade in the same poll, or hours later in a
+-- catch-up. Measured: 26 of 27 rows right; one GP4265 buy (block 60267961) held the state
+-- after the NEXT trade. That row has been repaired to the chain's state at its own block.
+--
+-- WHAT IS TRUE NOW: the read is pinned to the trade's own block (readCurveAtBlock in
+-- src/index.js), so from that fix forward these columns hold the BLOCK-LEVEL post-trade
+-- state -- the curve at the end of the trade's block.
+--
+-- THE LIMIT, which the frozen contract gives no way around: two trades on one token in the
+-- SAME block share that block's end state. The Trade event carries no reserves, so nothing
+-- can separate them. None of the 27 rows stored at the time shared a block.
+-- `indexer/scripts/verify-trade-reserves.js --live` checks every row against the chain.
+--
 --
 -- ═══ WHY EMPTY BUCKETS ARE NOT A GAP TO FILL ═════════════════════════════════
 --

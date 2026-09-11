@@ -72,39 +72,70 @@ const CHUNK_SIZE = 500; // blocks per historical getLogs call — reduced after 
 // depending on what you observe.
 const CHUNK_DELAY_MS = 750; // pause between chunks, gentler on shared rate limits
 
-/// @notice Retries a function with exponential backoff, specifically when the failure
-///         looks like a rate limit rather than a real error (wrong ABI, bad address,
-///         etc. fail immediately instead — retrying those would just waste time).
+/// @notice The JSON-RPC error code behind an error, wherever the library put it.
+///
+///         ⚠ ethers v6 does NOT put the node's code on `err.code`. That field holds its own
+///         string ("CALL_EXCEPTION", "UNKNOWN_ERROR"); the node's number sits in `err.error`
+///         or `err.info.error`. So the "codes first" check below, written against `err.code`
+///         until 11 September 2026, never matched anything ethers threw -- the text fallback
+///         was doing all the work, which is the fragility that comment exists to prevent. A
+///         bare JSON-RPC error object with a numeric `code` is still read directly.
+function rpcErrorCode(err) {
+  if (typeof err?.code === "number") return err.code;
+  return err?.error?.code ?? err?.info?.error?.code ?? null;
+}
+
+// ⚠ MATCH ON CODES FIRST, TEXT ONLY AS A FALLBACK.
+//
+// This used to test `err.code === -32011` alone, and Arc actually returns **-32005**
+// for a rate limit. It worked only because the message regex happened to match
+// "rate limit exceeded" -- i.e. our own retry logic was depending on error TEXT, the
+// exact fragility that caused the live-mode outage. ethers has the same weakness one
+// layer down: it decides a method is unsupported by matching
+// /the method .* does not exist/i, so Arc's "internal error" defeats its
+// downgrade-to-polling path entirely.
+//
+// Measured against Arc: -32005 "rate limit exceeded". -32011 is kept because it is
+// what some other providers return and removing it would narrow coverage for no gain.
+// The text match stays as a last resort, not as the mechanism.
+const RATE_LIMIT_CODES = [-32005, -32011];
+
+// ⚠ -32001 "block not found". Measured on Arc, 11 September 2026: an eth_call pinned to a
+// block the serving node has not reached yet. Reads are pinned to the trade's own block now
+// (readCurveAtBlock), and a lagging node answers THIS -- where an unpinned read quietly
+// handed back older state. Transient by definition: the node catches up within a block.
+const NODE_LAG_CODES = [-32001];
+
+/// @notice Why an error is worth retrying -- "rate-limit" or "node-lag" -- or null when it is
+///         a real error (wrong ABI, bad address, a genuine revert) that should fail at once.
+///         Exported so scripts/verify-trade-reserves.js can prove the classification.
+function retryReason(err) {
+  const code = rpcErrorCode(err);
+  if (
+    RATE_LIMIT_CODES.includes(code) ||
+    /request limit|rate limit|too many requests/i.test(err?.message || err?.shortMessage || "")
+  ) {
+    return "rate-limit";
+  }
+  if (NODE_LAG_CODES.includes(code)) return "node-lag";
+  // The older, shape-based signal, kept: "missing revert data" with no revert reason on a
+  // call that should be trivially safe (reading a public variable right after its own
+  // contract's creation tx confirmed) points at RPC node lag — the event got pushed before
+  // the node serving this particular call caught up to that block — rather than a genuine
+  // contract-level revert, which would normally carry a reason.
+  if (err?.code === "CALL_EXCEPTION" && err.data === null && err.reason === null) return "node-lag";
+  return null;
+}
+
+/// @notice Retries a function with exponential backoff when the failure looks transient
+///         (see retryReason). A real error -- wrong ABI, bad address, a genuine revert --
+///         fails immediately instead; retrying those would just waste time.
 async function withRetry(fn, { retries = 5, baseDelayMs = 1000 } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
       return await fn();
     } catch (err) {
-      // ⚠ MATCH ON CODES FIRST, TEXT ONLY AS A FALLBACK.
-      //
-      // This used to test `err.code === -32011` alone, and Arc actually returns **-32005**
-      // for a rate limit. It worked only because the message regex happened to match
-      // "rate limit exceeded" -- i.e. our own retry logic was depending on error TEXT, the
-      // exact fragility that caused the live-mode outage. ethers has the same weakness one
-      // layer down: it decides a method is unsupported by matching
-      // /the method .* does not exist/i, so Arc's "internal error" defeats its
-      // downgrade-to-polling path entirely.
-      //
-      // Measured against Arc: -32005 "rate limit exceeded". -32011 is kept because it is
-      // what some other providers return and removing it would narrow coverage for no gain.
-      // The text match stays as a last resort, not as the mechanism.
-      const RATE_LIMIT_CODES = [-32005, -32011];
-      const isRateLimit =
-        RATE_LIMIT_CODES.includes(err.code) ||
-        /request limit|rate limit|too many requests/i.test(err.message || err.shortMessage || "");
-      // "missing revert data" with no actual revert reason on a call that should be
-      // trivially safe (reading a public variable right after its own contract's
-      // creation tx confirmed) points at RPC node lag — the event got pushed before
-      // the node serving this particular call caught up to that block — rather than
-      // a genuine contract-level revert, which would normally carry a reason.
-      const isLikelyNodeLag =
-        err.code === "CALL_EXCEPTION" && err.data === null && err.reason === null;
-      if ((!isRateLimit && !isLikelyNodeLag) || attempt >= retries) throw err;
+      if (!retryReason(err) || attempt >= retries) throw err;
       const delay = baseDelayMs * 2 ** attempt;
       console.warn(`  transient error, retrying in ${delay}ms (attempt ${attempt + 1}/${retries})...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
@@ -262,17 +293,52 @@ async function upsertTokenFromChain(tokenAddress) {
 }
 
 /**
- * Refresh a token's curve state, and hand the caller the reserves it just read.
+ * curves(token) as it stood at the END of `blockNumber` -- never at "latest".
+ *
+ * ⚠ THE BUG THIS REPLACES, measured 11 September 2026. The trade row's reserves are what the
+ * candle chart plots, and they were read with no blockTag -- at whatever block was latest
+ * when the indexer reached the log. 26 of 27 stored rows were right. The 27th, a GP4265 BUY
+ * at block 60267961, held the state after the NEXT trade, a SELL six blocks later, because
+ * both were ingested two hours late in a catch-up. Every trade sharing one 5s poll, and every
+ * trade in a catch-up, got the same later state.
+ *
+ * ⚠ IT REFUSES A MISSING BLOCK NUMBER rather than falling back to latest. The fallback IS the
+ * bug -- silent, plausible and wrong -- so a caller that forgets the block fails loudly.
+ *
+ * The limit, which cannot be closed from here: two trades on one token in ONE block share the
+ * block-end state. The Trade event carries no reserves to separate them, and the contract is
+ * frozen. None of the 27 stored rows shares a block.
+ *
+ * Needs an archive-capable RPC for anything older than the node's recent state. Both Arc
+ * testnet hosts serve eth_call from block 1 (measured). Check any new provider before
+ * pointing FACTORY_RPC_URL at it: a catch-up reads as far back as the checkpoint.
+ */
+function readCurveAtBlock(contract, tokenAddress, blockNumber) {
+  const block = typeof blockNumber === "bigint" ? Number(blockNumber) : blockNumber;
+  if (!Number.isSafeInteger(block) || block < 0) {
+    throw new Error(
+      `readCurveAtBlock: refusing to read ${tokenAddress} without a block number ` +
+        `(got ${String(blockNumber)}); an unpinned read is exactly the bug this prevents`
+    );
+  }
+  return contract.curves(tokenAddress, { blockTag: block });
+}
+
+/**
+ * Refresh a token's curve state from the chain as it stood at `blockNumber`, and hand the
+ * caller the reserves it just read.
  *
  * ⚠ THE RETURN VALUE IS LOAD-BEARING (migration 004). handleTrade writes these same
  * numbers onto the trade row as the POST-TRADE curve state, which is what the candle
- * chart plots. `tokens` only ever holds the CURRENT reserves, so once a second trade
- * lands the state at the first is gone and cannot be recovered from the row.
+ * chart plots. `tokens` holds only the latest state the indexer has processed, so once a
+ * second trade lands the state at the first is gone and cannot be recovered from the row.
  *
- * Returning them here rather than re-reading means the chart costs ZERO extra RPC calls.
+ * `tokens` is written from the same pinned read. Trades are processed in block order, so it
+ * trails the head only while a catch-up is running, and converges on the latest trade's
+ * state. One read serves both rows, so the chart still costs ZERO extra RPC calls.
  */
-async function updateReservesFromChain(tokenAddress) {
-  const curve = await withRetry(() => factory.curves(tokenAddress));
+async function updateReservesFromChain(tokenAddress, blockNumber) {
+  const curve = await withRetry(() => readCurveAtBlock(factory, tokenAddress, blockNumber));
   const { error } = await supabase
     .from("tokens")
     .update({
@@ -321,17 +387,24 @@ async function handleTrade(log) {
     .maybeSingle();
   if (!tokenRow) await upsertTokenFromChain(tokenAddress);
 
-  // ⚠ RESERVES ARE READ BEFORE THE INSERT, NOT AFTER (migration 004).
+  // ⚠ RESERVES ARE READ BEFORE THE INSERT, NOT AFTER (migration 004) -- AND AT THIS LOG'S
+  // BLOCK, NOT AT LATEST.
   //
   // This used to insert the trade and then refresh reserves. The order matters now: the
   // trade row carries the POST-TRADE curve state, and that is what the candle chart
-  // plots. `tokens` holds only the CURRENT reserves, so the instant a second trade lands
-  // the state at the first is unrecoverable.
+  // plots. `tokens` holds only the latest processed reserves, so the instant a second
+  // trade lands the state at the first is unrecoverable.
+  //
+  // The block matters as much as the order. Read at latest, the "post-trade" state was
+  // whatever the curve said when the indexer got here: after any later trade in the same
+  // poll, or hours later in a catch-up (see readCurveAtBlock). Pinned to log.blockNumber it
+  // is the state at the end of this trade's block, which is exact unless another trade on
+  // this token shares that block.
   //
   // Reordering costs nothing -- it is the same single read either way -- and refreshing
-  // `tokens` first is safe on a retry because that write is idempotent: it always sets
-  // whatever the chain currently says, regardless of how many times it runs.
-  const reserves = await updateReservesFromChain(tokenAddress);
+  // `tokens` first is safe on a retry because that write is idempotent: the same block gives
+  // the same state however many times it runs.
+  const reserves = await updateReservesFromChain(tokenAddress, log.blockNumber);
 
   const { error } = await supabase.from("trades").insert({
     token_address: tokenAddress,
@@ -660,6 +733,10 @@ module.exports = {
   upsertTokenFromChain,
   supabase,
   provider,
+  // Exported for scripts/verify-trade-reserves.js: the pinned read and the retry
+  // classification it depends on, both provable without a chain.
+  readCurveAtBlock,
+  retryReason,
   // Exported for scripts/verify-liveness.js. The liveness rule is the one piece of this
   // file that can be proved without a chain, so it is exported rather than buried.
   livenessVerdict,
