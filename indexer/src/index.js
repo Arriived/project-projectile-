@@ -115,6 +115,71 @@ const RATE_LIMIT_CODES = [-32005, -32011];
 // The log is in CLAUDE.md 23.4; scripts/verify-trade-reserves.js T7b pins the classification.
 const NODE_LAG_CODES = [-32001, -32014];
 
+// ⚠ TRANSPORT-LEVEL FAILURES NEVER REACH A JSON-RPC CODE, WHICH IS WHY THE -32014 FIX
+// DID NOTHING FOR THEM. Six HTTP 502s in v3's 21 hours (CLAUDE.md 23.6: 07:41:52, 11:41:33,
+// 11:56:35, 13:22:29, 19:52:14, 23:08:37 UTC) and one of them took the consecutive-failure
+// counter to 2 of 5 for the first time. A 502 is the load balancer answering instead of the
+// node, so there IS no JSON-RPC body and no code to classify -- rpcErrorCode returns null,
+// retryReason returned null, and the whole poll failed for something the next request would
+// have served.
+//
+// MEASURED, not inferred, against a local server on ethers 6.17.0 -- with a healthy server
+// as a control (it must not throw) and a -32014 as a second control (a numeric code must
+// still be visible):
+//
+//     HTTP 502/503/504   err.code "SERVER_ERROR"  err.response.statusCode 502/503/504
+//     socket destroyed   err.code "ECONNRESET"    no response
+//     client timeout     err.code "TIMEOUT"       no response
+//     healthy server     no throw
+//     JSON-RPC -32014    err.code "UNKNOWN_ERROR" err.error.code -32014
+//
+// ⚠ ethers puts a STRING in err.code for all of these, so rpcErrorCode -- which returns
+// only numbers -- cannot see them. That is the gap, and it is the same shape as the bug
+// CLAUDE.md 11.11 records one layer down: a classifier that only understands one encoding
+// of "what went wrong".
+//
+// ⚠ THE STATUS CODE IS THE SIGNAL, NEVER THE MESSAGE. "server response 502 Bad Gateway" is
+// text, and 11.18's standing rule is codes first. err.response.statusCode is a number ethers
+// carries deliberately.
+const TRANSPORT_ERROR_CODES = [
+  "TIMEOUT", // ethers' own client-side timeout
+  "ECONNRESET", // socket closed mid-flight -- measured as "socket hang up"
+  "ECONNREFUSED", // nothing listening: an RPC restarting looks exactly like this
+  "ECONNABORTED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "ENOTFOUND", // DNS
+  "EAI_AGAIN", // DNS, and the name says transient
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+];
+
+/// @notice Whether a failure happened BELOW JSON-RPC -- an HTTP status or a socket error --
+///         and is worth another attempt. Returns "rate-limit", "transport", or null.
+///
+/// ⚠ 4xx IS NOT RETRIED, WITH TWO NAMED EXCEPTIONS. A 400, 401, 403 or 404 will answer the
+///   same way in thirty seconds; retrying buys nothing and delays a loud failure. 429 is a
+///   rate limit and gets that label so the log reads correctly. 408 is literally a timeout.
+///
+/// ⚠ 501 IS EXCLUDED FROM THE 5xx SWEEP. "Not Implemented" is a statement about the method,
+///   not about the moment -- it is the HTTP twin of the -32601 that Arc now returns for
+///   eth_newFilter (CLAUDE.md 11.11), and retrying it would be retrying a permanent answer.
+function transportFailure(err) {
+  const status = err?.response?.statusCode ?? err?.status ?? null;
+  if (typeof status === "number") {
+    if (status === 429) return "rate-limit";
+    if (status === 408) return "transport";
+    if (status >= 500 && status !== 501) return "transport";
+    return null;
+  }
+  // No HTTP response at all: the socket failed, or we gave up waiting. ethers puts its own
+  // string code on err.code; node's underlying errno can also arrive nested on a cause.
+  for (const c of [err?.code, err?.error?.code, err?.cause?.code, err?.error?.cause?.code]) {
+    if (typeof c === "string" && TRANSPORT_ERROR_CODES.includes(c)) return "transport";
+  }
+  return null;
+}
+
 /// @notice Why an error is worth retrying -- "rate-limit" or "node-lag" -- or null when it is
 ///         a real error (wrong ABI, bad address, a genuine revert) that should fail at once.
 ///         Exported so scripts/verify-trade-reserves.js can prove the classification.
@@ -127,6 +192,10 @@ function retryReason(err) {
     return "rate-limit";
   }
   if (NODE_LAG_CODES.includes(code)) return "node-lag";
+  // Below JSON-RPC: an HTTP status or a dead socket. Checked AFTER the code paths so a
+  // response that carries a real JSON-RPC error keeps its own, more specific label.
+  const transport = transportFailure(err);
+  if (transport) return transport;
   // The older, shape-based signal, kept: "missing revert data" with no revert reason on a
   // call that should be trivially safe (reading a public variable right after its own
   // contract's creation tx confirmed) points at RPC node lag — the event got pushed before
@@ -139,6 +208,14 @@ function retryReason(err) {
 /// @notice Retries a function with exponential backoff when the failure looks transient
 ///         (see retryReason). A real error -- wrong ABI, bad address, a genuine revert --
 ///         fails immediately instead; retrying those would just waste time.
+///
+/// ⚠ WHAT CLASSIFYING TRANSPORT FAILURES COSTS, stated because it lengthens the time to
+///   notice a HARD outage. 5 retries at 1/2/4/8/16s is ~31s before a call finally throws.
+///   A 502 used to fail its poll instantly, so five consecutive polls reached the exit in
+///   ~50s; now the same sustained outage takes roughly 3.5 minutes. That is the deliberate
+///   trade: a SINGLE 502 no longer costs a poll, and a sustained one still exits. The
+///   independent backstop is unaffected -- livenessVerdict compares the checkpoint against
+///   the chain HEAD, not against a clock, and kills at 1000 blocks behind (CLAUDE.md 11.11).
 async function withRetry(fn, { retries = 5, baseDelayMs = 1000 } = {}) {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -746,6 +823,9 @@ module.exports = {
   // classification it depends on, both provable without a chain.
   readCurveAtBlock,
   retryReason,
+  transportFailure,
+  withRetry,
+  TRANSPORT_ERROR_CODES,
   // Exported for scripts/verify-liveness.js. The liveness rule is the one piece of this
   // file that can be proved without a chain, so it is exported rather than buried.
   livenessVerdict,
