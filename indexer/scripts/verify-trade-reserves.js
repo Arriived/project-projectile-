@@ -22,6 +22,7 @@
 //   b) remove readCurveAtBlock's block-number guard            -> T2, T3 fail
 //   c) remove -32001 from NODE_LAG_CODES                       -> T6 fails
 //   d) (--live) run before the GP4265 row is repaired          -> T9 fails
+//   e) remove -32014 from NODE_LAG_CODES                       -> T7b fails
 
 const { ethers } = require("ethers");
 const index = require("../src/index.js");
@@ -127,6 +128,18 @@ function recordingContract() {
     check(
       "T7 the shape ethers actually throws for it is node lag too",
       reason({ code: "CALL_EXCEPTION", data: null, reason: null, info: { error: { code: -32001, message: "block not found" } } }) === "node-lag"
+    );
+    // Measured in PRODUCTION, 11 Sep 2026 (CLAUDE.md 23.4): the live poll's eth_getLogs asked
+    // for a range ending at the head it had just been handed, and the node behind the load
+    // balancer had not reached it. Three times in nine hours, each recovered by the next poll.
+    // It is the eth_getLogs twin of -32001, so it takes the same path -- retry, do not fail
+    // the whole poll.
+    // Shaped so ONLY the code can match: the outer message is what the text fallback reads,
+    // and err.code is not CALL_EXCEPTION, so neither fallback can fire in its place.
+    check(
+      "T7b -32014 'requested data not available' is node lag too, by code alone",
+      reason({ code: "UNKNOWN_ERROR", message: "x", info: { error: { code: -32014, message: "requested data not available" } } }) === "node-lag",
+      String(reason({ code: "UNKNOWN_ERROR", message: "x", info: { error: { code: -32014, message: "requested data not available" } } }))
     );
     check(
       "T8 a genuine revert is NOT retried",

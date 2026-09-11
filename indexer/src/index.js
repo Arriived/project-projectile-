@@ -104,7 +104,16 @@ const RATE_LIMIT_CODES = [-32005, -32011];
 // block the serving node has not reached yet. Reads are pinned to the trade's own block now
 // (readCurveAtBlock), and a lagging node answers THIS -- where an unpinned read quietly
 // handed back older state. Transient by definition: the node catches up within a block.
-const NODE_LAG_CODES = [-32001];
+//
+// ⚠ -32014 "requested data not available" is the eth_getLogs twin, and it was measured in
+// PRODUCTION rather than reasoned about: three times in the nine hours after the 11 September
+// deploy (05:33:40, 07:32:51 and 08:41:46 UTC), the live poll asked for a range ending at the
+// head it had just been handed, and the node behind the load balancer had not reached it. The
+// next poll recovered from each one, so the five-in-a-row bound never went past 1 -- but until
+// this entry the whole poll failed instead of the one call being retried, and indexing stalled
+// until the next tick. Same cause as -32001, one method over, so it takes the same path.
+// The log is in CLAUDE.md 23.4; scripts/verify-trade-reserves.js T7b pins the classification.
+const NODE_LAG_CODES = [-32001, -32014];
 
 /// @notice Why an error is worth retrying -- "rate-limit" or "node-lag" -- or null when it is
 ///         a real error (wrong ABI, bad address, a genuine revert) that should fail at once.
