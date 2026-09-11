@@ -6323,3 +6323,159 @@ depth, no chain list and no mention of Arc. Rate limits are per API key, and som
 at roughly 1.7–8 rps **per IP**. Two questions were added to the outstanding Goldsky email:
 §11.17 items 3 and 4, and `BRIEFING.md` item 4. **Do not point `FACTORY_RPC_URL` at Edge until
 they are answered and the same archive probe has passed against it.**
+
+## 23.4 The deploy, and what production has done since
+
+**`3792fc9` went to Fly on 11 September 2026 at 02:03 UTC,** using the `--ha=false` command in
+`indexer/RUNBOOK.md`. From the log:
+- the old process exited on the deploy's signal (code 130) at 02:03:06;
+- the new one began catching up from block 61492445 at 02:03:21;
+- it switched to live mode at **02:04:44, after 83 seconds and 70 chunks.**
+
+⚠ **That loop does hand over, although it was suspected of not doing so.** `catchUp()` breaks
+only when a chunk ends and the head has not moved 750 ms later. On 0.48 s blocks that looks
+impossible. It happens anyway, because block times vary and the head read can lag, and the log
+shows it. Read the log before calling the loop a bug.
+
+**Re-measured between 10:50 and 11:00 UTC:**
+- `/health`: healthy, 6 blocks (~3 s) behind the head.
+- `verify:reserves:live`: 10/10, with **27/27** stored rows equal to the chain at their own
+  block.
+- ⚠ **Still 27 rows: no trade has happened since the deploy.** So the pinned read has not yet
+  run on a real trade in production. The evidence so far is the offline checks and the
+  repaired row. Re-run `verify:reserves:live` after the next trades.
+
+**Every live-poll failure logged since the deploy.** The next poll recovered from each one:
+
+| UTC | error | failures in a row |
+|---|---|---|
+| 05:33:40 | `-32014 "requested data not available"` on `eth_getLogs` | 1 of 5 |
+| 07:32:51 | the same | 1 of 5 |
+| 07:41:52 | HTTP 502 Bad Gateway from the RPC | 1 of 5 |
+| 08:41:46 | `-32014` again | 1 of 5 |
+
+The old process logged two more 502s before the deploy, at 01:00:39 and 01:50:59.
+
+⚠ **FINDING, NOT FIXED: `-32014` looks like node lag, and the retry list does not name it.**
+- **The mechanism.** Each `-32014` asked for a range ending at the head reported moments
+  earlier. The likeliest reading is a node behind the load balancer that had not reached that
+  head yet. That makes it the `eth_getLogs` twin of the `-32001 "block not found"` that §23.2
+  added for `eth_call`.
+- **What it costs now.** `retryReason()` returns null for it, so `withRetry` does not retry
+  the call. The whole poll fails instead and the next one waits an extra 10 s. That is harmless
+  today: the five-in-a-row bound has never gone past 1.
+- **It predates §23.2**, which did not touch the `eth_getLogs` path.
+- **The fix** is one entry in `NODE_LAG_CODES` plus an offline check. It needs an indexer
+  deploy, so it waits for the operator.
+
+## 23.5 Step 2 — the chart is built once and updated in place
+
+**What made the series identity unstable.** Three things together made `PriceChart` tear its
+chart down, build a new one and call `fitContent()` on almost every render of the token page:
+1. **`now` was `Date.now()` read inside render,** so the series memo's inputs changed on
+   every render.
+2. **`useCandles` returned freshly built arrays on every call** — its `forwardFill` results
+   and its `?? []` fallbacks. So every page re-render, the 6 s curve poll among them, handed
+   the chart new inputs.
+3. **The chart effect depended on `[series, theme]`,** so each new series identity destroyed
+   the chart, and the user's zoom and pan with it.
+
+**The fix:**
+- **`app/src/lib/chartSeries.ts`, new.** `planSeriesUpdate(drawn, next)` compares what is
+  drawn with what should be, and returns one of three plans:
+  - `none`;
+  - `update`: the last bar changed, strictly newer bars were appended, or both;
+  - `reset`: history changed, bars went missing, or the time grid moved.
+
+  It is pure, so it is proved without a browser.
+- **`PriceChart.tsx`:**
+  - it creates the chart **once per mount**, in an effect keyed only on whether there is data;
+  - a theme change restyles it with `applyOptions`;
+  - its data effect applies the plan. An `update` is one `series.update()` per bar; a `reset`
+    is `setData` with the visible **time** range kept;
+  - only a first draw, a timeframe change or the Reset button fit the content.
+- **`app/src/hooks/useMinuteClock.ts`, new.** One clock, in UNIX seconds floored to the
+  minute, ticking just after each minute boundary.
+- **`useCandles`:**
+  - it memoises its result on the data, the launch price, the creation time and the minute;
+  - it shares two empty arrays instead of making new ones;
+  - it returns `now`, which `TokenPage` passes to the chart, so both fill to one clock.
+
+**The check: `app/scripts/verify-chart.mts`, 13/13.**
+- K1–K9 prove the planner. K2 is the row that matters: a changed last bar is a single
+  `update`.
+- K10–K13 read the comment-stripped source:
+  - `createChart` sits in an effect that depends on neither the data nor the theme;
+  - neither file reads `Date.now()`;
+  - `useCandles` memoises.
+- Five red-proofs, each restored byte-exact under the mutation lease:
+
+  | mutation | goes red |
+  |---|---|
+  | always return `reset` | K1–K4 |
+  | skip the history comparison | K5 |
+  | drop the strictly-newer guard | K9 |
+  | put `series` in the create effect's dependencies | K10 |
+  | read `Date.now()` in render | K11 |
+- ⚠ **It is not in `npm run verify` yet.** Registering it means editing `app/package.json`,
+  which the operator asked to be left alone. Until then it runs as
+  `node --experimental-strip-types scripts/verify-chart.mts` from `app/`, and the suite-wide
+  `SUITES=17 CHECKS=494 FAILED=0` does not include it.
+
+**Browser evidence** (dev server, GP4265, 11 September 2026). A `MutationObserver` watched
+the chart root throughout, and it was never replaced:
+- Two theme switches, and a timeframe change and back: 0 rebuilds.
+- **The zoom survives a new trade.**
+  1. Real wheel events zoomed the view from `{0, 31}` to `{5.2947, 26.0206}`.
+  2. Five refetches then each moved the last candle.
+  3. Read after a rendered frame, the range was identical to the last digit.
+- **The control.** A Reset queued under the same conditions DID show up after a frame
+  (`{5.29, 26.02}` → `{0, 31}`). So the read above could have seen a reset, had there been one.
+- **The live edge.** From the fitted view, a trade landing in a NEW candle was appended: 32
+  bars became 33, and the view followed by exactly one bar (`{0, 31}` → `{1, 32}`).
+- **Console:** two failed loads, the Google Fonts stylesheet and the WalletConnect `pulse`
+  beacon, both status 0. Neither is chart code, and §13.3 already says not to chase `pulse`.
+
+⚠ **What that evidence is not:**
+- **The trades were simulated.** `fetch` was patched to add a row to the candle response, so
+  the app's own code path ran against fake data. No real trade was charted.
+- **The zoom was synthesised** wheel events, not a person's mouse.
+- **It ran on the dev server,** not a production build.
+
+### ⚠ TRAP: in a hidden browser pane, a chart test can pass vacuously
+
+**lightweight-charts applies `fitContent()` on the next animation frame.**
+- `ChartModel.fitContent` only queues an invalidation mask.
+- A requested visible range is applied by the same queue.
+- The in-app browser pane, while hidden, runs no frames. Measured: `requestAnimationFrame`
+  did not fire within 1.5 s.
+
+So a test that reads the visible range right after an update cannot see a reset the update
+queued. It passes whether or not one was queued. **The first run of this very check was read
+that way.** It was caught only because the control, a Reset click, "did nothing" too.
+
+- Only a screenshot forced a frame, and about half of those timed out.
+- Two things are synchronous and can be read at once: the wheel zoom, and the new-bar shift,
+  which `updateTimeScale` computes inside the data update.
+
+**RULE: to test a view applied on a frame, read after a rendered frame, and run a control that
+proves the read can see a reset.** §10's rule, that a probe which cannot return the other
+answer proves nothing, applies to browser probes too.
+
+### ⚠ FINDING, NOT FIXED: the default timeframe follows the clock
+
+`chosen = tf ?? defaultTimeframe(candles, now)`, and `now` ticks every minute. A viewer who
+has not picked a timeframe gets a new default each time the span since the first candle
+crosses 180 buckets. The chart then switches timeframe and refits, and the viewer's zoom goes
+with it.
+
+- GP4265's first candle is 2026-09-03 16:00 UTC.
+- Its default moved from 1H to 6H at **2026-09-11 04:00 UTC**. It read 1H in the first browser
+  check and 6H after the restart.
+- The next move, to 1D, falls on 2026-10-18.
+
+It is rare, and no trade causes it. A new trade cannot move the first candle, except the very
+first trade, which replaces the flat launch line anyway.
+
+The likely fix is to latch the default the first time data arrives on a page. That touches the
+timeframe logic step 5 is about, so it waits for the operator.
