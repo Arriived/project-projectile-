@@ -17,6 +17,16 @@
 | frontend | **BUILT, and the create flow SHIPS — now with image upload.** React + Vite + wagmi + viem in `app/`. `/`, `/t/:address`, `/about`, `/create`. Price chart, toasts, focus states, Pinata uploads. ⚠ **No longer a purely static build**: `app/api/sign-upload.ts` is a serverless function (§11.17). Entry bundle **228.37 kB gzip**; the chart is a **55.20 kB lazy chunk** loaded only on a token page. |
 | ✅ deployment | **LIVE IN PRODUCTION — this row said "nothing is deployed anywhere" until 4 September 2026.** Frontend at **`https://ballista.trading`** (Vercel project `ballista`, Root Directory `app`); indexer at **`https://ballista-indexer.fly.dev/health`** (Fly app `ballista-indexer`, one machine, `iad`). Both verified HTTP 200 this session. Full detail in `app/DEPLOY.md` and `indexer/RUNBOOK.md` — **read those before touching either**, they carry traps that cost real deploys. |
 
+⚠ **11 SEPTEMBER 2026 — THIS TABLE IS STALE. START AT §24, AT THE FOOT OF THIS FILE.**
+
+| §24 part | what it holds |
+|---|---|
+| **§24.1** | the working tree. Read it before any git command: it holds uncommitted chart work **and the operator's own uncommitted `app/package.json` and lockfile changes** |
+| §24.2 | the decisions waiting on the operator |
+| §24.3 | the work queue |
+| §24.4 | the audit findings. One is **Critical**: our own chain check blocks every WalletConnect user |
+| §24.6 | the resume point |
+
 **That HEAD is stale the moment anything is committed on top of it.** It records where
 this file was last updated, not where you are. `git rev-parse --short HEAD` is ground
 truth; if the two differ, commits have landed since and anything below may have moved with
@@ -33,6 +43,9 @@ the indexer, click through with a real wallet, and write migration 003. All thre
 ⚠ **SUPERSEDED AGAIN, 4 September 2026. IT IS NOW DEPLOYED.** This section said the project
 was "feature-complete and operationally unstarted". Both the frontend and the indexer are
 live in production and healthy — see the deployment row above.
+
+⚠ **SUPERSEDED AGAIN, 11 September 2026. READ §24 FIRST.** The live resume point is §24.6,
+at the foot of this file. The §12 pointer in the next paragraph is the history.
 
 **The ranked resume point is now §12 at the foot of this file. Read that, not the numbered
 list below**, which is kept only because items 2-4 in it are still open.
@@ -6479,3 +6492,307 @@ first trade, which replaces the flat launch line anyway.
 
 The likely fix is to latch the default the first time data arrives on a page. That touches the
 timeframe logic step 5 is about, so it waits for the operator.
+
+---
+
+# 24. SESSION OF 11 SEPTEMBER 2026 (continued) — step 2 closed out, a report-only audit, and the handover
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§23. **This is a handover.** The
+operator cleared the chat after it, so this section, §23 and `docs/AUDIT_2026-09-11.md`
+together hold everything a new session needs to carry on. Two pointers at the top of the
+file now lead here.
+
+## 24.1 ⚠ The working tree — read this before any git command
+
+**Where the branch is:** HEAD `e13346f` on `ballista-migration`, level with `origin`.
+
+**What is uncommitted, and whose it is:**
+
+| path | whose | what |
+|---|---|---|
+| `app/src/components/token/PriceChart.tsx`, `app/src/hooks/useCandles.ts`, `app/src/routes/TokenPage.tsx` (modified); `app/src/lib/chartSeries.ts`, `app/src/hooks/useMinuteClock.ts`, `app/scripts/verify-chart.mts` (new) | this session | chart step 2 (§23.5). Done and verified, **not committed** |
+| `CLAUDE.md` | this session | §23.4, §23.5, this §24, and the two pointers at the top |
+| `docs/AUDIT_2026-09-11.md` (new) | this session | the full report-only audit (§24.4) |
+| `app/package.json`, `app/package-lock.json` | ⚠ **the operator's** | adds `@circle-fin/adapter-solana ^1.7.2`, `@circle-fin/adapter-viem-v2 ^1.17.1` and `@circle-fin/bridge-kit ^1.14.1`, plus 18 lockfile entries |
+
+**The rules that follow from that:**
+- ⚠ **"Leave app/package.json and the lockfile alone."** That is the operator's standing
+  instruction. Do not stage those two files with anything else, do not revert them, and do not
+  run an install that rewrites them.
+- ⚠ **Never run `vercel deploy` from this worktree.** The CLI uploads the working directory,
+  uncommitted files included, so a deploy from here would ship the bridge-kit dependencies.
+  Build previews from a clean detached worktree at the commit and remove it afterwards. That
+  is how the tested preview was built (§24.3).
+- **Commit, push or deploy only when the operator asks.**
+
+## 24.2 Decisions waiting on the operator
+
+**Asked at the end of step 2, not yet answered:**
+1. Commit step 2, and this documentation, and push?
+2. May `verify:chart` be registered in `app/package.json`? That is the file the operator asked
+   to be left alone, and it holds their uncommitted changes. Until then, run the check from
+   `app/` as `node --experimental-strip-types scripts/verify-chart.mts` (13/13, 5 red-proofs).
+3. The two findings from step 2: now, folded into step 5, or later?
+   - The default timeframe follows the clock (§23.5).
+   - `-32014` is missing from `NODE_LAG_CODES` (§23.4).
+4. The go-ahead for chart step 3 (§24.3).
+
+**Raised by the audit, with no decision yet:** which of the §24.4 findings to fix, and when.
+The Critical one is the obvious first candidate.
+
+## 24.3 The work queue, in the order the operator set
+
+⚠ **The working mode is the operator's own: one step at a time, report, then STOP for a
+go-ahead** ("Stop after each step"). For the 11 September instructions the agreed order was
+"both, changes first": the chart steps and the fee rows come before the UI audit report.
+
+### The chart, in six steps
+
+| step | state |
+|---|---|
+| 1. the indexer read reserves at the wrong block | ✅ fixed and deployed (§23.2, §23.4) |
+| 2. stop rebuilding the chart | ✅ done and verified in the browser, **not committed** (§23.5) |
+| 3. close the latency gap | ⏳ **next.** A proposal, not a build |
+| 4. add volume | not started |
+| 5. the timeframe label lie | not started |
+| 6. local time on the axis | not started |
+
+**"Do not swap the renderer."** lightweight-charts stays.
+
+**Step 3.** The operator's words: "Propose how to drive the current candle from the curve poll
+we already have, rather than shortening the candle poll." The facts the proposal needs:
+- The candle query polls every 30 s (`useCandles.ts:253`), while `useCurve` already polls the
+  curve every 6 s (§13.1).
+- The page already derives the curve mid-price from that data, as
+  `virtualUsdcReserves / virtualTokenReserves × 1e12` (`TokenPage.tsx:68-72`). The candle view
+  uses the same formula.
+- `planSeriesUpdate` already turns a changed last bar into a single `series.update()` (§23.5).
+  So a live last bar fits the new design without any rebuild.
+
+**Step 4, volume.**
+- Migration 006's `token_candles_1m` view already carries `volume_usdc`
+  (`006_candle_open_from_previous.sql:106`), which sums `usdc_amount / 1e6` (:74).
+- `useCandles` does not select it: the select at `useCandles.ts:257-259` stops at
+  `bucket,open,high,low,close,trade_count`.
+- ⚠ `usdc_amount` is gross of fees on buys and net of fees on sells (audit Q17), so the volume
+  column inherits that mix.
+
+**Step 5. The operator's rule: "never show a label that is false."**
+- `forwardFillCandles` widens its step once the range needs more than `maxCandles = 600`
+  candles (`useCandles.ts:101-114`). The step becomes
+  `max(bucket, ceil(span / 600 / bucket) × bucket)`.
+- So on any span over 10 hours, "1M" draws candles of 2 minutes or more under a 1M label.
+- "ALL" computes its own bucket (`PriceChart.tsx:155-158`).
+- The §23.5 finding, where the default timeframe changes with the clock, lives in the same code.
+
+**Step 6, local time.** lightweight-charts shows UTC by default. Local time needs
+`localization.timeFormatter` for the crosshair and a `tickMarkFormatter` for the axis.
+
+### The fee rows — approved, not started
+
+1. Remove the "Buy fee" and "Sell fee" rows from `TrustPanel.tsx` (:57-70).
+2. Keep the creator, launch-allocation and mint rows (:73-118).
+3. Add a "Fee" row to `TradePanel.tsx`, directly under "Estimated receive".
+4. Read the rate from the token's own `curve.buyFeeBps` / `curve.sellFeeBps`, never from a
+   constant.
+5. Move the creator-share hint onto the new row. Today it is `trust.ofItToCreator`, at :61 and
+   :69.
+6. While the snipe window is open, label the row "Fee + snipe tax".
+7. Add a red-proved check.
+
+### The UI audit against emilkowalski/skills — REPORT ONLY, not started
+
+**Rules:** report only. Change no file and add no animation.
+
+**How to run it:**
+1. Read, and quote, these skills first: `emil-design-eng`, `apple-design`,
+   `review-animations` and `find-animation-opportunities`. All four live in `.claude/skills/`;
+   10 skills are installed there and locked in `skills-lock.json`.
+2. Read all of `app/src/routes/` and `app/src/components/`.
+
+**The report has four sections:**
+- STRUCTURE;
+- FRICTION POINTS;
+- WHAT THE SKILLS SAY WE ARE DOING WRONG, in the review-animations / improve-animations priority
+  order;
+- WHERE WE LOOK GENERIC.
+
+Order everything by what would most improve the product. Open with the one change you would
+make if you could only make one.
+
+### The operator's wallet test — no result reported yet
+
+**The preview** is `https://ballista-9sjveeijv-moadadas-projects.vercel.app`. It was built from
+`5ad89cf` in a clean detached worktree, and bridge-kit is not in it. The operator planned to
+run the test themselves. The pass/fail criteria are kept here so the test outlives the chat.
+
+**Setup:** a MetaMask account that has never approved USDC to the factory, holding about
+5 USDC. The allowance probe must print `0.0 USDC` before step 1:
+
+```bash
+node -e "const{ethers}=require('ethers');const p=new ethers.JsonRpcProvider('https://rpc.testnet.arc.io');const u=new ethers.Contract('0x3600000000000000000000000000000000000000',['function allowance(address,address) view returns (uint256)'],p);u.allowance(process.argv[1],'0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b').then(a=>console.log(a>2n**255n?'UNLIMITED ('+a+')':ethers.formatUnits(a,6)+' USDC'))" 0xYourWalletAddress
+```
+
+| step | pass | fail |
+|---|---|---|
+| 1. buy $1 of an older token | "Approve and Buy"; the USDC approval shows **Unlimited**, spender `0xEDeed…C04b`; the probe reads `UNLIMITED` | the approval shows 1 USDC (the wrong build), or another spender |
+| 2. buy $1 again | exactly one prompt, the buy | any approval prompt |
+| 3. launch a token | an approval for **exactly 0.5** USDC, then `createToken`; the probe then reads `0.0 USDC` | **straight to `createToken` with no approval**, or any approval other than 0.5 |
+| 4. buy $1 again | the approval is asked for again (Unlimited) | "Buy" with no approval, meaning the launch did not overwrite the allowance |
+| 5. (optional) sell 25% | an Unlimited approval of **that token**, then the sell; a second sell prompts once | the approval shows the sell amount, or asks again |
+
+## 24.4 The report-only audit — findings, none of them fixed
+
+The full report is **`docs/AUDIT_2026-09-11.md`**: 30 questions answered, each tagged VERIFIED,
+INFERRED or UNKNOWN with `file:line` or command output. It was run under report-only rules, so
+nothing was changed. The findings are ranked here so no session has to reread the whole report
+to know what is broken.
+
+### ⚠ CRITICAL: our own chain check blocks every WalletConnect user — this is §14.4's "84156418"
+
+**The bug.**
+- `useArcGuard.ts:59` reads `eth_chainId` and assumes it is a hex string.
+- `useArcGuard.ts:63` then parses it with `Number.parseInt(hex, 16)`.
+
+**Why it breaks.** WalletConnect answers with a **number**.
+- `@walletconnect/universal-provider` 2.24.0 answers `eth_chainId` itself:
+  `case"eth_chainId":return parseInt(this.getDefaultChain());`
+- `@walletconnect/ethereum-provider` forwards every request to it.
+- `Number.parseInt(5042002, 16)` is `84156418`, which is `0x5042002`.
+- Injected wallets return `"0x4cef52"`, which parses correctly, so they are unaffected.
+
+**What the user sees.** The guard sees wagmi's account on Arc, but the probe disagrees. It
+returns `wrong` with chainId 84156418 (`arcGuard.ts:97-98`), so `canTransact` is false. That:
+- disables create (`lib/create.ts:172`);
+- disables trade (`TradePanel.tsx:423`);
+- shows the wrong-network banner reading 84156418 (`WalletBar.tsx:247-251`).
+
+**On mainnet** the same code gives `Number.parseInt(5042, 16) = 20546`.
+
+**How sure this is.** VERIFIED in our source and in the installed library source. It has not
+been reproduced against a live WalletConnect session.
+
+**The fix to propose.**
+- Accept either shape: `typeof v === "number" ? v : Number.parseInt(v, 16)`.
+- Add a `verify:guard` row whose provider answers with a number, and red-prove it.
+
+⚠ **THIS SUPERSEDES §14.4's DIAGNOSIS.** `CLAUDE.md:3017-3021` reads "Our own derivation is
+right … appears nowhere in the repo … inference is exhausted". The derivation *is* right. The
+parse is what's wrong. §14.4's session diagnostic is no longer needed to find the cause, but a
+live WalletConnect session is still the proof that a fix works.
+
+**RULE, from how this hid.** "84156418 appears nowhere in the repo" was true and proved
+nothing, because the value was computed rather than written. When a bad value turns up, grep
+for the *operation* that could produce it (here `parseInt(…, 16)`), not only for the value.
+And do not trust the declared type of a wallet's return value: EIP-1193 says hex, and
+WalletConnect returns a number.
+
+### Contradicts CLAUDE.md, the runbook or in-repo records
+
+These come after the Critical above.
+
+| sev | finding | fix to propose |
+|---|---|---|
+| Medium | "The key signs nothing else, ever" (`CLAUDE.md:5315`, :5823; runbook :53-58) cannot hold. The deployer is LFX1's owner (`LFX1.sol:211`). That key is needed for the v2 fallback, for `revokeRouter` / `pause`, and to set testnet's 0/5 symbol lock and cooldown. A fresh deploy's defaults are 5 minutes and 10 s (`LFX1.sol:68`, :65). | Restate the rule as "no transaction until the step-6 read-back passes", and list the planned owner transactions. |
+| Medium | The Arc selector pre-flight (`CLAUDE.md:4633-4634`, :5838-5839; runbook :327-330) gates `initializePool` `0xf7020405`, which the adapter no longer calls. It omits three the adapter does call: `initialize` `0x6276cbbe`, `extsload` `0x1e2eaeaf`, and the hand-written `getPositionLiquidity` `0x1efeed33` (`BallistaV4Adapter.sol:383`, :413, :300). | Replace the list with what the adapter actually calls. |
+| Medium | `CLAUDE.md:5520` says everything is derivable from our logs alone. The hook never sees the trader (`BallistaFeeHook.sol:263`, `Hooks.sol:300`), and it emits nothing when the fee rounds to zero (:277). The hook is immutable. | Document that analytics must join PoolManager's `Swap` and the transaction sender. |
+| Low-Med | "A mis-mined salt fails silently" is false: BaseHook's constructor reverts `HookAddressNotValid` (`BaseHook.sol:18-19`, `Hooks.sol:83-101`). The claim is made at `CLAUDE.md:4795-4797`, :4850-4853 and :5395-5397; runbook :28-30, :60-64 and :124-125; `mine-hook-salt.js:16`; `deploy-v4-stack.js:46-49`. The runbook also blames a stray nonce on the hook's flags, but CREATE2 does not use the nonce. | Amend those passages to "the deploy reverts". Name the real stray-nonce failure: the adapter and LFX1 address predictions, caught by `requireNonce` and the adapter's binding check. |
+| Low | Runbook :102-103 cites V4AdapterMath M8 as proof of a 10 USDC threshold. M8 is pure math on a harness; the real graduation evidence is Fork.v4 test 4 (`Fork.v4.test.js:444-456`). There is also no procedure for the 10 USDC throwaway (:105-107, :331). | Cite test 4, and write the throwaway steps. |
+| Low | §20.14 (`CLAUDE.md:5048`, :5054) calls the corrector "insurance for the v2 branch" and calls v2 "fully verified". The corrector only takes v4 pool keys (`BallistaPoolCorrector.sol:102-130`), and v2's router-side check is still open (§20.19). | Correct both sentences. |
+| Low | §20.7 (`CLAUDE.md:4740-4757`, :4778) and §20.8 (:4833) still describe the superseded LFX1-first order, with a `proposeRouter` step, and nothing points them to §20.18. | Add a pointer under the §20.7 heading. |
+| Low | `BallistaV4Adapter.sol:205` names a test that does not exist. `mine-hook-salt.js:5-6` documents 3 of the hook's 5 constructor arguments. | Update the comment and the usage. An adapter edit does not change the hook's salt (§20.9). |
+
+### New
+
+| sev | finding | fix to propose |
+|---|---|---|
+| **High** | There is no claim UI anywhere. `claimCreatorFees` exists only in the ABI (`app/src/abi/lfx1.ts:1104`), and nothing in `app/src` touches the hook's `sweep` / `claim` / `claimToken`. Creators cannot collect fees through the product. | A claims panel. |
+| Medium | After graduation the product goes dark. The indexer reads only factory events (`indexer/src/index.js:459-464`, :516). The token page shows a closed card with no pool link (`TokenIdentity.tsx:41-46`, `aggregatorLinks.ts:98`). Nothing reads the v4 pool or the hook. | Index `PoolRegistered` / `FeeAccrued`, and link the pool. |
+| Medium | There is no written mainnet cutover procedure for the frontend, indexer or database. Testnet values are hardcoded (`config.ts:11`, :22; `chain.ts:9`, :58-59). `tokens.chain_id` is written (`index.js:266`) but never filtered in `app/src`, so reusing the database would mix testnet and mainnet tokens. | A cutover checklist, plus a fresh Supabase project or chain filters. |
+| Low-Med | `deploy-v4-stack.js` never re-checks the nonce before the hook's CREATE2 send (:233; the nonce is read only at :141). It never asserts the chain ID either (:123 only prints it). | `requireNonce` for the hook, and a chain-ID assert. |
+| Low | A4b cannot go red on the hook gate. With `sender == adapter` removed, `UnknownCurve` (`BallistaFeeHook.sol:236-237`) still satisfies its generic `.to.be.reverted` (`Fork.v4.attack.test.js:444`). The gate is named only in a local test (`V4Binding.test.js:303-306`), which runs on the Testable hook that skips address validation. | Name `NotAdapter` in the fork suite, for an existing curve token. |
+| Low | If the hook's own address were USDC-blocklisted, every swap whose fee is taken in USDC would revert: exact-in sells and exact-out buys (`BallistaFeeHook.sol:300-304`, :326). | Record it beside R1 and R2 in the register. |
+| Low | `graduated_at` is set to ingest time (`index.js:438`), the same class of bug as `created_at` in §8. | Use `blockTimeISO(log.blockNumber)`. |
+| Low | `Trade.usdcAmount` is gross of fees on buys (`LFX1.sol:460`) and net of fees on sells (:582). | Document it, or normalise it in the view. |
+| Low | The hook's `protocolRecipient` is immutable (`BallistaFeeHook.sol:73`), while LFX1's treasury can change with no event (`LFX1.sol:828-831`). | Note that `setTreasury` does not move hook fees. |
+| Low | The old username survives. The Vercel team slug appears at `CLAUDE.md:3085` and `app/DEPLOY.md:158`, and all 157 commits are authored "moadada" through the global git config. | Rename the slug and fix those two lines; leave the history. |
+| Info | There is no `.vercelignore`. | Keep deploying previews from clean worktrees. |
+
+## 24.5 Durable facts the audit established
+
+Recorded here because several correct or sharpen earlier sections. Everything below is VERIFIED
+from source unless it says otherwise.
+
+**A broken hook bricks pools permanently, but only pools that already graduated through it.**
+- Their pool key names the immutable hook, and the LP went to `lpRecipient`, which defaults to
+  `0x…dEaD`.
+- Tokens parked at `GRADUATION_READY` can still be rerouted, because `graduate()` reads the
+  router at call time (`LFX1.sol:646`, :656).
+- There are two ways to reroute them: to the v2 router, or to a new adapter and hook bound to
+  the same LFX1. No constructor prevents the second (`BallistaV4Adapter.sol:121-182`,
+  `BallistaFeeHook.sol:153-168`).
+- Either way needs the owner key and 24 hours, and holders cannot trade while they wait.
+- The end-to-end outcome is INFERRED, not executed.
+
+**Router mechanics** (`LFX1.sol:742-764`):
+- `proposeRouter` accepts any non-zero address, with no code check.
+- Several proposals can be pending at once.
+- Re-proposing a router restarts its 24 hours.
+- Activation consumes the proposal (R12).
+- The constructor's bootstrap makes the router live immediately and never calls into it
+  (`LFX1.sol:216-221`).
+
+**The hook reads the creator once, at graduation** (`BallistaFeeHook.sol:236`, :246). After
+that, only `transferFeeRecipient` changes the fee recipient (:405-414).
+
+**Fees are held as real tokens.**
+- `poolManager.take` pays them to the hook (`BallistaFeeHook.sol:326`); there is no ERC-6909.
+- `claim` and `claimToken` pay out with `safeTransfer`, with no `unlock`.
+
+**One address is both the hook's protocol recipient and LFX1's treasury.** `deploy-v4-stack.js`
+passes `--treasury` to both (:111, :166, :257).
+
+**The deploy and the salt share one compiler config** (`hardhat.config.js:70-73`). The salt is
+mined over exactly the Hardhat artifact that gets deployed (`deploy-v4-stack.js:164-168`).
+
+**The indexer:**
+- It reads `eth_getLogs` in 500-block chunks (`index.js:69`). A range-too-large error is not
+  split and retried, but a 10,000-block provider cap is no problem.
+- A `Trade` costs one archive `eth_call` (`index.js:324`), and that is the only historical
+  `eth_call`. Block headers are also read, for timestamps.
+- On 11 September, testnet had no (token, block) pair holding more than one trade, across 37
+  rows (read-only query).
+
+**The `Trade` event carries no reserves** (`LFX1.sol:140`). The pinned `curves()` read stays
+necessary: a spot price cannot come from events without re-deriving the curve, which §1.3
+forbids.
+
+**The tested preview is `5ad89cf`** (§24.3). `git show 5ad89cf:app/package.json` contains no
+`@circle-fin`. No production deploy happened in this session. The `vercel deploy --prod` strings
+in the transcript are the next commands Vercel's own output suggested, not commands that were
+run.
+
+**A fresh mainnet LFX1 starts with a 5-minute symbol lock and a 10 s cooldown**
+(`LFX1.sol:68`, :65). Testnet runs 0 and 5, both set by setter (§7B). Matching testnet takes
+two owner transactions, and the symbol lock is inside the economics hash (`LFX1.sol:298`).
+
+## 24.6 Resume point — do these in order
+
+1. **Read §24.1 before any git command.** The tree holds uncommitted work belonging to two
+   owners.
+2. **Get the operator's answers to §24.2.** Commit, push or deploy nothing without being asked.
+3. **Unless told otherwise, work the queue in §24.3:**
+   - the step 3 proposal;
+   - then steps 3–6, one at a time, reporting and stopping after each;
+   - then the fee rows;
+   - then the UI audit report.
+4. **The Critical WalletConnect fix (§24.4) is the highest-impact defect known.** It is small
+   and needs a red-proved check. **Raise it and ask; do not start it unilaterally,** because
+   the operator sets the order.
+5. **Before 16 September, whatever the order:**
+   - the claims UI;
+   - a written cutover procedure;
+   - the deploy script's nonce and chain-ID guards;
+   - the CLAUDE.md and runbook corrections listed in §24.4;
+   - `verify:reserves:live` re-run after a real trade. §23.4 notes that no trade has happened
+     since the deploy.
