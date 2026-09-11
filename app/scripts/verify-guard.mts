@@ -26,7 +26,12 @@
 
 import { readFileSync } from "node:fs";
 import { stripComments } from "./lib/strip-comments.mts";
-import { resolveArcGuard, shouldAutoPromptSwitch, MAX_PROBE_AGE_MS } from "../src/lib/arcGuard.ts";
+import {
+  resolveArcGuard,
+  shouldAutoPromptSwitch,
+  normaliseChainId,
+  MAX_PROBE_AGE_MS,
+} from "../src/lib/arcGuard.ts";
 
 const ARC = 5042002;
 const MAINNET = 1;
@@ -244,6 +249,173 @@ console.log(
 );
 
 
+// -- normaliseChainId: the shape of the eth_chainId ANSWER ---------------------
+//
+// BUG 3, and it is the one that shipped. The probe read `Number.parseInt(hex, 16)` on
+// whatever the provider returned, because EIP-695 defines the result as a hex QUANTITY.
+// Injected wallets do return that. WalletConnect returns a NUMBER, and answers the call
+// itself rather than forwarding it to the wallet
+// (@walletconnect/universal-provider 2.24.0, dist/index.js, verbatim):
+//
+//     case"eth_chainId":return parseInt(this.getDefaultChain());
+//
+// So the probe got 5042002, parseInt coerced it back to "5042002", read it as hex, and
+// produced 84156418 == 0x5042002. Every WalletConnect session then read as WRONG NETWORK
+// with create and trade disabled. On mainnet the identical line gives
+// Number.parseInt(5042, 16) = 20546.
+//
+// N1 and N4 are the rows that would have caught it. N9-N24 are the fail-closed half: a
+// value we cannot justify must come back undefined, because the guard reads undefined as
+// "not established" and refuses, whereas a wrong NUMBER is a confident lie.
+//
+// To prove these can go red, put the old parse back into normaliseChainId:
+//     if (typeof raw === "number" || typeof raw === "string")
+//       return Number.parseInt(raw as string, 16);
+// N1, N2, N12, N13 and the no-laundering invariant all fail. Reverting useArcGuard.ts to
+// call Number.parseInt itself fails W9 and W10 instead.
+
+const ARC_HEX = "0x4cef52";
+const ARC_MAINNET = 5042; // CLAUDE.md 20.4, measured on chain: 0x13b2
+
+type NRow = { name: string; input: unknown; expect: number | undefined };
+
+const nRows: NRow[] = [
+  {
+    name: "N1  WALLETCONNECT: the NUMBER 5042002 is Arc, not 84156418",
+    input: 5042002,
+    expect: ARC,
+  },
+  {
+    name: "N2  WalletConnect on Arc MAINNET: the number 5042 is 5042, not 20546",
+    input: ARC_MAINNET,
+    expect: ARC_MAINNET,
+  },
+  {
+    name: "N3  a number that is NOT Arc survives as itself (1 stays 1)",
+    input: MAINNET,
+    expect: MAINNET,
+  },
+  {
+    name: 'N4  INJECTED: the hex string "0x4cef52" is Arc',
+    input: ARC_HEX,
+    expect: ARC,
+  },
+  {
+    name: "N5  hex is case-insensitive, prefix included",
+    input: "0X4CEF52",
+    expect: ARC,
+  },
+  {
+    name: "N6  surrounding whitespace is tolerated",
+    input: "  0x4cef52  ",
+    expect: ARC,
+  },
+  {
+    name: "N7  a hex string for Arc mainnet (0x13b2) is 5042",
+    input: "0x13b2",
+    expect: ARC_MAINNET,
+  },
+  {
+    name: "N8  a hex string for Ethereum (0x1) is 1",
+    input: "0x1",
+    expect: MAINNET,
+  },
+
+  // -- everything below must be undefined: unreadable, never a chain id --------
+
+  { name: "N9   JUNK: a non-hex string", input: "zz", expect: undefined },
+  { name: "N10  JUNK: the empty string", input: "", expect: undefined },
+  { name: "N11  JUNK: a bare prefix with no digits", input: "0x", expect: undefined },
+  {
+    // parseInt("0x4cef52zzz", 16) is 5042002 -- it stops at the first bad character and
+    // reports success. A malformed answer must not be laundered into a confident one.
+    name: "N12  JUNK: trailing garbage is REJECTED, not truncated to 5042002",
+    input: "0x4cef52zzz",
+    expect: undefined,
+  },
+  {
+    // The guess that caused this bug. "5042002" is valid hex AND valid decimal, and
+    // EIP-695 requires the prefix, so there is no reading we can justify.
+    name: "N13  AMBIGUOUS: an UNPREFIXED decimal string is refused, not guessed at",
+    input: "5042002",
+    expect: undefined,
+  },
+  { name: "N14  no answer at all", input: undefined, expect: undefined },
+  { name: "N15  a null answer", input: null, expect: undefined },
+  { name: "N16  NaN", input: Number.NaN, expect: undefined },
+  { name: "N17  Infinity", input: Number.POSITIVE_INFINITY, expect: undefined },
+  { name: "N18  a fraction is not a chain id", input: 5042002.5, expect: undefined },
+  { name: "N19  zero is not a chain id", input: 0, expect: undefined },
+  { name: "N20  a negative is not a chain id", input: -1, expect: undefined },
+  {
+    // Past 2**53 the value cannot round-trip, so it must not be compared for equality
+    // against arc.id.
+    name: "N21  beyond Number.isSafeInteger",
+    input: Number.MAX_SAFE_INTEGER + 2,
+    expect: undefined,
+  },
+  { name: "N22  an object", input: { chainId: ARC }, expect: undefined },
+  { name: "N23  a boolean", input: true, expect: undefined },
+  {
+    // Deliberately excluded: no provider we use returns one, and inventing a conversion
+    // for a shape never observed is how the next wrong guess gets made.
+    name: "N24  a bigint is refused rather than converted",
+    input: BigInt(ARC),
+    expect: undefined,
+  },
+];
+
+for (const row of nRows) {
+  const got = normaliseChainId(row.input);
+  const ok = got === row.expect;
+  if (!ok) failures++;
+  console.log(`  ${ok ? "PASS" : "FAIL"}  ${row.name}\n        expected ${row.expect}, got ${got}`);
+}
+
+// The invariant that outranks any single row. Neither value the old line produced may
+// EVER come out of this function for an input meaning Arc. If someone restores
+// parseInt-on-anything and updates the rows to match, this still fails.
+const laundered = nRows
+  .filter((r) => r.input === 5042002 || r.input === ARC_MAINNET || r.input === ARC_HEX)
+  .map((r) => ({ r, got: normaliseChainId(r.input) }))
+  .filter(({ got }) => got === 84156418 || got === 20546);
+const noLaundering = laundered.length === 0;
+if (!noLaundering) failures++;
+console.log(
+  `  ${noLaundering ? "PASS" : "FAIL"}  an Arc answer never normalises to 84156418 or 20546` +
+    `  -- ${laundered.length} violation(s)`
+);
+
+// And the other direction: nothing unreadable may produce a number. A chain id invented
+// from junk is worse than no reading, because the guard trusts a value that is present.
+const invented = nRows.filter(
+  (r) => r.expect === undefined && normaliseChainId(r.input) !== undefined
+);
+const nothingInvented = invented.length === 0;
+if (!nothingInvented) failures++;
+console.log(
+  `  ${nothingInvented ? "PASS" : "FAIL"}  an unreadable answer never becomes a chain id` +
+    `  -- ${invented.length} violation(s)`
+);
+
+// End to end through the guard, because normaliseChainId being right only matters if the
+// VERDICT moves with it. This is the user-visible bug in one line.
+const wcVerdict = resolveArcGuard({
+  ...base,
+  isConnected: true,
+  accountChainId: ARC,
+  probedChainId: normaliseChainId(5042002),
+  probedAt: FRESH,
+});
+const wcOk = wcVerdict.status === "ok" && wcVerdict.canTransact === true;
+if (!wcOk) failures++;
+console.log(
+  `  ${wcOk ? "PASS" : "FAIL"}  END TO END: a WalletConnect session on Arc can transact` +
+    `  -- got ${wcVerdict.status}/${wcVerdict.canTransact}` +
+    ` (was wrong/false, chainId 84156418)`
+);
+
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // THE WIRING. Everything above this line tests `resolveArcGuard` — a pure function fed
 // plain object literals. That is the DECISION TABLE, and it is worth testing, but it is
@@ -344,7 +516,31 @@ check(
 );
 
 
-const total = rows.length + autoRows.length + 2 + wiringChecks;
+check(
+  "W9  the probe normalises through normaliseChainId",
+  /normaliseChainId\(\s*raw\s*\)/.test(hookCode) &&
+    /import\s*\{[^}]*\bnormaliseChainId\b[^}]*\}\s*from\s*["']\.\.\/lib\/arcGuard["']/.test(hookCode),
+  "one place interprets the answer -- EIP-695 says hex, WalletConnect returns a number"
+);
+
+check(
+  "W10  the hook does NOT parse the answer itself",
+  !/parseInt\s*\([^)]*,\s*16\s*\)/.test(hookCode),
+  "Number.parseInt(5042002, 16) is 84156418 -- the bug this replaced"
+);
+
+// W10 reads the COMMENT-STRIPPED source on purpose: this hook's own prose quotes
+// `Number.parseInt(hex, 16)` while explaining why it must not be used, so an unstripped
+// read would fail on the documentation of the fix. CLAUDE.md 12.6 records that trap
+// firing three times already. W11 is the guard against the opposite failure -- a
+// stripper (or a typo) that eats the pattern makes W10 a vacuous pass.
+check(
+  "W11  W10's pattern can still match the code it forbids",
+  /parseInt\s*\([^)]*,\s*16\s*\)/.test("setProbe({ chainId: Number.parseInt(hex, 16) });"),
+  "a negative check whose pattern matches nothing passes for free"
+);
+
+const total = rows.length + autoRows.length + 2 + nRows.length + 3 + wiringChecks;
 console.log(`\n${total - failures}/${total} checks passed`);
 // ⚠ process.exitCode, NOT process.exit(). process.exit() tears the event loop down
 // while the console.log lines above may still be flushing, and on Windows that races

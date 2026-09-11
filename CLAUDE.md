@@ -3025,7 +3025,116 @@ build and no user meets a blank page.
   `session_update` would classify against a stale list until reconnect. It degrades to
   `unknown`/`declined`, i.e. the pre-existing behaviour, so it fails safe.
 
-## 14.4 ⚠ STILL OPEN: mobile WalletConnect lands on the wrong chain
+## 14.4 ✅ CLOSED, 12 September 2026: WalletConnect returns a NUMBER, and we parsed it as hex
+
+⚠ **APPENDED, NOT A REWRITE. Everything from "STILL OPEN" down is the original section,
+kept verbatim, because its measurements were right and only its CONCLUSION was wrong.** It
+recorded this as an unexplained wallet fault with inference exhausted. It was ours.
+
+**The cause, in one line.** `useArcGuard.ts` read the `eth_chainId` answer as
+`Number.parseInt(hex, 16)`. Injected wallets return the `0x`-prefixed hex string EIP-695
+specifies, so they were fine. **WalletConnect returns a NUMBER**, and answers the call
+itself rather than forwarding it to the wallet —
+`node_modules/@walletconnect/universal-provider/dist/index.js` (2.24.0), verbatim:
+
+```js
+case"eth_chainId":return parseInt(this.getDefaultChain());
+```
+
+`getDefaultChain()` returns a decimal string, so the provider hands back the number
+`5042002`. `Number.parseInt` then coerces it back to the string `"5042002"` and reads it as
+hex — **84156418, which is `0x5042002`**. `@walletconnect/ethereum-provider` forwards every
+request to that provider (`async request(t,e){return await this.signer.request(...)}`), so
+every WalletConnect session was affected.
+
+**What the user got.** The guard saw wagmi on Arc and the probe on 84156418, returned
+`wrong`, and `canTransact` went false — so **create and trade were disabled and the
+wrong-network banner showed 84156418**. On Arc mainnet the identical line gives
+`Number.parseInt(5042, 16) = 20546`.
+
+| citation | what is there |
+|---|---|
+| `app/src/hooks/useArcGuard.ts:63-69` | the fixed read: typed `unknown`, normalised once |
+| `app/src/lib/arcGuard.ts:37-98` | BUG 3's banner and `normaliseChainId` |
+| `app/src/chain.ts:119` | the derivation, `ARC_CHAIN_ID_HEX`, which was never wrong |
+
+⚠ **§14.4's citation of `chain.ts:100` for the derivation has DRIFTED** — line 100 is fee
+code now. It is `chain.ts:119`. Left as a marker of why a `file:line` in this document is a
+starting point to verify, not ground truth.
+
+### ⚠ THE RULE: grep for the OPERATION, not the value
+
+The original section's strongest-sounding evidence was that **`84156418` appears nowhere in
+the repo**. That was TRUE, and it proved nothing, because the value was **computed rather
+than written**. Searching a codebase for a bad value can only find a value someone typed.
+
+**When a bad value turns up, search for the operation that could produce it.** Here that was
+`parseInt(..., 16)` — two hits in `app/src`, one of which was the bug. That search takes
+seconds and was never run, because "it appears nowhere" read as a dead end rather than as a
+clue about where the number came from.
+
+A second rule, the one that made it possible: **do not trust the declared type of a wallet's
+return value.** The read was annotated `as string | undefined` on the strength of the spec.
+EIP-695 says hex; WalletConnect returns a number; the cast made TypeScript agree with the
+spec instead of with reality. It is now `unknown`, and `normaliseChainId` is the only place
+that interprets it.
+
+### The fix
+
+`normaliseChainId(raw: unknown): number | undefined` in `app/src/lib/arcGuard.ts` — pure, in
+the same module as the rest of the decision. It accepts a `0x`-prefixed hex string and a
+number, and returns `undefined` for everything else.
+
+⚠ **An UNPREFIXED string is refused rather than guessed at**, and that is deliberate:
+`"5042002"` is valid hex AND valid decimal, so reading it either way is the guess that
+caused this bug, and EIP-695 requires the prefix anyway. Trailing garbage is refused too —
+`parseInt("0x4cef52zzz", 16)` is `5042002`, which would launder a malformed answer into a
+confident one. A bigint is refused for the same reason: no provider we use returns one.
+
+**Failing closed here costs a banner saying the network is unconfirmed. Guessing costs a
+chain id that is confidently wrong**, which is what this replaced.
+
+### The check
+
+`verify:guard` went **30 → 60 checks**; the frontend suite reads
+**`SUITES=18 CHECKS=537 FAILED=0`**, against 18/507 before.
+
+24 behavioural rows over `normaliseChainId` (N1–N24), three invariants, and three wiring
+assertions:
+
+- **N1** is the row that would have caught it: the number `5042002` is Arc, not 84156418.
+- **N2** is the mainnet half: the number `5042` is 5042, not 20546.
+- **An Arc answer never normalises to 84156418 or 20546** — the invariant that survives
+  someone restoring the old parse and updating the rows to match.
+- **An unreadable answer never becomes a chain id** — the other direction. A chain id
+  invented from junk is worse than no reading, because the guard trusts a present value.
+- **END TO END**, through `resolveArcGuard` itself, because `normaliseChainId` being right
+  only matters if the verdict moves with it.
+- **W10** asserts the hook no longer parses the answer itself, and reads the
+  **comment-stripped** source — the hook's own prose quotes `Number.parseInt(hex, 16)` while
+  explaining why it must not be used, so an unstripped read would fail on the documentation
+  of the fix (§12.6's trap, now four times). **W11 proves W10's pattern still matches the
+  code it forbids**, so a stripper that ate the pattern cannot make W10 a vacuous pass.
+
+**Both halves red-proved**, under the mutation lease with byte-exact restores rather than
+`redproof.py`, because both targets carried the uncommitted change under test and a git
+restore would have destroyed it (§22.2's reasoning):
+
+| mutation | result |
+|---|---|
+| `normaliseChainId` back to parseInt-on-anything | **RED 44/60** — N1, N2, N12, N13, both invariants, and END TO END reporting `wrong/false`: the production symptom reproduced |
+| the hook parses the answer itself again | **RED 58/60** — W9, W10 |
+
+Restored tree: **60/60**, both restores sha256-verified.
+
+⚠ **WHAT THIS DOES NOT PROVE. It has never run against a live WalletConnect session.** The
+evidence is the library source, the arithmetic, and pure-function checks. §14.4's diagnostic
+below is no longer needed to FIND the cause — but a real WalletConnect session on a phone is
+still the only thing that proves the fix works end to end, and that has not been done.
+
+---
+
+## 14.4 (original, superseded as to cause) ⚠ STILL OPEN: mobile WalletConnect lands on the wrong chain
 
 **Not fixed, and inference is exhausted. The next step is measurement, not more reasoning.**
 
@@ -6758,6 +6867,8 @@ to know what is broken.
 
 ### ⚠ CRITICAL: our own chain check blocks every WalletConnect user — this is §14.4's "84156418"
 
+✅ **FIXED 12 September 2026 — see §14.4, which now carries the cause, the fix and the red-proofs.** `normaliseChainId` in `app/src/lib/arcGuard.ts:78` accepts both shapes; `verify:guard` went 30 → 60 checks and the suite reads `SUITES=18 CHECKS=537 FAILED=0`. ⚠ **Still unproven against a live WalletConnect session** — the evidence is the library source, the arithmetic and pure-function checks. The finding below is kept as written, because its diagnosis was right and is the record of how it was found.
+
 **The bug.**
 - `useArcGuard.ts:59` reads `eth_chainId` and assumes it is a hex string.
 - `useArcGuard.ts:63` then parses it with `Number.parseInt(hex, 16)`.
@@ -6894,9 +7005,12 @@ two owner transactions, and the symbol lock is inside the economics hash (`LFX1.
    - then steps 3–6, one at a time, reporting and stopping after each;
    - then the fee rows;
    - then the UI audit report.
-4. **The Critical WalletConnect fix (§24.4) is the highest-impact defect known.** It is small
-   and needs a red-proved check. **Raise it and ask; do not start it unilaterally,** because
-   the operator sets the order.
+4. ~~**The Critical WalletConnect fix (§24.4) is the highest-impact defect known.**~~
+   ✅ **DONE 12 September 2026.** Cause, fix and red-proofs are in §14.4; the §24.4 finding
+   carries a closed marker. ⚠ **What remains is the only thing a session cannot do: open
+   `ballista.trading` on a phone over WalletConnect and confirm create and trade are
+   enabled.** Until that happens the fix is proved by the library source, the arithmetic and
+   60 pure-function checks, and by nothing on a real wallet.
 5. **Before 16 September, whatever the order:**
    - the claims UI;
    - a written cutover procedure;

@@ -34,6 +34,69 @@
 // by actually observing Arc. That is why the fix is structural rather than "re-read after
 // switching" -- there is nothing left to remember to do.
 
+// ── BUG 3: the RETURN TYPE of eth_chainId is not what EIP-1193 says ───────────
+//
+// The probe used to be `Number.parseInt(hex, 16)` on the raw answer, on the strength of
+// EIP-695, which defines the result as a QUANTITY -- a `0x`-prefixed hex string. Injected
+// wallets do return that. WalletConnect returns a NUMBER, and answers the call itself
+// rather than forwarding it to the wallet (@walletconnect/universal-provider 2.24.0,
+// dist/index.js, verbatim):
+//
+//     case"eth_chainId":return parseInt(this.getDefaultChain());
+//
+// `getDefaultChain()` returns a DECIMAL string, so the provider hands back the number
+// 5042002. `Number.parseInt(5042002, 16)` coerces that back to the string "5042002" and
+// reads it as hex: 84156418, which is 0x5042002 -- Arc's decimal digits re-read as hex.
+// The guard then saw wagmi on Arc and the probe on 84156418, returned `wrong`, and
+// DISABLED CREATE AND TRADE for every WalletConnect session. On mainnet the same line
+// gives Number.parseInt(5042, 16) = 20546.
+//
+// Nothing was wrong with the derivation in chain.ts, and 84156418 appears nowhere in the
+// repo, because it was computed rather than written. That is why it stayed unexplained:
+// grepping for a bad VALUE finds nothing when the value is produced by an operation.
+//
+// The rule this encodes: normalise ONCE, here, and treat anything we cannot justify as
+// absent rather than guessing at it.
+
+/**
+ * Turn a provider's `eth_chainId` answer into a chain id, or `undefined`.
+ *
+ * Accepts the two shapes that actually occur:
+ *   - a `0x`-prefixed hex string  (EIP-695; injected wallets)
+ *   - a number                    (WalletConnect's UniversalProvider)
+ *
+ * Everything else is `undefined`, which the guard reads as "not established" and refuses
+ * on. That deliberately includes an UNPREFIXED string: "5042002" is both valid hex and
+ * valid decimal, so reading it either way is the guess that caused this bug, and EIP-695
+ * requires the prefix anyway. A bigint is excluded for the same reason -- no provider we
+ * use returns one, and inventing a conversion for a shape we have never observed is how
+ * the next wrong guess gets made.
+ *
+ * Failing closed here costs a banner saying the network is unconfirmed. Guessing costs a
+ * chain id that is confidently wrong, which is what this replaces.
+ */
+export function normaliseChainId(raw: unknown): number | undefined {
+  let n: number;
+
+  if (typeof raw === "number") {
+    n = raw;
+  } else if (typeof raw === "string") {
+    // Anchored, so trailing junk is rejected rather than silently truncated:
+    // Number.parseInt("0x4cef52zzz", 16) is 5042002, which would launder a malformed
+    // answer into a confident one.
+    if (!/^0[xX][0-9a-fA-F]+$/.test(raw.trim())) return undefined;
+    n = Number.parseInt(raw.trim(), 16);
+  } else {
+    return undefined;
+  }
+
+  // NaN, Infinity, a fraction, zero or a negative are all "not a chain id". The upper
+  // bound is Number.isSafeInteger: past 2**53 the value cannot round-trip, and a chain id
+  // we cannot represent exactly must not be compared for equality against arc.id.
+  if (!Number.isSafeInteger(n) || n <= 0) return undefined;
+  return n;
+}
+
 export type ArcGuard =
   | { status: "disconnected"; canTransact: false; chainId: undefined }
   /** Connected, both sources agree on Arc, and the reading is fresh. Only usable state. */

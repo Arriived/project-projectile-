@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAccount } from "wagmi";
 import { arc } from "../chain";
-import { resolveArcGuard, MAX_PROBE_AGE_MS, type ArcGuard } from "../lib/arcGuard";
+import { resolveArcGuard, normaliseChainId, MAX_PROBE_AGE_MS, type ArcGuard } from "../lib/arcGuard";
 
 export type { ArcGuard };
 
@@ -56,11 +56,17 @@ export function useArcGuard(): ArcGuard & { reverify: () => void } {
       return;
     }
     try {
-      const hex = (await provider.request({ method: "eth_chainId" })) as string | undefined;
+      // ⚠ `unknown`, deliberately, and NOT `string`. EIP-695 says this returns a hex
+      // QUANTITY and injected wallets do; WalletConnect returns a NUMBER. Typing it as a
+      // string is what let `Number.parseInt(hex, 16)` coerce 5042002 back to "5042002",
+      // read it as hex, and produce 84156418 -- see BUG 3 in lib/arcGuard.ts. Every
+      // interpretation of this value happens in normaliseChainId and nowhere else.
+      const raw: unknown = await provider.request({ method: "eth_chainId" });
       if (!aliveRef.current) return;
       // A successful read is stamped even when it disagrees -- `at` records when we last
-      // KNEW something, not when we last liked the answer.
-      setProbe({ chainId: hex ? Number.parseInt(hex, 16) : undefined, at: Date.now() });
+      // KNEW something, not when we last liked the answer. An UNREADABLE answer is not a
+      // successful read: normaliseChainId returns undefined and the guard refuses.
+      setProbe({ chainId: normaliseChainId(raw), at: Date.now() });
     } catch {
       // A provider that will not answer is not a provider we can call Arc. Clearing `at`
       // is what makes this fail closed rather than leaving the last good reading standing.
