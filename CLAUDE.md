@@ -6686,6 +6686,128 @@ not yet run in production. What is proved is the classification, and that the ru
 carries it. The next occurrence should log `transient error, retrying in 1000ms (attempt 1/5)`
 instead of `Poll failed` — add it to the table above when it does.
 
+## 23.7 ✅ TRANSPORT FAILURES ARE RETRIED NOW — `295118c`, deployed as release v5
+
+§23.6 recorded six HTTP 502s across v3's 21 hours and said plainly that **"this fix does
+nothing for 502s: the retry list classifies JSON-RPC codes, and a 502 never reaches one."**
+That is the gap this closes.
+
+### Why the codes never matched
+
+A 502 is the **load balancer answering instead of the node**, so there is no JSON-RPC body
+and no numeric code at all. `rpcErrorCode` returns only numbers, so it saw nothing,
+`retryReason` returned `null`, and the whole poll failed for something the next request
+would have served.
+
+⚠ **MEASURED against a local server on ethers 6.17.0, not inferred from the source** — with
+a healthy server as a control (it must not throw) and a `-32014` as a second control (a
+numeric code must still be visible, or the probe proves nothing):
+
+| failure | `err.code` | `err.response.statusCode` |
+|---|---|---|
+| HTTP 502 / 503 / 504 | `"SERVER_ERROR"` — **a string** | 502 / 503 / 504 |
+| socket destroyed | `"ECONNRESET"` (`"socket hang up"`) | none |
+| client timeout | `"TIMEOUT"` | none |
+| **CONTROL** healthy server | *no throw* | — |
+| **CONTROL** JSON-RPC `-32014` | `"UNKNOWN_ERROR"` | `err.error.code` = `-32014` |
+
+⚠ **ethers puts a STRING in `err.code` for every transport failure.** That is the whole
+reason a numeric classifier could not see them, and it is the same shape as the defect
+§11.11 records one layer down: a classifier that understands only one encoding of "what
+went wrong".
+
+### What is classified, and what deliberately is not
+
+`transportFailure()` reads **`err.response.statusCode`** — a number ethers carries
+deliberately — never the string `"server response 502 Bad Gateway"`. §11.18's codes-first
+rule is kept.
+
+| | |
+|---|---|
+| **429** | retried, labelled `rate-limit` so the log reads correctly |
+| **408** | retried — it is literally a timeout |
+| **5xx except 501** | retried |
+| **other 4xx** | **NOT retried.** A 400, 401, 403 or 404 answers the same way in thirty seconds |
+| **501** | **NOT retried.** "Not Implemented" is about the METHOD, not the moment — the HTTP twin of the `-32601` Arc now returns for `eth_newFilter` |
+
+### ⚠ WHAT IT COSTS: a HARD outage now takes ~3.5 minutes to kill the process, not ~50s
+
+Stated because it lengthens the time to notice a real outage, and the note lives on
+`withRetry` where the bound is. Five retries at 1/2/4/8/16s is ~31s before a call finally
+throws, so five consecutive failing polls now take roughly 3.5 minutes instead of ~50s.
+
+**That is the deliberate trade: a SINGLE 502 no longer costs a poll, and a sustained one
+still exits.** The independent backstop is untouched — `livenessVerdict` measures the
+checkpoint against the chain **head**, not against a clock, and kills at 1,000 blocks behind
+(§11.11).
+
+### The checks: `verify:reserves` 9 → 30
+
+T10–T15 retry, T16–T20 fail fast, T21* cover sockets, T22* are the controls that stop
+"retry everything" passing.
+
+⚠ **T23 IS THE ONE THAT MATTERS, AND IT EXISTS BECAUSE EVERY OTHER ROW IS CIRCULAR.** They
+feed `retryReason` a literal object written by the same session that wrote the classifier —
+§15.6's trap exactly — and **the error SHAPE is the half that was wrong before**. So T23
+makes a real request, through the real provider, to a server that really answers **502 twice
+and then succeeds**: 3 requests, 2 retries, right answer. **T23b is its control** — a server
+that 502s forever must still throw, or T23 would also pass for a `withRetry` that swallowed
+errors.
+
+⚠ **`getBlockNumber()` cannot be used for T23 and that is worth knowing.** It sits behind the
+provider's own perform-cache, so a retry is served from memory and never reaches the wire —
+**measured: the server saw 1 request across 4 retries**, and the check passed for the wrong
+reason until it was switched to `send("eth_blockNumber", [])`.
+
+**Red-proved, three mutations, each restored byte-exact under the lease:**
+
+| mutation | result |
+|---|---|
+| delete the `transportFailure()` call from `retryReason` | **RED 20/30** — T10–T15, T21*, and T23 reporting `requests=1`: the production behaviour reproduced |
+| retry every 4xx | **RED 25/30** — T16–T20 |
+| return `"transport"` unconditionally | **RED 20/30** — T22, T22b, T22c, and T8 |
+
+Restored: **30/30**. Full indexer suite: liveness **14/14**, health passed, reserves
+**30/30**.
+
+### `295118c` is what runs on Fly
+
+Deployed **2026-09-11 23:55:20 UTC**, release **v5**, machine `895eddb6dee448` (the same one,
+`strategy = "immediate"`), image `deployment-01M29EAP0Z73S289TJQQJK8WDH`, digest
+`sha256:3032d27f…82de`, 73 MB.
+
+Tied to the commit by **content**, the same three steps as §23.6, because Fly stores no SHA:
+
+1. Built from a **detached worktree at `295118c`**, created with `core.autocrlf=false` so the
+   checkout is byte-identical to the commit rather than CRLF-converted. `git status` there
+   was empty, and **all 28 files the Dockerfile copies hashed equal to their commit blobs**.
+   ⚠ The CR counter read **0** on the worktree's `index.js` and **27** on the repo-root
+   `package.json` used as a control, so it discriminates (§19.6). *The first attempt used the
+   main repo's own `index.js` as that control and it also read 0 — a control that cannot
+   return the other answer is not a control.*
+2. After the deploy, the same 28 files were hashed **on the machine** over `fly ssh`:
+   **28/28 identical to `295118c`**, and a `find` on the machine matched the commit's file
+   set exactly — **none missing, none extra**.
+3. Read off the machine: `/app/src/index.js:144` `const TRANSPORT_ERROR_CODES = [`,
+   `:167` `function transportFailure(err) {`, and `:197-198` the call inside `retryReason`.
+
+**Healthy after it:** catch-up from 61644740 began at 23:55:25 and live mode was reached at
+**23:55:36, eleven seconds later**; `/health` returned `healthy: true` with the checkpoint
+**2 blocks** behind the head, HTTP 200. Before the deploy it was 0 blocks behind at
+61644684.
+
+⚠ **WHAT THE DEPLOY DOES NOT PROVE.** No 502 has occurred since it, so the retry path has
+not yet run in production — the same caveat §23.6 records for `-32014`, which **also still
+has not fired since `52b5ec3`**. What is proved is the classification, the end-to-end
+behaviour against a real 502 on localhost, and that the running code carries it. The next
+occurrence should log `transient error, retrying in 1000ms (attempt 1/5)` instead of
+`Poll failed`.
+
+⚠ **The `grace_period` warning was NOT seen in the captured deploy output**, which was the
+last 45 lines only — so this is "not observed", not "did not fire". §23.6 records it firing
+on the previous deploy and `RUNBOOK.md` predicts it; nothing suggests it stopped.
+
+
 ---
 
 # 24. SESSION OF 11 SEPTEMBER 2026 (continued) — step 2 closed out, a report-only audit, and the handover
