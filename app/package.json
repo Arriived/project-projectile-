@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit",
     "verify:chain": "node --experimental-strip-types scripts/verify-chain.mts",
+    "verify:chart": "node --experimental-strip-types scripts/verify-chart.mts",
     "verify:guard": "node --experimental-strip-types scripts/verify-guard.mts",
     "verify": "node --experimental-strip-types scripts/verify-all.mts",
     "verify:wallets": "node --experimental-strip-types scripts/verify-wallets.mts",

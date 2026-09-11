@@ -6493,6 +6493,90 @@ first trade, which replaces the flat launch line anyway.
 The likely fix is to latch the default the first time data arrives on a page. That touches the
 timeframe logic step 5 is about, so it waits for the operator.
 
+## 23.6 The 11 September commits, and the `-32014` deploy
+
+**Six commits. Five on `ballista-migration`, one parked:**
+
+| commit | branch | what |
+|---|---|---|
+| `8542906` | ballista-migration | chart step 2 — the three modified files plus `chartSeries.ts`, `useMinuteClock.ts` and `verify-chart.mts` |
+| `daba422` | ballista-migration | §23.4 and §23.5 |
+| `34388bc` | ballista-migration | §24, the two pointers at the top of this file, and `docs/AUDIT_2026-09-11.md` |
+| `412b7de` | **`parked/bridge-kit`** | the operator's `app/package.json` and lockfile |
+| `52b5ec3` | ballista-migration | `-32014` joins `NODE_LAG_CODES`, with T7b |
+
+⚠ **bridge-kit is PARKED, NOT DISCARDED.** `parked/bridge-kit` branches from `34388bc` and is
+pushed, so it does not depend on this clone; `git switch parked/bridge-kit`, or a cherry-pick of
+`412b7de`, brings the three `@circle-fin` dependencies back. **`ballista-migration` carries none
+of them:** after `npm ci`, `app/node_modules` has no `@circle-fin` directory and npm's
+installed-tree lockfile mentions it **0** times, against **28** on the parked branch. §24.1's
+rule — never stage those two files with anything else — is now satisfied by having moved them,
+rather than by stepping around them on every commit.
+
+**`verify:chart` is registered** in `app/package.json`, so §23.5's note that it is not in
+`npm run verify` is superseded. The suite reads **`SUITES=18 CHECKS=507 FAILED=0`**, against
+17/494 before: one suite, and exactly the chart check's 13 rows.
+
+### `52b5ec3` is what runs on Fly
+
+Deployed **2026-09-11 23:22:49 UTC**, release **v4**, machine `895eddb6dee448`, image
+`deployment-01M29CE6RSD3Z9SKM24N7Q2KXV`, digest `sha256:176d6669…82d233fc`.
+
+⚠ **Fly records no commit SHA** — `flyctl image show` prints an empty LABELS column — so the
+release is tied to the commit by CONTENT, in three steps:
+1. It was built from a **detached worktree at `52b5ec3`**, created with `core.autocrlf=false`
+   so the checkout is byte-identical to the commit instead of CRLF-converted. `git status`
+   there was empty, and all 28 files the Dockerfile copies hashed equal to their commit blobs.
+   The CR counter read 0 on the worktree's `index.js` and 50 on a control file, so it
+   discriminates — §19.6's rule.
+2. After the deploy, those same 28 files were hashed **on the machine** over `fly ssh`:
+   **28/28 identical to `52b5ec3`**, none missing, none extra.
+3. `grep NODE_LAG_CODES /app/src/index.js` on the machine reads
+   `const NODE_LAG_CODES = [-32001, -32014];`.
+
+**Healthy after it:** `/health` reported `healthy: true` with the checkpoint 1 block behind the
+head at 23:23:29 UTC, and the log shows the live poll moving a block or two a second.
+
+⚠ **The `grace_period` warning fired again**, word for word as `RUNBOOK.md` predicts: *"Service
+HTTP check has a grace period greater than 1 minute (30m0s); this will be lowered to 1 minute."*
+Expected, and not a deploy problem.
+
+**The red proof ran first, against the unfixed list.** T7b failed with `retryReason` returning
+`null` (8/9, exit 1), and passed after the one-entry change (9/9). Offline suite: liveness
+14/14, health all passed, reserves 9/9.
+
+### ⚠ `-32014` IS MORE FREQUENT THAN §23.4 SAYS — SEVEN, NOT THREE
+
+§23.4's table was written around 11:00 UTC and lists three. Read across the whole of v3's life,
+from the live-mode handover at 02:04:44 to the deploy signal at 23:22:47 — about 21 hours:
+
+| | count | times (UTC) |
+|---|---|---|
+| `-32014` on `eth_getLogs` | **7** | 05:33:40, 07:32:51, 08:41:46, 12:13:08, 14:59:57, 15:34:17, 23:15:08 |
+| HTTP 502 from the RPC | 6 | 07:41:52, 11:41:33, 11:56:35, 13:22:29, 19:52:14, 23:08:37 |
+
+⚠ **`52b5ec3`'s commit message and its comment on `NODE_LAG_CODES` both cite the three from
+§23.4's window.** They are true as written and they understate the rate; this table is the
+fuller count.
+
+**Every `-32014` asked for a range of 2 to 12 blocks ending at the head** — `0x3aaad00` to
+`0x3aaad01`, and so on. That is the evidence for "a node behind the load balancer that has not
+reached that head yet", and the reason it takes `-32001`'s path rather than being a real error.
+
+⚠ **The consecutive-failure counter reached 2 for the first time** at 23:08:37, on a 502. The
+bound is 5 and the process exits on it. **This fix does nothing for 502s:** the retry list
+classifies JSON-RPC codes, and a 502 never reaches one.
+
+⚠ **ALSO IN THAT LOG, NOT INVESTIGATED: the platform health check failed once,** at 17:30:15
+UTC — *"Health check 'servicecheck-00-http-8080' on port 8080 has failed."* The machine was not
+restarted and recovered on its own. `/health` returns 503 whenever the checkpoint falls behind
+the head, so a run of failed polls produces exactly this. Worth reading before mainnet.
+
+⚠ **What the deploy does NOT prove.** No `-32014` has occurred since it, so the retry path has
+not yet run in production. What is proved is the classification, and that the running code
+carries it. The next occurrence should log `transient error, retrying in 1000ms (attempt 1/5)`
+instead of `Poll failed` — add it to the table above when it does.
+
 ---
 
 # 24. SESSION OF 11 SEPTEMBER 2026 (continued) — step 2 closed out, a report-only audit, and the handover
@@ -6505,6 +6589,11 @@ file now lead here.
 ## 24.1 ⚠ The working tree — read this before any git command
 
 **Where the branch is:** HEAD `e13346f` on `ballista-migration`, level with `origin`.
+
+⚠ **SUPERSEDED LATER THE SAME DAY — SEE §23.6.** Everything the table below calls uncommitted is
+committed and pushed: the chart work as `8542906`, this section and the audit as `34388bc`, and
+the operator's two package files as `412b7de` on **`parked/bridge-kit`**. HEAD is `52b5ec3`. The
+table is kept because it records whose each file was, which is the part that still matters.
 
 **What is uncommitted, and whose it is:**
 
@@ -6526,6 +6615,12 @@ file now lead here.
 - **Commit, push or deploy only when the operator asks.**
 
 ## 24.2 Decisions waiting on the operator
+
+⚠ **ALL FOUR ANSWERED LATER THE SAME DAY — SEE §23.6.** 1: yes, committed and pushed, in three
+commits. 2: yes, `verify:chart` is registered, and the suite is `SUITES=18 CHECKS=507 FAILED=0`.
+3: the `-32014` finding is fixed and deployed (`52b5ec3`); the default-timeframe finding is
+recorded under step 5 in §24.3 and deliberately **not** fixed. 4: chart step 3 is **not** to be
+started yet. The list below is kept as the record of what was asked.
 
 **Asked at the end of step 2, not yet answered:**
 1. Commit step 2, and this documentation, and push?
@@ -6583,7 +6678,20 @@ we already have, rather than shortening the candle poll." The facts the proposal
   `max(bucket, ceil(span / 600 / bucket) × bucket)`.
 - So on any span over 10 hours, "1M" draws candles of 2 minutes or more under a 1M label.
 - "ALL" computes its own bucket (`PriceChart.tsx:155-158`).
-- The §23.5 finding, where the default timeframe changes with the clock, lives in the same code.
+- ⚠ **AND THE DEFAULT TIMEFRAME FOLLOWS THE CLOCK — recorded 11 September 2026, deliberately NOT
+  fixed, because the fix belongs to this step.** `chosen = tf ?? defaultTimeframe(candles, now)`
+  (`PriceChart.tsx:145`), and `defaultTimeframe` (`useCandles.ts:147-157`) reads `now`, which
+  ticks every minute (`useMinuteClock.ts`). So a viewer who has not picked a timeframe gets a
+  **new default** the moment the span since the first candle crosses 180 buckets: the chart
+  switches timeframe, refits, and the viewer's zoom goes with it — undoing step 2's whole point,
+  for that one viewer, at that one moment.
+  - Measured on GP4265, whose first candle is 2026-09-03 16:00 UTC: the default moved
+    **1H → 6H at 2026-09-11 04:00 UTC**. It read 1H in step 2's first browser check and 6H after
+    a restart. The next move, to 1D, falls on **2026-10-18**.
+  - It is rare, and **no trade causes it.** A new trade cannot move the first candle — except the
+    very first trade, which replaces the flat launch line anyway.
+  - **The likely fix is to latch the default the first time data arrives on a page**, which is
+    this step's code and not step 2's. Full record in §23.5.
 
 **Step 6, local time.** lightweight-charts shows UTC by default. Local time needs
 `localization.timeFormatter` for the crosshair and a `tickMarkFormatter` for the axis.
