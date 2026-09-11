@@ -29,6 +29,9 @@
     "verify:switch": "node --experimental-strip-types scripts/verify-switch-failure.mts"
   },
   "dependencies": {
+    "@circle-fin/adapter-solana": "^1.7.2",
+    "@circle-fin/adapter-viem-v2": "^1.17.1",
+    "@circle-fin/bridge-kit": "^1.14.1",
     "@metamask/connect-evm": "^2.1.1",
     "@tanstack/react-query": "^5.62.0",
     "@walletconnect/ethereum-provider": "^2.24.0",
