@@ -135,6 +135,7 @@ function TokenPageInner({ token }: { token: `0x${string}` }) {
             <PriceChart
               points={candles.points}
               candles={candles.candles}
+              now={candles.now}
               isFlatLaunch={candles.isFlatLaunch}
               isHistoryUnchartable={candles.isHistoryUnchartable}
               isLoading={candles.isLoading}

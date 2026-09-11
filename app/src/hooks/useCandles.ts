@@ -19,9 +19,11 @@
 // someone trades. Between trades the price is EXACTLY constant, so carrying the last
 // close forward is arithmetic, not interpolation, and a flat candle is a true statement.
 
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Address } from "viem";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "../config";
+import { useMinuteClock } from "./useMinuteClock";
 
 /** A lightweight-charts line point. `time` is a UNIX second. */
 export type PricePoint = { time: number; value: number };
@@ -202,10 +204,20 @@ export function forwardFill(
   return out;
 }
 
+// Shared empty results. A fresh `[]` per call is a new identity per render, and PriceChart
+// rebuilt its series whenever an input's identity changed.
+const EMPTY_POINTS: PricePoint[] = [];
+const EMPTY_CANDLES: Candle[] = [];
+
 export type CandleResult = {
   points: PricePoint[];
   /** Raw 1-minute OHLC, unfilled. The chart aggregates and fills per timeframe. */
   candles: Candle[];
+  /**
+   * The clock the fills ran to: UNIX seconds, floored to the minute (useMinuteClock).
+   * PriceChart fills to the same value, so the chart and this hook read one clock.
+   */
+  now: number;
   /** The token has NEVER traded. The flat line is its launch price and that is the truth. */
   isFlatLaunch: boolean;
   /**
@@ -297,50 +309,61 @@ export function useCandles(
     },
   });
 
-  const now = Math.floor(Date.now() / 1000);
-  const traded = q.data?.points ?? [];
-  const hasTrades = q.data?.hasTrades ?? false;
+  // ⚠ ONE MINUTE CLOCK AND A MEMOISED RESULT. This read Date.now() and built fresh arrays on
+  // every call, so PriceChart got new inputs on every render of the page -- and rebuilt the
+  // whole chart for them. The result now changes only when the data, the launch price or the
+  // minute changes. See CLAUDE.md §23.
+  const now = useMinuteClock();
+  const { data, isLoading, isError } = q;
 
-  // ⚠ A TOKEN WITH NO TRADES STILL HAS A PRICE, and this is the case that matters most:
-  // it is EVERY brand-new token, which is exactly when a creator and their first buyers
-  // are looking. An empty panel there reads as a broken product at the moment of highest
-  // scrutiny. The curve defines a price from its opening reserves whether or not anyone
-  // has traded, so the honest render is a flat line from creation to now.
-  if (traded.length === 0) {
-    if (launchPrice === undefined || createdAtSeconds === undefined) {
+  return useMemo((): CandleResult => {
+    const traded = data?.points ?? EMPTY_POINTS;
+    const hasTrades = data?.hasTrades ?? false;
+
+    // ⚠ A TOKEN WITH NO TRADES STILL HAS A PRICE, and this is the case that matters most:
+    // it is EVERY brand-new token, which is exactly when a creator and their first buyers
+    // are looking. An empty panel there reads as a broken product at the moment of highest
+    // scrutiny. The curve defines a price from its opening reserves whether or not anyone
+    // has traded, so the honest render is a flat line from creation to now.
+    if (traded.length === 0) {
+      if (launchPrice === undefined || createdAtSeconds === undefined) {
+        return {
+          candles: EMPTY_CANDLES,
+          points: EMPTY_POINTS,
+          isFlatLaunch: false,
+          isHistoryUnchartable: false,
+          isLoading,
+          isError,
+          now,
+        };
+      }
       return {
-        candles: [],
-        points: [],
-        isFlatLaunch: false,
-        isHistoryUnchartable: false,
-        isLoading: q.isLoading,
-        isError: q.isError,
+        candles: EMPTY_CANDLES,
+        points: forwardFill([{ time: createdAtSeconds, value: launchPrice }], now),
+        isFlatLaunch: !hasTrades,
+        isHistoryUnchartable: hasTrades,
+        isLoading,
+        isError,
+        now,
       };
     }
+
+    // Anchor the series at creation so the first trade is visibly a MOVE from the launch
+    // price rather than the chart's origin. Without this, a token's first buy looks like
+    // its starting point and the opening move is invisible.
+    const seeded =
+      createdAtSeconds !== undefined && launchPrice !== undefined && createdAtSeconds < traded[0].time
+        ? [{ time: createdAtSeconds, value: launchPrice }, ...traded]
+        : traded;
+
     return {
-      candles: [],
-      points: forwardFill([{ time: createdAtSeconds, value: launchPrice }], now),
-      isFlatLaunch: !hasTrades,
-      isHistoryUnchartable: hasTrades,
-      isLoading: q.isLoading,
-      isError: q.isError,
+      candles: data?.candles ?? EMPTY_CANDLES,
+      points: forwardFill(seeded, now),
+      isFlatLaunch: false,
+      isHistoryUnchartable: false,
+      isLoading,
+      isError,
+      now,
     };
-  }
-
-  // Anchor the series at creation so the first trade is visibly a MOVE from the launch
-  // price rather than the chart's origin. Without this, a token's first buy looks like
-  // its starting point and the opening move is invisible.
-  const seeded =
-    createdAtSeconds !== undefined && launchPrice !== undefined && createdAtSeconds < traded[0].time
-      ? [{ time: createdAtSeconds, value: launchPrice }, ...traded]
-      : traded;
-
-  return {
-    candles: q.data?.candles ?? [],
-    points: forwardFill(seeded, now),
-    isFlatLaunch: false,
-    isHistoryUnchartable: false,
-    isLoading: q.isLoading,
-    isError: q.isError,
-  };
+  }, [data, isLoading, isError, launchPrice, createdAtSeconds, now]);
 }

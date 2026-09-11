@@ -36,8 +36,10 @@ import {
   CandlestickSeries,
   ColorType,
   type IChartApi,
+  type ISeriesApi,
   type UTCTimestamp,
 } from "lightweight-charts";
+import { planSeriesUpdate, type Bar } from "../../lib/chartSeries";
 import { useT } from "../../i18n";
 import { useTheme } from "../../providers/ThemeProvider";
 import {
@@ -82,15 +84,47 @@ const PALETTE = {
   },
 } as const;
 
+/** A bar in lightweight-charts' own shape. */
+const toChartBar = (k: Bar) => ({
+  time: k.time as UTCTimestamp,
+  open: k.open, high: k.high, low: k.low, close: k.close,
+});
+
+/** The colours, applied at creation AND on every theme change -- never by rebuilding. */
+function themeOptions(pal: (typeof PALETTE)[keyof typeof PALETTE]) {
+  return {
+    chart: {
+      layout: { background: { type: ColorType.Solid as const, color: "transparent" }, textColor: pal.text },
+      grid: { vertLines: { visible: false }, horzLines: { color: pal.grid } },
+      rightPriceScale: { borderColor: pal.border },
+      timeScale: { borderColor: pal.border },
+    },
+    series: {
+      upColor: pal.up,
+      downColor: pal.down,
+      borderUpColor: pal.up,
+      borderDownColor: pal.down,
+      wickUpColor: pal.up,
+      wickDownColor: pal.down,
+    },
+  };
+}
+
 export function PriceChart({
   points,
   candles,
+  now,
   isFlatLaunch,
   isHistoryUnchartable,
   isLoading,
 }: {
   points: PricePoint[];
   candles: Candle[];
+  /**
+   * UNIX seconds, floored to the minute: the clock useCandles filled to. Passed in, not read
+   * here -- a Date.now() in render changed on every render and rebuilt the series with it.
+   */
+  now: number;
   isFlatLaunch: boolean;
   isHistoryUnchartable: boolean;
   isLoading: boolean;
@@ -99,12 +133,18 @@ export function PriceChart({
   const { theme } = useTheme();
   const box = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
+  const bars = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  // What the series holds right now, and at which timeframe: the "before" for the planner.
+  const drawn = useRef<Bar[] | null>(null);
+  const drawnTf = useRef<TimeframeId | null>(null);
+  // The theme to create with, without making creation depend on the theme.
+  const themeNow = useRef(theme);
+  themeNow.current = theme;
 
-  const now = Math.floor(Date.now() / 1000);
   const [tf, setTf] = useState<TimeframeId | null>(null);
   const chosen = tf ?? defaultTimeframe(candles, now);
 
-  const series = useMemo(() => {
+  const series = useMemo((): Bar[] => {
     if (candles.length === 0) {
       // No chartable trades: fall back to the flat launch line the hook already builds,
       // rendered as flat candles so the series type does not change under the user.
@@ -119,66 +159,92 @@ export function PriceChart({
     return forwardFillCandles(aggregateCandles(candles, bucket), now, bucket);
   }, [candles, points, chosen, now]);
 
-  useEffect(() => {
-    if (!box.current || series.length === 0) return;
-    const pal = PALETTE[theme];
+  const hasChart = series.length > 0;
 
-    const c = createChart(box.current, {
-      layout: {
-        background: { type: ColorType.Solid, color: "transparent" },
-        textColor: pal.text,
-        fontFamily: "DM Mono, ui-monospace, monospace",
-        fontSize: 10,
-      },
-      grid: { vertLines: { visible: false }, horzLines: { color: pal.grid } },
-      rightPriceScale: { borderColor: pal.border },
-      timeScale: { borderColor: pal.border, timeVisible: true, secondsVisible: false },
+  // ── ⚠ THE CHART IS CREATED ONCE, AND NEVER FOR NEW DATA ───────────────────────────
+  //
+  // This effect used to depend on [series, theme]. The series changed on every render, so
+  // the chart was destroyed, recreated and fitContent()-ed every time: on an active token,
+  // every trade threw away the user's zoom and pan. It now runs only when the box mounts or
+  // unmounts. Data arrives through the effect below; the theme through applyOptions.
+  useEffect(() => {
+    if (!hasChart || !box.current) return;
+    const el = box.current;
+    const look = themeOptions(PALETTE[themeNow.current]);
+
+    const c = createChart(el, {
+      ...look.chart,
+      layout: { ...look.chart.layout, fontFamily: "DM Mono, ui-monospace, monospace", fontSize: 10 },
+      timeScale: { ...look.chart.timeScale, timeVisible: true, secondsVisible: false },
       crosshair: { mode: 1 },
       // ⚠ Zoom and pan ON. The reset button below is what keeps it from being a trap:
       // scrolling into empty space on a sparse series can leave a blank canvas with no
       // obvious way back, and "the chart broke" is what that looks like to a user.
       handleScale: true,
       handleScroll: true,
-      height: box.current.clientHeight || 260,
+      height: el.clientHeight || 260,
     });
-
-    const s = c.addSeries(CandlestickSeries, {
-      upColor: pal.up,
-      downColor: pal.down,
-      borderUpColor: pal.up,
-      borderDownColor: pal.down,
-      wickUpColor: pal.up,
-      wickDownColor: pal.down,
+    bars.current = c.addSeries(CandlestickSeries, {
+      ...look.series,
       // Launch prices are ~2.5e-6 USDC. The default formatter renders every one as 0.00,
       // so precision comes from the data's magnitude rather than a guess.
       priceFormat: { type: "price", precision: 10, minMove: 0.0000000001 },
     });
-
-    s.setData(
-      series.map((k) => ({
-        time: k.time as UTCTimestamp,
-        open: k.open, high: k.high, low: k.low, close: k.close,
-      }))
-    );
-    c.timeScale().fitContent();
     chart.current = c;
+    drawn.current = null;
+    drawnTf.current = null;
 
     // The chart does not observe its own container. Without this it keeps the width it was
     // born with and overflows the column the moment anything reflows.
     const ro = new ResizeObserver(() => {
-      if (box.current) c.applyOptions({ width: box.current.clientWidth, height: box.current.clientHeight || 260 });
+      c.applyOptions({ width: el.clientWidth, height: el.clientHeight || 260 });
     });
-    ro.observe(box.current);
-    c.applyOptions({ width: box.current.clientWidth });
+    ro.observe(el);
+    c.applyOptions({ width: el.clientWidth });
 
     return () => {
       ro.disconnect();
       c.remove();
       chart.current = null;
+      bars.current = null;
+      drawn.current = null;
     };
-  }, [series, theme]);
+  }, [hasChart]);
 
-  const hasChart = series.length > 0;
+  // Theme: restyle in place.
+  useEffect(() => {
+    const look = themeOptions(PALETTE[theme]);
+    chart.current?.applyOptions(look.chart);
+    bars.current?.applyOptions(look.series);
+  }, [theme]);
+
+  // ── DATA: THE SMALLEST CHANGE THAT GETS THERE ─────────────────────────────────────────
+  //
+  // planSeriesUpdate (lib/chartSeries.ts) compares what is drawn with what should be:
+  //   none    nothing to do.
+  //   update  series.update() per bar. A trade in the current bucket or a new minute lands
+  //           here, and the user's zoom and pan are untouched.
+  //   reset   setData(), keeping the visible TIME range, so a re-bucket or a late-indexed
+  //           trade does not throw the view away either.
+  // Only a first draw and a timeframe change fit the content -- plus the Reset button.
+  useEffect(() => {
+    const c = chart.current;
+    const s = bars.current;
+    if (!c || !s) return;
+    const tfChanged = drawnTf.current !== chosen;
+    const plan = tfChanged ? { kind: "reset" as const } : planSeriesUpdate(drawn.current, series);
+    if (plan.kind === "update") {
+      for (const b of plan.bars) s.update(toChartBar(b));
+    } else if (plan.kind === "reset") {
+      const firstForView = drawn.current === null || tfChanged;
+      const keep = firstForView ? null : c.timeScale().getVisibleRange();
+      s.setData(series.map(toChartBar));
+      if (keep) c.timeScale().setVisibleRange(keep);
+      else c.timeScale().fitContent();
+    }
+    drawn.current = series;
+    drawnTf.current = chosen;
+  }, [series, chosen, hasChart]);
 
   return (
     <section className="chart-panel">
