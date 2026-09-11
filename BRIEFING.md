@@ -124,10 +124,20 @@ These were each decided after real work. Re-arguing them wastes the calendar.
 2. **Get the indexer off a laptop** — a host, a supervisor, and external alerting. The code
    now fails loudly rather than silently, but nothing restarts it.
 3. **Test on a phone.** No viewport below 1280px has ever been opened.
-4. **Send two questions to Goldsky** (the chosen RPC provider): does their day-one Arc
-   mainnet guarantee cover their Edge RPC product specifically, and what is its
-   requests-per-second ceiling? The rate limit is the binding constraint, and no research
-   can answer these — they need an email.
+4. **Send the Goldsky email** (the chosen RPC provider). As of 11 September it carries
+   **four** questions:
+   - **(a)** Does their day-one Arc mainnet guarantee cover the Edge RPC product
+     specifically?
+   - **(b)** What is Edge's requests-per-second ceiling?
+   - **(c)** How deep is Edge's **archive** state on Arc mainnet? Our indexer reads the
+     curve at each trade's own block, so a catch-up costs **one archive `eth_call` per
+     trade**, reaching back as far as its checkpoint stands.
+   - **(d)** What is the **per-IP** request cap on our tier? Some Edge tiers list roughly
+     1.7–8 rps per IP, and a catch-up through a busy backlog hits that before any
+     monthly quota.
+
+   The rate limits are the binding constraint. No research can answer these; they need an
+   email.
 
 ### Done since the last briefing — do not redo
 

@@ -1018,6 +1018,14 @@ command** or the hook is inert. Verified to actually block: with a lease present
 - USDC is 6 decimals in contract amounts.
 - Fees are read per-token from `curves()`, never assumed global.
 - Never put raw private keys in browser storage.
+- ⚠ **When one message carries a change instruction AND a report-only rule that contradict
+  each other, stop and ask which governs. Do not guess.** On 11 September 2026 the operator
+  sent a single message asking for commits, a production database write and six chart
+  fixes, which then ended "report only. Do not change any file." The session asked before
+  touching anything, and **the operator confirmed that was the right behaviour.** The
+  conflict was in the instruction; asking cost one round trip, while guessing could have
+  cost an irreversible write. Do not read the later, clarified turns of that transcript as
+  licence to resolve such a conflict unilaterally. See §23.1.
 
 ---
 
@@ -2154,6 +2162,23 @@ That 0.4% is the curve actually moving. **The pair is recorded here because it i
 proof.** Anyone who reaches for `usdc_amount / token_amount` should be able to see, in one
 table, that it was tried and what it produced.
 
+⚠ **CORRECTED 11 September 2026 — WHAT "FROM RESERVES" MEANS NOW.** This section and
+migrations 004 and 006 all describe `trades.virtual_*_reserves` as the curve's POST-TRADE
+state. **That was not reliably true until 11 September 2026.** The indexer read `curves()`
+with no block pin, so it got the curve as it stood when the indexer reached the log: after
+any later trade in the same 5-second poll, or hours later during a catch-up. Measured against
+the chain, 26 of 27 stored rows were right. One GP4265 buy (block 60267961) held the state
+after the next trade, a sell six blocks later, so the chart showed the buy at the post-sell
+price and flattened the sell's candle. That row is repaired (§23.2).
+
+**What is true now:** from that fix forward, each row holds the **block-level post-trade
+state**, meaning the curve at the end of the trade's own block (`readCurveAtBlock`,
+`indexer/src/index.js`). **The known limit:** two trades on one token in the **same block**
+share that block's end state. The `Trade` event carries no reserves and the contract is
+frozen, so nothing can separate them; the second trade of such a pair opens where it closes.
+None of the 27 rows shares a block. `indexer/scripts/verify-trade-reserves.js --live` checks
+every stored row against the chain at its own block.
+
 ### Empty minutes are not gaps
 
 On a bonding curve price is a pure function of reserves, and reserves change ONLY when
@@ -2296,6 +2321,17 @@ no session can research them:
 2. **What is Edge's rps ceiling?** Goldsky publishes that limits exist but not the numbers.
    The rate limit is the binding constraint, not monthly quota — Alchemy free caps at 25
    rps and QuickNode's $49 tier at 50, and graduation-day traffic spikes.
+
+⚠ **TWO MORE, FOR THE SAME EMAIL — added 11 September 2026.** The indexer now reads each
+trade's reserves at that trade's own block (§23.2), so a catch-up costs **one archive
+`eth_call` per trade**, reaching back to wherever the checkpoint stands:
+
+3. **How deep is Edge's archive state on Arc mainnet?** Goldsky's docs advertise archive
+   access and archive-node routing, but they state no depth and no per-chain coverage, and
+   they do not mention Arc.
+4. **What is the per-IP request cap on our tier?** Their rate limits are set per API key,
+   and some tiers list roughly 1.7–8 rps **per IP**. A catch-up through a busy backlog hits
+   that before any monthly quota.
 
 ⚠ **CU is NOT comparable across providers.** Blockdaemon's $0.0000425/CU is $42.50 per
 million against Alchemy's $0.45 — ~94x. That is a unit-definition difference, not a price
@@ -5753,6 +5789,11 @@ flags.
 address is `keccak(rlp([deployer, nonce]))`). Editing the **hook** does — **comments
 included**.
 
+**8. ⚠ The checker itself was lying — §22.7.** The inventory, the record that exists to
+catch undocumented features, listed `transferOwnership` as permissionless and 17 inherited
+errors and events as never raised. Widened to the hook without a fix, it would have
+published all ten hook callbacks as permissionless. Nothing checks the checker.
+
 ## 21.9 THE DEPLOY ORDER as it now stands
 
 ⚠ **THREE CONSECUTIVE NONCES, TWO PREDICTIONS.**
@@ -5968,6 +6009,8 @@ construction and by `tsc`.
   landed but `createToken` has not. A buy in another tab of the same wallet re-approves
   unlimited, and the launch then runs against that. It needs the user's own concurrent trade
   **and** an owner fee change inside the same few seconds.
+  ⚠ **DECIDED, 10 September 2026: fixed after mainnet.** The reasoning and the design are in
+  §22.6.
 * **The EIP-5792 batch approves `fee + launchBuy6`.** `approve` overwrites, so a standing
   allowance cannot leak into it. But `creatorLaunchBuy` clamps to the 2.5% allocation
   (`LFX1.sol:482-487`) while `parseLaunchBuyUsdc` caps only at the balance, so a fee raised in
@@ -6040,3 +6083,243 @@ transfer.
   Pre-existing, **not changed** here.
 * **`GraduationHelper` is deliberately not a target.** It is inert on testnet (§7) and absent
   from the v4 stack the runbook deploys.
+
+## 22.6 ⚠ DECIDED, 10 September 2026: the tab race gets fixed AFTER mainnet — and this is the design
+
+**Operator decision.** §22.4's first residual is accepted for launch and fixed afterwards.
+The design is recorded here so that it gets built, not re-derived.
+
+### The residual, restated
+
+Two tabs, one wallet. The create flow's exact fee approval has landed, but `createToken` has
+not been signed yet. A buy in the other tab reads the allowance, finds exactly the fee (below
+its amount), and approves unlimited. `createToken` then runs against an unlimited allowance,
+so a fee raised in flight gets paid instead of refused.
+
+### Why it is deferred — recorded so it is not re-argued
+
+It takes two independent events at the same time:
+
+1. **The user races themselves inside their own launch.** The create flow requests
+   `createToken` about one second after its approval confirms (two RPC reads: the economics
+   hash and the gas estimate). If the wallet presents queued requests in order, that second
+   is the whole window. If it lets a later request be confirmed first, the window lasts as
+   long as the `createToken` prompt stays open.
+2. **The owner raises `creationFeeUsdc` inside that same window.** Honest operation never
+   does this: the runbook says to set it once, before announcing
+   (`CONTRACT_DEPLOY_RUNBOOK.md` §3). It takes a malicious or compromised owner key. Even
+   then it only catches users who happen to be racing themselves; for everyone else a raised
+   fee just makes the launch revert.
+
+If both happen, that one launch carries R13's full size, up to the wallet's USDC balance.
+The expected loss is negligible. **Against that:** the fix touches both money paths, and
+every change there needs a real-wallet click-through — a two-tab one here — which the week
+before 16 September has no room for. Nothing on the common path depends on it.
+
+### The design
+
+**1. A cross-tab lock using the Web Locks API — the primary fix, within one browser profile.**
+
+* One lock per wallet, named `ballista:usdc-allowance:<address>`, with the **address
+  lower-cased**. The app and wallets disagree on address case (§12.3), and two spellings
+  would silently be two different locks.
+* **`Create.tsx` holds the lock exclusively** — `navigator.locks.request(name, async () =>
+  { … })` — from just before its allowance read until `createToken`'s receipt (or failure).
+  That covers the whole critical section: the approval, the hash read, the estimate, the
+  send and the receipt. If a trade's approval already holds the lock, the launch simply
+  waits for it; that takes seconds.
+* **`TradePanel.tsx` asks for the lock only around a USDC approval**, using
+  `{ ifAvailable: true }`. If a launch holds it, the callback receives `null`: send nothing
+  and say that a launch is in progress in another tab (a new i18n key). Only the approval
+  needs the lock, because a buy can only LOWER the allowance — the worst a buy can do to a
+  launch is make `createToken` revert.
+* **No prompt and no RPC on the common path.** Behaviour changes only when two tabs actually
+  collide.
+* The browser releases the lock when its callback settles, and also when the tab closes or
+  crashes, so a dead tab cannot wedge it.
+* ⚠ **Web Locks works only in secure contexts** (HTTPS, with `localhost` counting), in
+  current Chrome, Firefox and Safari. **If `navigator.locks` is undefined, fall back to
+  today's behaviour — never block trading because an API is missing.** The backstop below
+  still applies.
+
+**2. A re-read backstop — for a second device, a second browser, or a manual approval.**
+
+* Immediately before requesting `createToken` (after the estimate), re-read the allowance. If
+  `creationFeeNeedsApproval(allowance, fee)` says it is no longer exactly the fee, re-approve
+  exactly the fee and read once more. If it is still not exact, **abort with a message —
+  never loop.**
+* This costs one RPC read on the common path, and adds a prompt only when a race has actually
+  happened.
+* ⚠ **Its limit:** it covers everything up to the moment the `createToken` request reaches the
+  wallet. An approval confirmed out of order while that prompt is open still wins. For tabs
+  in the same browser, the lock closes that gap; for a second device, nothing frontend-only
+  can. **The complete fix is on the contract side** — put `creationFeeUsdc` in the economics
+  hash, or give `createToken` a maximum-fee argument — and the contract is frozen.
+
+**3. How to prove it once it is built.**
+
+* Keep the decisions pure and in `lib/`, where `verify:create` can red-prove them the way it
+  does C12: the lock name (including the case-folding) and "approve only if the lock was
+  granted".
+* ⚠ **The lock itself needs a real browser and two tabs.** Start a launch in tab A and stop at
+  the `createToken` prompt. In tab B, start a buy that needs an approval. Tab B must report a
+  launch in progress and send **nothing**. Finish the launch; the USDC allowance to the
+  factory must then read `0.0 USDC`:
+
+  ```bash
+  node -e "const{ethers}=require('ethers');const p=new ethers.JsonRpcProvider('https://rpc.testnet.arc.io');const u=new ethers.Contract('0x3600000000000000000000000000000000000000',['function allowance(address,address) view returns (uint256)'],p);u.allowance(process.argv[1],'0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b').then(a=>console.log(a>2n**255n?'UNLIMITED ('+a+')':ethers.formatUnits(a,6)+' USDC'))" 0xWALLET
+  ```
+
+* Red-prove it by removing the lock request from the trade panel: tab B then approves, and
+  the allowance after the launch reads `UNLIMITED`. **A lock that is never contended in a test
+  has proved nothing.**
+
+## 22.7 ⚠ TRAP: THE CHECKER WAS LYING, AND NOTHING CHECKS THE CHECKER
+
+**A named trap in its own right, not a footnote to §22.5.**
+
+`CONTRACT_INVENTORY.md` exists to catch one failure: a feature that lives in the source and
+nowhere in the doc — the symbol lock that a rewrite dropped. It is generated from the ABI and
+the source, and it presents itself as the exhaustive WHAT, a record that "cannot drift".
+
+**It was itself making false claims about access control:**
+
+* **It listed `transferOwnership` as "Permissionless".** That function is `onlyOwner`, but
+  the modifier lives in `Ownable.sol`, a file the generator never read. This is **R17's
+  unguarded path** — the transfer that permanently freezes every setter if it goes to a dead
+  address — and the canonical inventory recorded it as callable by anyone.
+* **It carried 17 "declared, never thrown / never emitted" claims** about errors and events
+  that inherited code raises on ordinary paths. Examples: Ownable's unauthorized-account
+  error on every owner setter, and OZ `ERC20`'s `Transfer` on every token transfer.
+
+⚠ **THE NEAR MISS IS THE PART TO REMEMBER.** Adding the adapter, the hook and the corrector
+without first fixing the generator would have published **all ten hook callbacks as
+permissionless**. They are `onlyPoolManager`, and that modifier lives in `BaseHook`. The
+false claim would have gone into the canonical record about **the contract with the least
+margin for error**: immutable, ownerless, on every swap for ever, where a wrong assumption
+about who can call a callback can never be patched (§21.2). It was caught only because the
+new targets' output was read row by row against the source before commit. **No check caught
+it, and no existing check could have.**
+
+### Why it was invisible
+
+* **`--check` compares the generator with itself.** It proves the file matches what the
+  generator would write today. It cannot tell you that what the generator writes is wrong.
+* **A generated document borrows the machine's authority.** Nobody reads a generated table
+  line by line against the source — not having to is the point of generating it. So a false
+  row persists indefinitely, and every regeneration re-stamps it.
+* **The error was an inference from absence.** "No `onlyOwner` in this file → permissionless."
+  "No `revert` in this file → never thrown." Absence from the one file a tool reads is not
+  absence. The tool had no way to say where its sight ended, so it guessed — and in a
+  generated table, a guess reads as fact.
+
+### RULE
+
+> **A generator's categories are claims, and the checker needs a checker.** When a tool
+> labels something from the ABSENCE of evidence in what it reads, make it say where its sight
+> ends ("inherited, not read here") instead of guessing. And when you widen a checker's
+> input, **read its output for the new input against the source before it ships**: a tool
+> that was right for two contracts can be wrong for the third in a way its own `--check` can
+> never see.
+
+This is the same family as §12.6, §15.6, §16.4 and §19.6 — a check that cannot fail — one
+level up: **not a test that cannot fail, but a record nobody thinks to doubt.**
+
+⚠ **Still unchecked — proposed, not built:** the generator has no test of its own. The
+checker's checker would be a fixture contract with a known inherited `onlyOwner` function, an
+inline `msg.sender` check and an inherited error, asserted against the generated rows and
+red-proved. The generator's fuzzy setter matching is also still wrong at least once (§22.5).
+
+---
+
+# 23. SESSION OF 11 SEPTEMBER 2026 — the chart work, one step at a time
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§22. Forward pointers were added at
+§5 (standing rules), §11.13 and §11.17; nothing above this line was deleted.
+
+The operator asked for six chart fixes, done one at a time, with a report and a stop after
+each. This section records them as they land.
+
+## 23.1 ⚠ A conflicting instruction is a question, not a puzzle to solve
+
+The message that opened this work asked for a skills removal, a commit, six chart fixes, a
+fee-row change and a production database repair. Its second half then said "report only.
+Do not change any file." **The session stopped and asked which half governed before
+touching anything.** The answer was "both, changes first", with a stop after each chart step.
+
+**The operator asked for this to be recorded as the right behaviour, with the reason made
+explicit:**
+- The contradiction was in the instruction, not in the code, so no amount of reading could
+  resolve it.
+- Some of the requested actions — a production write, commits — are not cheaply reversible.
+- Asking cost one round trip.
+
+**A future session must not infer from the later turns of this transcript, where the work
+went ahead, that it should pick an interpretation itself.** The standing rule is in §5.
+
+## 23.2 Step 1 — the indexer read reserves at the wrong block
+
+**The bug.** `updateReservesFromChain` called `factory.curves(token)` with no block pin, so
+each trade row stored the curve as it stood when the indexer reached the log, not as the
+trade left it. Measured against the chain at each row's own block (archive reads): **26 of 27
+rows right, one wrong.** A GP4265 buy at block 60267961 held the state after the next trade,
+a sell 6 blocks and 3 seconds later, because both were ingested two hours late in a catch-up.
+It stays rare at testnet volume and grows exactly where it hurts: several trades in one
+5-second poll, and every trade in a catch-up.
+
+**The fix,** in `indexer/src/index.js`:
+- **`readCurveAtBlock(contract, token, block)`** calls `curves(token, { blockTag: block })`,
+  and **throws** on a missing or non-numeric block instead of falling back to latest.
+  `handleTrade` passes `log.blockNumber`. The token upsert's unpinned read stays, because that
+  row is meant to hold current state.
+- **A pinned read on a node that hasn't reached the block now answers `-32001 "block not
+  found"`** (measured), where an unpinned read quietly returned older state. `-32001` is
+  retried as node lag.
+- ⚠ **The retry logic's "codes first" rule had never matched an ethers error.** It tested
+  `err.code`, which ethers sets to its own string; the node's numeric code is nested in
+  `err.error` or `err.info.error`, so the text fallback was doing all the work.
+  `retryReason()` now reads the nested code.
+
+**The limit,** stated in 004, 006 and §11.13: two trades on one token in the same block share
+that block's end state, and the frozen contract's `Trade` event carries no reserves to
+separate them. None of the 27 rows shares a block.
+
+**The repair.** The GP4265 row (id `91bf1515…`) now holds the chain's state at its own
+block. That is exact, because no other trade on that token shares the block. Price moved from
+2.48093e-6 to **2.48462e-6**. One row changed; 37 rows before and after. The previous values,
+to reverse it: `virtual_usdc_reserves 2667000001`,
+`virtual_token_reserves 1075000000000000000000000000`.
+
+**The check.** `indexer/scripts/verify-trade-reserves.js` runs as `npm run verify:reserves`
+and is part of the indexer's `verify`; `verify:reserves:live` adds the database.
+- **Offline, T1–T8:** the pinned read, refusal of a missing or `'latest'` block, bigint
+  handling, and retry classification by code.
+- **Live, T9–T10:** every stored row equals the chain at its own block — **26/27 before the
+  repair, 27/27 after.**
+- **Red-proofs:** no `blockTag` → T1 and T4 fail; guard disabled → T2 and T3; `-32001`
+  removed → only T6.
+- ⚠ **T2 and T3 first passed against the UNFIXED code,** because calling a function that
+  does not exist also throws. They now require the function to exist — §5's test-shape
+  error 3 again.
+
+**Archive depth.** Both Arc testnet hosts serve `eth_call` from **block 1**, 342 days back
+(measured). The deepest a catch-up can reach today is the factory deploy block, 12 days back.
+
+## 23.3 Production's RPC, and Goldsky
+
+**Production's `FACTORY_RPC_URL` is `https://rpc.testnet.arc.io`,** with no path or query.
+Fly secrets are write-only (`flyctl secrets list` shows only a digest), so it was read from
+inside the running machine with `flyctl ssh console -C "printenv FACTORY_RPC_URL"`, piped
+through a host extractor. ⚠ **Never print the full value:** another provider's URL can carry
+its API key. This is the host measured as a full archive, so the fix is safe to deploy
+against it. The same machine reports `FACTORY_ADDRESS` `0xEDeed1F0…C04b` and deploy block
+`59366694`, both correct.
+
+⚠ **On Windows, `flyctl ssh console -C` exits 1 with "The handle is invalid" AFTER printing
+the output.** The value arrives; do not read the exit code as a failure.
+
+**Goldsky Edge.** Its docs advertise archive access and archive-node routing, but give no
+depth, no chain list and no mention of Arc. Rate limits are per API key, and some tiers cap
+at roughly 1.7–8 rps **per IP**. Two questions were added to the outstanding Goldsky email:
+§11.17 items 3 and 4, and `BRIEFING.md` item 4. **Do not point `FACTORY_RPC_URL` at Edge until
+they are answered and the same archive probe has passed against it.**
