@@ -175,6 +175,11 @@ export const en = {
     historyUnavailable: "Earlier trades predate price recording.",
     unavailable: "Price history is unavailable right now.",
     midPriceNote: "Curve mid-price, before fees and snipe tax.",
+    // Stated once, here, rather than on every axis label -- see lib/chartFormat.ts.
+    priceScaleNote: "Prices {scale} USDC",
+    // {offset} is a UTC offset like "UTC+1", so a bare "14:32" on the axis is never
+    // ambiguous about which zone it's in.
+    localTimeNote: "Times shown in your local time ({offset})",
     timeframeLabel: "Timeframe",
     resetZoom: "Reset",
   },

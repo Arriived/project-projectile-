@@ -40,7 +40,16 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { planSeriesUpdate, type Bar } from "../../lib/chartSeries";
+import {
+  priceScaleFor,
+  priceScaleLabel,
+  formatScaledPrice,
+  utcOffsetLabel,
+  formatLocalTickMark,
+  formatLocalCrosshair,
+} from "../../lib/chartFormat";
 import { useT } from "../../i18n";
+import { INTL_TAG } from "../../i18n/locales";
 import { useTheme } from "../../providers/ThemeProvider";
 import {
   TIMEFRAMES,
@@ -129,7 +138,7 @@ export function PriceChart({
   isHistoryUnchartable: boolean;
   isLoading: boolean;
 }) {
-  const { t } = useT();
+  const { t, locale } = useT();
   const { theme } = useTheme();
   const box = useRef<HTMLDivElement>(null);
   const chart = useRef<IChartApi | null>(null);
@@ -140,6 +149,11 @@ export function PriceChart({
   // The theme to create with, without making creation depend on the theme.
   const themeNow = useRef(theme);
   themeNow.current = theme;
+  // Same reasoning, for locale: read fresh at creation time without making creation
+  // depend on it (only "en" ships today, so this is a robustness match for `themeNow`
+  // rather than a live need).
+  const localeNow = useRef(locale);
+  localeNow.current = locale;
 
   const [tf, setTf] = useState<TimeframeId | null>(null);
   const chosen = tf ?? defaultTimeframe(candles, now);
@@ -161,6 +175,23 @@ export function PriceChart({
 
   const hasChart = series.length > 0;
 
+  // The price-axis scale, locked in from whatever the series' last close was the FIRST
+  // time a chart exists to show it -- computed lazily during render (not in an effect) so
+  // it is available in time for both the series' priceFormat below and the caption in the
+  // JSX, in the same pass. Fixed for the life of the mounted chart, exactly like the
+  // precision/minMove it replaces: recomputing it as the price moves would change what the
+  // caption means while someone is reading it.
+  const lockedScale = useRef<number | null>(null);
+  if (lockedScale.current === null && series.length > 0) {
+    lockedScale.current = priceScaleFor(series[series.length - 1].close);
+  }
+  const scale = lockedScale.current ?? 1;
+
+  // Stable for the life of the session -- a viewer's timezone does not change mid-visit --
+  // so this is computed once rather than read fresh on every render. Unlike Date.now()
+  // (K11), it never feeds a memo or effect dependency and cannot cause a rebuild.
+  const utcOffsetMinutes = useMemo(() => -new Date().getTimezoneOffset(), []);
+
   // ── ⚠ THE CHART IS CREATED ONCE, AND NEVER FOR NEW DATA ───────────────────────────
   //
   // This effect used to depend on [series, theme]. The series changed on every render, so
@@ -172,10 +203,43 @@ export function PriceChart({
     const el = box.current;
     const look = themeOptions(PALETTE[themeNow.current]);
 
+    const intlTag = INTL_TAG[localeNow.current];
+
     const c = createChart(el, {
       ...look.chart,
       layout: { ...look.chart.layout, fontFamily: "DM Mono, ui-monospace, monospace", fontSize: 10 },
-      timeScale: { ...look.chart.timeScale, timeVisible: true, secondsVisible: false },
+      // ⚠ tickMarkDensity RAISED FROM THE DEFAULT (2.5) TO REDUCE LABEL COLLISIONS.
+      // lightweight-charts' own current-price tag and its regular gridline labels are two
+      // independent rendering passes that do not know about each other -- the library has
+      // no "keep these apart" option between them, confirmed by reading the bundled
+      // source (there is no counterpart to `alignLabels`, which only reconciles a price
+      // scale's OWN set of last-value/crosshair views against each other, for the tick
+      // marks a separate builder draws). A higher density is the one lever the library
+      // exposes for this: fewer, more widely spaced gridlines make the collision far less
+      // likely, but it is a mitigation, not a guarantee -- a current price landing exactly
+      // on a surviving gridline's value can still coincide at some zoom level.
+      rightPriceScale: { ...look.chart.rightPriceScale, tickMarkDensity: 5 },
+      timeScale: {
+        ...look.chart.timeScale,
+        timeVisible: true,
+        secondsVisible: false,
+        // ⚠ THE FIX FOR "BARE VERTICAL LINES." lightweight-charts' default minBarSpacing
+        // is 0.5px, so fitContent() over many buckets in a narrow mobile column happily
+        // compresses each candle's rendered width below what a body rectangle needs to
+        // read as anything but a line. Flooring it means fitContent() shows fewer, legible
+        // candles instead of every candle illegibly -- the rest are reachable by scrolling
+        // (handleScroll is already on) or the Reset button below.
+        minBarSpacing: 4,
+        // Local time, not UTC -- lightweight-charts' own default tick formatter builds its
+        // strings from getUTCHours()/getUTCDate()/etc (confirmed by reading the bundled
+        // source), so a bare "14:32" was always UTC with nothing on screen saying so. See
+        // lib/chartFormat.ts for why the granularity switch uses plain numbers rather than
+        // importing TickMarkType.
+        tickMarkFormatter: (time: number, tickMarkType: number) =>
+          formatLocalTickMark(time, tickMarkType, intlTag),
+      },
+      // The crosshair label gets the same local-time treatment as the axis ticks.
+      localization: { timeFormatter: (time: number) => formatLocalCrosshair(time, intlTag) },
       crosshair: { mode: 1 },
       // ⚠ Zoom and pan ON. The reset button below is what keeps it from being a trap:
       // scrolling into empty space on a sparse series can leave a blank canvas with no
@@ -186,9 +250,17 @@ export function PriceChart({
     });
     bars.current = c.addSeries(CandlestickSeries, {
       ...look.series,
-      // Launch prices are ~2.5e-6 USDC. The default formatter renders every one as 0.00,
-      // so precision comes from the data's magnitude rather than a guess.
-      priceFormat: { type: "price", precision: 10, minMove: 0.0000000001 },
+      // Launch prices are ~2.5e-6 USDC. A fixed `precision: 10` rendered every label as a
+      // 12-character string ("0.0000025400"), eating close to a third of a 380px axis. A
+      // custom formatter divides by the scale locked in above and shows 4 decimals of
+      // THAT, so the label width stays bounded regardless of the raw magnitude -- the
+      // scale itself is stated once, in the caption below the chart, rather than repeated
+      // on every label.
+      priceFormat: {
+        type: "custom",
+        formatter: (price: number) => formatScaledPrice(price, lockedScale.current ?? 1),
+        minMove: 0.0000000001,
+      },
     });
     chart.current = c;
     drawn.current = null;
@@ -295,6 +367,16 @@ export function PriceChart({
       )}
 
       <p className="hint chart-note">{t("chart.midPriceNote")}</p>
+      {/* The scale factor and the timezone, each stated ONCE here rather than repeated
+          on every axis label -- that repetition is exactly what made the price axis 12
+          characters wide. See lib/chartFormat.ts. */}
+      {hasChart && (
+        <p className="hint chart-note">
+          {t("chart.priceScaleNote", { scale: priceScaleLabel(scale) })}
+          {" · "}
+          {t("chart.localTimeNote", { offset: utcOffsetLabel(utcOffsetMinutes) })}
+        </p>
+      )}
     </section>
   );
 }

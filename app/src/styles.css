@@ -1257,6 +1257,20 @@ code.addr-full {
 .chart-box, .chart-skeleton { height: 260px; width: 100%; overflow: hidden; min-width: 0; }
 .chart-note { margin-top: 8px; }
 
+/* lightweight-charts injects its required attribution link at a FIXED `left: 10px;
+   bottom: 10px` (its own stylesheet, selector `a#tv-attr-logo`) -- on a rising bonding
+   curve that corner is exactly where the earliest, lowest-priced candles sit, so the logo
+   sits on top of real data rather than beside it. Moved to the top-left instead, which
+   for a chart that trends upward over time is the corner most likely to be empty space
+   above the early candles. Never remove it outright: it is a required attribution on the
+   library's free tier, not decoration -- this only repositions it.
+   Specificity note: `.chart-box #tv-attr-logo` is (1 id, 1 class) against the library's
+   own `a#tv-attr-logo` at (1 id, 0 class, 1 type) -- the class here outweighs their type
+   selector at equal id count, so this wins the cascade without `!important`. */
+.chart-box #tv-attr-logo {
+  top: 6px; left: 6px; bottom: auto; right: auto;
+}
+
 /* Token description from metadata. Plain text, never HTML — creator-written and on chain. */
 .identity-desc {
   margin: 12px 0 0; font-size: 14px; line-height: 1.5; color: var(--muted);
