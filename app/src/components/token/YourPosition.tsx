@@ -11,6 +11,7 @@ import { useAccount } from "wagmi";
 import type { TokenData } from "../../hooks/useCurve";
 import { useBalances } from "../../hooks/useBalances";
 import { useWatchAsset, symbolIsWatchable } from "../../hooks/useWatchAsset";
+import { AddressText } from "../AddressText";
 import { useChain } from "../../providers/ChainProvider";
 import { safeText } from "../../lib/format";
 import { useT } from "../../i18n";
@@ -81,13 +82,20 @@ export function YourPosition({ token, data }: { token: Address; data: TokenData 
           {state === "declined" && <span className="hint">{t("position.addDeclined")}</span>}
           {/* ⚠ A FAILURE IS NOT A DECLINE. These used to render identically, which is
               how a real wallet silently never received a token nobody could explain.
-              The raw params and the provider are shown because the alternative is
-              guessing at someone else's MetaMask. */}
+              The visible line is one sentence plus the address, so the user has a way
+              to add the token by hand; the raw params and provider stay reachable for
+              diagnosis but sit behind the tap-for-details disclosure so a huge
+              provider error message cannot widen the page on a phone (it did). */}
           {state === "failed" && (
-            <details className="watch-fail">
-              <summary className="wallet-err">{t("position.addFailed")}</summary>
-              <pre className="watch-dump">{JSON.stringify(attempt, null, 2)}</pre>
-            </details>
+            <div className="watch-fail">
+              <p className="hint wallet-err">
+                {t("position.addFailed")} <AddressText address={token} />
+              </p>
+              <details>
+                <summary>{t("position.addFailedDetails")}</summary>
+                <pre className="watch-dump">{JSON.stringify(attempt, null, 2)}</pre>
+              </details>
+            </div>
           )}
           {state === "added" && <span className="hint">{t("position.added")}</span>}
           {/* ⚠ Distinct from BOTH "added" and "failed". The wallet took the request and

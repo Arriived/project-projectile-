@@ -322,7 +322,8 @@ export const en = {
     addToWalletHelp: "Adds this token to your wallet so the balance is visible there",
     addToWalletTooLong: "This symbol is too long for wallets to add in one click",
     addDeclined: "Not added — your balance is unaffected.",
-    addFailed: "The wallet refused the request — tap for details.",
+    addFailed: "The wallet refused the request. Add it manually using this address:",
+    addFailedDetails: "Tap for details",
     added: "Added.",
     addUnconfirmed:
       "Your wallet did not confirm the token was added. If no prompt appeared, add it manually using the contract address above.",

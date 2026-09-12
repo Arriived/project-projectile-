@@ -143,6 +143,44 @@ check(
   /clipboardTextFor\(address\)/.test(component)
 );
 
+console.log("\naddress — a watch-asset failure shows the address, not just a stack trace");
+
+// A19-A22. A wallet_watchAsset failure used to render the raw diagnostic object (params,
+// provider, the rejection message) as the ONLY visible content. That left the user with no
+// way to add the token by hand, and one long unbroken line inside it -- a provider error
+// message, a stringified params object -- was reported widening the whole page on a phone,
+// because the box holding it had no bounded width for `overflow-x: auto` to act inside.
+const position = readFileSync(
+  new URL("../src/components/token/YourPosition.tsx", import.meta.url),
+  "utf8"
+);
+const positionStripped = stripComments(position);
+
+check(
+  "A19 a watch-asset failure renders the token address through AddressText",
+  /state === "failed"[\s\S]{0,400}<AddressText/.test(positionStripped)
+);
+check(
+  "A20 the raw diagnostic stays behind its own <details> disclosure, never as the visible line",
+  /state === "failed"[\s\S]{0,400}<details>[\s\S]{0,200}<summary>[\s\S]{0,200}JSON\.stringify\(attempt/.test(
+    positionStripped
+  )
+);
+
+// ⚠ overflow-x: auto on `.watch-dump` alone does not stop the page widening -- it only
+// clips content once the box HAS a bounded width. `.watch-fail` sits in a column flex
+// container with `align-items: flex-end`, so without an explicit cross-size it is sized to
+// fit its own content instead. `align-self: stretch` is what gives it a real width for the
+// descendant overflow rule to have any effect against.
+check(
+  "A21 .watch-fail is stretched to a real width, not left to size to its own content",
+  /\.watch-fail\s*\{[^}]*align-self:\s*stretch/s.test(css)
+);
+check(
+  "A22 .watch-dump keeps overflow-x: auto so a long raw line scrolls inside its own box",
+  /\.watch-dump\s*\{[^}]*overflow-x:\s*auto/s.test(css)
+);
+
 console.log(failures === 0 ? `\n  all address checks passed\n` : `\n  ${failures} FAILED\n`);
 // ⚠ process.exitCode, NOT process.exit(). process.exit() tears the loop down while the
 // console.log lines above may still be flushing, and on Windows that races libuv into
