@@ -6784,7 +6784,7 @@ reason until it was switched to `send("eth_blockNumber", [])`.
 Restored: **30/30**. Full indexer suite: liveness **14/14**, health passed, reserves
 **30/30**.
 
-### `295118c` is what runs on Fly
+### `295118c` was release v5 — superseded by v6 below, with no behaviour change
 
 Deployed **2026-09-11 23:55:20 UTC**, release **v5**, machine `895eddb6dee448` (the same one,
 `strategy = "immediate"`), image `deployment-01M29EAP0Z73S289TJQQJK8WDH`, digest
@@ -6817,14 +6817,47 @@ behaviour against a real 502 on localhost, and that the running code carries it.
 occurrence should log `transient error, retrying in 1000ms (attempt 1/5)` instead of
 `Poll failed`.
 
-⚠ **THE MACHINE IS AT `295118c`, AND HEAD HAS MOVED — BY ONE FILE, WHICH THE PROCESS NEVER
-EXECUTES.** The `TX` rename above landed after the deploy, and `scripts/` is copied into the
-image, so `scripts/verify-trade-reserves.js` on the machine is the pre-rename version. **The
-deployed BEHAVIOUR is HEAD's behaviour:** the container runs `CMD ["node", "src/index.js"]`,
-`src/` requires nothing from `scripts/` (checked, zero matches), and `src/index.js` is
-unchanged since `295118c`. The next indexer deploy resyncs the file set. **Do not read the
-"28/28 identical" above as still true against HEAD** — it was true, and is true against
-`295118c`, which is what the machine runs.
+### ✅ REDEPLOYED FROM HEAD — `f1f2a93`, release **v6**, for `scripts/` parity only
+
+⚠ **NO BEHAVIOUR CHANGE. This deploy carried ZERO runtime difference, and that is the
+point of recording it.** The `TX` rename landed after v5, and `scripts/` is copied into the
+image, so the machine's copy of `verify-trade-reserves.js` was the pre-rename version while
+HEAD's was not. Nothing was broken by that — the container runs
+`CMD ["node", "src/index.js"]` and `src/` requires nothing from `scripts/` — but a machine
+that does not match HEAD makes the whole content-matching method in this section useless the
+next time someone needs it. **The redeploy exists to keep "the machine equals HEAD"
+checkable, not to change anything.**
+
+**The no-change claim, established three independent ways rather than asserted:**
+
+1. `git diff --stat 295118c f1f2a93 -- indexer/` lists **exactly one file**,
+   `scripts/verify-trade-reserves.js`; `-- indexer/src/` is **empty**.
+2. `src/index.js` is the **identical blob** at both commits —
+   `06805c3a2ab7267c7255d6393934010bffec533a`.
+3. ⚠ **Docker agreed, independently of git.** The build log shows `COPY src/` **CACHED**
+   and only `COPY scripts/` rebuilt. A layer cache hit is the builder confirming the source
+   bytes are unchanged, arrived at from the content rather than from a diff.
+
+Deployed **2026-09-12 00:05:06 UTC**, release **v6**, machine `895eddb6dee448` (the same
+one), image `deployment-01M29EW67D6XCGDC0XXV0ZAMDQ`, digest `sha256:6397cf7d…8844`, 73 MB.
+
+Same three-step content proof as v5:
+
+1. Built from a **detached worktree at `f1f2a93`**, `core.autocrlf=false`, `git status`
+   empty, and **all 28 files the Dockerfile copies hashed equal to their commit blobs**.
+   The CR control read **0** on the worktree's `verify-trade-reserves.js` and **27** on the
+   repo-root `package.json`, so the counter discriminates (§19.6).
+2. On the machine afterwards: **28/28 identical to `f1f2a93`**, and a `find` matched the
+   commit's file set exactly — none missing, none extra.
+3. Read off the machine: **29 `TX` row lines**, **0** occurrences of the old colliding
+   `"T10 HTTP 502` label, and `/app/src/index.js:144` / `:197` still carrying
+   `TRANSPORT_ERROR_CODES` and the `transportFailure` call.
+
+**Healthy after it:** live mode at 00:05:41, and `/health` returned `healthy: true` with the
+checkpoint **0 blocks** behind the head, HTTP 200. Before the deploy it was 6 blocks behind.
+
+**So the machine equals HEAD again**, and the "28/28 identical" claims in this section are
+now true against both `f1f2a93` and the running release.
 
 ⚠ **The `grace_period` warning was NOT seen in the captured deploy output**, which was the
 last 45 lines only — so this is "not observed", not "did not fire". §23.6 records it firing
