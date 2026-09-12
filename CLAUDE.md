@@ -2176,8 +2176,15 @@ proof.** Anyone who reaches for `usdc_amount / token_amount` should be able to s
 table, that it was tried and what it produced.
 
 ⚠ **CORRECTED 11 September 2026 — WHAT "FROM RESERVES" MEANS NOW.** This section and
-migrations 004 and 006 all describe `trades.virtual_*_reserves` as the curve's POST-TRADE
-state. **That was not reliably true until 11 September 2026.** The indexer read `curves()`
+migrations 004 and 006 all described `trades.virtual_*_reserves` as the curve's POST-TRADE
+state. **That was not reliably true until 11 September 2026.**
+
+✅ **All three carry the correction now — verified 12 September 2026, not assumed.**
+`004_trade_reserves_and_ohlc.sql:50-64` and `006_candle_open_from_previous.sql:45-55` each
+carry the same "CORRECTED 11 September 2026" block, the block-level reading, and the
+same-block limit. **So do not go looking for un-caveated wording in the migration files;
+there is none.** The past tense above is the fix to that sentence — it read as though they
+still said the wrong thing. The indexer read `curves()`
 with no block pin, so it got the curve as it stood when the indexer reached the log: after
 any later trade in the same 5-second poll, or hours later during a catch-up. Measured against
 the chain, 26 of 27 stored rows were right. One GP4265 buy (block 60267961) held the state
@@ -6743,18 +6750,25 @@ checkpoint against the chain **head**, not against a clock, and kills at 1,000 b
 
 ### The checks: `verify:reserves` 9 → 30
 
-T10–T15 retry, T16–T20 fail fast, T21* cover sockets, T22* are the controls that stop
-"retry everything" passing.
+TX1–TX6 retry, TX7–TX11 fail fast, TX12–TX15 cover sockets, TX16–TX19 are the controls
+that stop "retry everything" passing.
 
-⚠ **T23 IS THE ONE THAT MATTERS, AND IT EXISTS BECAUSE EVERY OTHER ROW IS CIRCULAR.** They
+⚠ **THE TRANSPORT ROWS ARE `TX`, NOT `T`, AND THE RENAME FIXED A REAL COLLISION.** They
+were written as `T10…` and the LIVE section already had a `T9` and a `T10` — two different
+checks under one name. That is not cosmetic: **a red-proof's expected-failure list becomes
+ambiguous, so a mutation can be read as killed by the wrong row.** Caught by listing every
+label and counting duplicates, which is now asserted by the rename script rather than by
+reading.
+
+⚠ **TX20 IS THE ONE THAT MATTERS, AND IT EXISTS BECAUSE EVERY OTHER ROW IS CIRCULAR.** They
 feed `retryReason` a literal object written by the same session that wrote the classifier —
-§15.6's trap exactly — and **the error SHAPE is the half that was wrong before**. So T23
+§15.6's trap exactly — and **the error SHAPE is the half that was wrong before**. So TX20
 makes a real request, through the real provider, to a server that really answers **502 twice
-and then succeeds**: 3 requests, 2 retries, right answer. **T23b is its control** — a server
-that 502s forever must still throw, or T23 would also pass for a `withRetry` that swallowed
+and then succeeds**: 3 requests, 2 retries, right answer. **TX21 is its control** — a server
+that 502s forever must still throw, or TX20 would also pass for a `withRetry` that swallowed
 errors.
 
-⚠ **`getBlockNumber()` cannot be used for T23 and that is worth knowing.** It sits behind the
+⚠ **`getBlockNumber()` cannot be used for TX20 and that is worth knowing.** It sits behind the
 provider's own perform-cache, so a retry is served from memory and never reaches the wire —
 **measured: the server saw 1 request across 4 retries**, and the check passed for the wrong
 reason until it was switched to `send("eth_blockNumber", [])`.
@@ -6763,9 +6777,9 @@ reason until it was switched to `send("eth_blockNumber", [])`.
 
 | mutation | result |
 |---|---|
-| delete the `transportFailure()` call from `retryReason` | **RED 20/30** — T10–T15, T21*, and T23 reporting `requests=1`: the production behaviour reproduced |
-| retry every 4xx | **RED 25/30** — T16–T20 |
-| return `"transport"` unconditionally | **RED 20/30** — T22, T22b, T22c, and T8 |
+| delete the `transportFailure()` call from `retryReason` | **RED 20/30** — TX1–TX6, TX12–TX14, and TX20 reporting `requests=1`: the production behaviour reproduced |
+| retry every 4xx | **RED 25/30** — TX7–TX11 |
+| return `"transport"` unconditionally | **RED 20/30** — TX16, TX17, TX18, and T8 |
 
 Restored: **30/30**. Full indexer suite: liveness **14/14**, health passed, reserves
 **30/30**.
@@ -6802,6 +6816,15 @@ has not fired since `52b5ec3`**. What is proved is the classification, the end-t
 behaviour against a real 502 on localhost, and that the running code carries it. The next
 occurrence should log `transient error, retrying in 1000ms (attempt 1/5)` instead of
 `Poll failed`.
+
+⚠ **THE MACHINE IS AT `295118c`, AND HEAD HAS MOVED — BY ONE FILE, WHICH THE PROCESS NEVER
+EXECUTES.** The `TX` rename above landed after the deploy, and `scripts/` is copied into the
+image, so `scripts/verify-trade-reserves.js` on the machine is the pre-rename version. **The
+deployed BEHAVIOUR is HEAD's behaviour:** the container runs `CMD ["node", "src/index.js"]`,
+`src/` requires nothing from `scripts/` (checked, zero matches), and `src/index.js` is
+unchanged since `295118c`. The next indexer deploy resyncs the file set. **Do not read the
+"28/28 identical" above as still true against HEAD** — it was true, and is true against
+`295118c`, which is what the machine runs.
 
 ⚠ **The `grace_period` warning was NOT seen in the captured deploy output**, which was the
 last 45 lines only — so this is "not observed", not "did not fire". §23.6 records it firing
