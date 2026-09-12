@@ -87,6 +87,21 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
   const symbol = safeText(data.symbol, 16) || "tokens";
   const gate = data.curve ? tradeGate(data.curve.state) : tradeGate(99);
 
+  // The side-aware fee rate, read per-token from curves() (trap 18) -- never a global
+  // constant, because fees are snapshotted at creation and the owner-settable defaults
+  // can move for every launch after. Moved here from the trust panel, which showed one
+  // fee regardless of which side the viewer was about to trade.
+  const feeBps = data.curve
+    ? side === "buy"
+      ? data.curve.buyFeeBps
+      : data.curve.sellFeeBps
+    : undefined;
+  const creatorFeeBps = data.curve
+    ? side === "buy"
+      ? data.curve.creatorBuyFeeBps
+      : data.curve.creatorSellFeeBps
+    : undefined;
+
   // Parse in the right decimals for the side. Trap 4: USDC is 6, launch tokens are 18.
   const amount = useMemo(() => {
     if (!input.trim()) return 0n;
@@ -545,6 +560,28 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
           />
           {quote?.clamped && (
             <span className="hint"> — {t("trade.partiallyFilled")}</span>
+          )}
+        </dd>
+
+        {/* Moved from the trust panel, which showed one constant rate regardless of
+            side. Labelled with the snipe tax while it applies -- buy side only, same
+            condition as the banner above -- because in the opening seconds the tax is
+            most of what a buyer pays and folding it silently into "Fee" understates it. */}
+        <dt>
+          {side === "buy" && data.snipeTaxBps !== undefined && data.snipeTaxBps > 0
+            ? t("trade.feeWithSnipeTax")
+            : t("trade.fee")}
+        </dt>
+        <dd>
+          {feeBps === undefined ? (
+            "…"
+          ) : (
+            <>
+              {fmt.bps(feeBps)}{" "}
+              <span className="hint">
+                {t("trust.ofItToCreator", { pct: fmt.bps(creatorFeeBps!) })}
+              </span>
+            </>
           )}
         </dd>
 

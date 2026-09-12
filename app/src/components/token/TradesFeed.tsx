@@ -77,34 +77,43 @@ export function TradesFeed({ token, data }: { token: Address; data: TokenData })
       {trades && trades.length === 0 && <p className="hint">{t("trades.none")}</p>}
 
       {trades && trades.length > 0 && (
-        <table className="trades">
-          <tbody>
-            {trades.map((row) => (
-              <tr key={row.tx_hash}>
-                <td className={row.is_buy ? "buy" : "sell"}>{row.is_buy ? t("trade.buy") : t("trade.sell")}</td>
-                <td className="mono small">{shortAddress(row.trader_address)}</td>
-                <td>{fmt.usdcCompact(approxBigIntFromIndexer(row.usdc_amount))} USDC</td>
-                <td className="hint">
-                  {/* approx*: token_amount arrives from PostgREST as a JSON number and
-                      has ALREADY lost its low digits (trap 21). Fine for a feed, never
-                      for anything acted on. */}
-                  ~{fmt.tokenCompact(approxBigIntFromIndexer(row.token_amount))} {symbol}
-                </td>
-                <td className="hint">{fmt.age(row.created_at)}</td>
-                <td>
-                  <a
-                    href={`${EXPLORER_URL}/tx/${row.tx_hash}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="hint"
-                  >
-                    ↗
-                  </a>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        // ⚠ THE WRAPPER IS THE FIX, NOT THE `overflow-x` PROPERTY ALONE. `.card` here
+        // sits in `.token-page`'s default (stretched) flex column, so the wrapper gets a
+        // real bounded width from its ancestor -- unlike `.watch-fail`, which needed
+        // `align-self: stretch` because ITS ancestor used `align-items: flex-end`. Six
+        // columns of mono figures plus a trader address had no containment at all before
+        // this: not even an ineffective `overflow-x: auto`, so a wide row forced the
+        // whole page wider on a phone instead of scrolling in place.
+        <div className="trades-wrap">
+          <table className="trades">
+            <tbody>
+              {trades.map((row) => (
+                <tr key={row.tx_hash}>
+                  <td className={row.is_buy ? "buy" : "sell"}>{row.is_buy ? t("trade.buy") : t("trade.sell")}</td>
+                  <td className="mono small">{shortAddress(row.trader_address)}</td>
+                  <td>{fmt.usdcCompact(approxBigIntFromIndexer(row.usdc_amount))} USDC</td>
+                  <td className="hint">
+                    {/* approx*: token_amount arrives from PostgREST as a JSON number and
+                        has ALREADY lost its low digits (trap 21). Fine for a feed, never
+                        for anything acted on. */}
+                    ~{fmt.tokenCompact(approxBigIntFromIndexer(row.token_amount))} {symbol}
+                  </td>
+                  <td className="hint">{fmt.age(row.created_at)}</td>
+                  <td>
+                    <a
+                      href={`${EXPLORER_URL}/tx/${row.tx_hash}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="hint"
+                    >
+                      ↗
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </section>
   );

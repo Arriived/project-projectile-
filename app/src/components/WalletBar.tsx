@@ -20,6 +20,8 @@ import { useEffect, useState } from "react";
 import { useAccount, useConnect, useConnectors, useDisconnect } from "wagmi";
 import type { Connector } from "wagmi";
 import { arc } from "../chain";
+import { EXPLORER_URL } from "../config";
+import { AddressText } from "./AddressText";
 import { useChain } from "../providers/ChainProvider";
 import {
   selectWallets,
@@ -31,10 +33,6 @@ import {
 } from "../lib/wallets";
 import { classifySwitchFailure, chainIdHex } from "../lib/switchFailure";
 import { useT } from "../i18n";
-
-function short(addr: string) {
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
-}
 
 /**
  * The wallet list, in a dialog rather than inline in the header.
@@ -304,9 +302,13 @@ export function WalletBar() {
             ? t("chain.pillWrong", { chainId: guard.chainId ?? "?" })
             : t("chain.pillUnconfirmed")}
       </span>
-      <span className="addr" title={address}>
-        {address ? short(address) : ""}
-      </span>
+      {/* The connected wallet's own address gets the same copy-and-explorer-link
+          treatment every other address on the app has -- it used to be the one plain,
+          unlinked figure in the header, truncated with no way off a phone but a
+          hand-selection across the pill. */}
+      {address && (
+        <AddressText address={address} href={`${EXPLORER_URL}/address/${address}`} />
+      )}
       <button className="btn btn-ghost" onClick={() => disconnect()}>
         {t("common.disconnect")}
       </button>

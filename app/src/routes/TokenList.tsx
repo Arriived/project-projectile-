@@ -185,24 +185,22 @@ export function TokenList() {
             ))}
           </div>
 
+          {/* 24h and 7d are HIDDEN, not rendered greyed out. A permanently-disabled
+              button earns no place on a phone-width control -- the view only aggregates
+              volume_1h_usdc, so there is nothing to switch to yet. If the indexer ever
+              adds real 24h/7d windows, drop this filter: WINDOW_AVAILABILITY already
+              controls both which buttons render here and which the query can serve, so
+              flipping a window to `true` there is the only change this needs. */}
           <div className="seg">
-            {WINDOWS.map((w) => {
-              const ok = WINDOW_AVAILABILITY[w];
-              return (
-                <button
-                  key={w}
-                  className={`seg-btn ${win === w ? "on" : ""}`}
-                  // 24h and 7d are DISABLED, not silently served with 1h data. The view
-                  // only aggregates volume_1h_usdc; showing that under a 24h label would
-                  // be the interface asserting what the data cannot support.
-                  disabled={!ok}
-                  title={ok ? undefined : t("list.windowUnavailable", { window: t(WINDOW_KEY[w]) })}
-                  onClick={() => ok && setWin(w)}
-                >
-                  {t(WINDOW_KEY[w])}
-                </button>
-              );
-            })}
+            {WINDOWS.filter((w) => WINDOW_AVAILABILITY[w]).map((w) => (
+              <button
+                key={w}
+                className={`seg-btn ${win === w ? "on" : ""}`}
+                onClick={() => setWin(w)}
+              >
+                {t(WINDOW_KEY[w])}
+              </button>
+            ))}
           </div>
         </div>
 

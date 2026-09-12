@@ -54,22 +54,9 @@ export function TrustPanel({ data }: { data: TokenData }) {
       <h2 className="card-title">{t("trust.title")}</h2>
 
       <dl className="kv">
-        <dt>{t("trust.buyFee")}</dt>
-        <dd>
-          {fmt.bps(curve.buyFeeBps)}{" "}
-          <span className="hint">
-            {t("trust.ofItToCreator", { pct: fmt.bps(curve.creatorBuyFeeBps) })}
-          </span>
-        </dd>
-
-        <dt>{t("trust.sellFee")}</dt>
-        <dd>
-          {fmt.bps(curve.sellFeeBps)}{" "}
-          <span className="hint">
-            {t("trust.ofItToCreator", { pct: fmt.bps(curve.creatorSellFeeBps) })}
-          </span>
-        </dd>
-
+        {/* Buy fee / sell fee moved to the trade panel, under "Estimated receive" -- a
+            platform constant identical for every token belongs beside the trade it
+            actually affects, not on a panel a viewer reads once. See TradePanel.tsx. */}
         <dt>{t("trust.creatorBought")}</dt>
         <dd>
           {creatorBps === null ? (

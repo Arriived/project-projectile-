@@ -354,6 +354,10 @@ export const en = {
     amountToken: "Amount in {symbol}",
     max: "Max",
     estimatedReceive: "Estimated receive",
+    fee: "Fee",
+    // While the snipe window is open the tax is most of what a buyer pays -- folding it
+    // silently into "Fee" would understate it. Buy side only; see TradePanel.tsx.
+    feeWithSnipeTax: "Fee + snipe tax",
     // A2. The probe method yields one ratio and the formula picks a side; 15.65% and
     // 18.55% are reciprocals of the same $500 trade. We report PRICE MOVE, so the label
     // has to say that -- "Price impact" alone is not self-describing and either figure

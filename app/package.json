@@ -21,6 +21,7 @@
     "verify:create": "node --experimental-strip-types scripts/verify-create.mts",
     "verify:upload": "node --experimental-strip-types scripts/verify-upload.mts",
     "verify:address": "node --experimental-strip-types scripts/verify-address.mts",
+    "verify:layout": "node --experimental-strip-types scripts/verify-layout.mts",
     "verify:slippage": "node --experimental-strip-types scripts/verify-slippage.mts",
     "verify:metadata": "node --experimental-strip-types scripts/verify-metadata.mts",
     "verify:launchbuy": "node --experimental-strip-types scripts/verify-launchbuy.mts",

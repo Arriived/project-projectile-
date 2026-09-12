@@ -238,12 +238,10 @@ a:hover { opacity: 0.7; }
 .position-sym { color: var(--muted); font-size: 14px; }
 .position-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
 
-.stat-row { display: flex; gap: 34px; flex-wrap: wrap; }
 .stat-label {
   font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--muted);
 }
-.stat-value { font-family: var(--mono); font-size: 19px; font-weight: 500; margin-top: 3px; }
 
 .progress-wrap { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
 .progress-track { flex: 1; height: 6px; background: var(--soft); border-radius: 999px; overflow: hidden; }
@@ -330,7 +328,9 @@ a:hover { opacity: 0.7; }
   font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
   text-transform: uppercase; color: var(--muted);
 }
-.quote-lines dd { margin: 0; font-family: var(--mono); font-size: 14px; }
+/* Matches .kv dd: a long unbroken mono figure wraps rather than forcing its 1fr grid
+   track wider than the space available. */
+.quote-lines dd { margin: 0; font-family: var(--mono); font-size: 14px; overflow-wrap: anywhere; }
 .quote-lines dd .hint { font-family: var(--sans); }
 .quote-lines dt .hint {
   font-family: var(--sans); text-transform: none; letter-spacing: 0;
@@ -349,6 +349,11 @@ a:hover { opacity: 0.7; }
 }
 .kv dd { margin: 0; overflow-wrap: anywhere; font-size: 14px; }
 
+/* Bounded so `overflow-x` has something to bound: without this the table's own
+   `width: 100%` refers to a containing block that was never constrained, and a wide
+   row (address + two mono figures + age + a link) forced the whole page wider on a
+   phone instead of scrolling inside its own box. */
+.trades-wrap { overflow-x: auto; max-width: 100%; }
 .trades { width: 100%; border-collapse: collapse; font-size: 13px; font-family: var(--mono); }
 .trades td { padding: 7px 8px 7px 0; border-bottom: 1px solid var(--line); }
 .trades tr:last-child td { border-bottom: none; }
@@ -662,10 +667,7 @@ a:hover { opacity: 0.7; }
   min-height: 44px;
 }
 
-/* ── Create ───────────────────────────────────────────────────────────────────
-   Single column, generous line length. A launch is a deliberate act, not a
-   quick one, so the form is not compressed into a row. */
-.create { max-width: 560px; }
+/* ── Create ─────────────────────────────────────────────────────────────────── */
 .create-h { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 22px; }
 
 .field { display: block; margin-bottom: 18px; }
@@ -993,8 +995,13 @@ code.addr-full {
   gap: 14px 20px;
 }
 .stat-strip .stat { min-width: 0; }
+/* Every property here USED to be split across a base `.stat-value` (never used outside
+   `.stat-strip`, so effectively dead) and this override, which held only `font-size` and
+   `overflow-wrap`. Deleting the base rule outright would have silently dropped
+   font-family, font-weight and margin-top from every stat figure on the token page --
+   this is that rule, folded in whole rather than partially, so nothing was lost. */
 .stat-strip .stat-value {
-  font-size: 17px;
+  font-family: var(--mono); font-size: 17px; font-weight: 500; margin-top: 3px;
   overflow-wrap: anywhere;   /* a long USDC figure wraps rather than widening the grid */
 }
 .stat-strip .stat-sub { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 2px; }
