@@ -982,6 +982,33 @@ uncommitted work — it ate an unstaged test fix the first time it ran. Commit, 
 `guard-coverage.py` still auto-restores a dirty `contracts/LFX1.sol` at start: same hazard,
 not yet changed.
 
+⚠ **A FOURTH WAY TO LOSE UNCOMMITTED WORK: opening the target in write mode before the
+match has succeeded.** 12 September 2026, `app/src/components/token/YourPosition.tsx` — a
+one-off ad-hoc script red-proving a frontend check (neither `redproof.py` nor
+`guard-coverage.py` reaches `app/`; there is no Foundry/Hardhat suite for either to drive
+there) hit an aborted match — its `old_str` occurred zero times — and its mutate-and-restore
+helper returned `None` for "nothing was mutated". The caller wrote that `None` back to the
+file unconditionally. Opening a file in `"w"` mode **truncates it to zero bytes the instant
+the call is made**, before a single byte is written — so `write(path, None)` truncated the
+file first and only THEN raised `TypeError` on `f.write(None)`. The uncommitted edits sitting
+in that file (this session's own, not yet committed) were gone from disk in the same
+instant. They were recovered only because the exact edits were still available to replay
+against `git show HEAD:<path>` and diff-verified byte-for-byte afterward — a file this had
+happened to that was not freshly reconstructible would simply have been gone.
+
+**The lease does not prevent this class.** It protects against a killed or abandoned run
+leaving a mutation on disk; it says nothing about a script that opens its target for writing
+on every code path, including the one where nothing was supposed to change. This was a bug
+in the one-off script, not a gap in `mutation_lease.py`.
+
+**The rule, stated plainly: take a byte-exact backup (read the full file into memory, or at
+minimum its sha256) and confirm the match will succeed BEFORE the target is ever opened in
+write mode.** Never open a mutation target for writing ahead of a confirmed, exactly-one
+match on the string being replaced — a truncating open is destructive the moment it runs,
+regardless of what the surrounding code does afterward. Guard the write path the same way
+`redproof.py` guards its own: abort on anything other than exactly one match, and abort
+*before* touching the file, not inside the same function that already opened it.
+
 ### The pre-commit hook is a LEASE, not a marker grep
 
 `.githooks/pre-commit` refuses **any** commit while `.mutation-lease` exists. Both tools
