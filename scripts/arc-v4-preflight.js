@@ -1,7 +1,9 @@
-// Read-only: does Arc Testnet have a Uniswap v4 deployment at all?
-// Nothing here sends a transaction.
+// Read-only: does the selected Arc network expose the infrastructure the adapter calls?
+// Nothing here sends a transaction. The Hardhat --network selection supplies the expected
+// chain id; the live provider must agree before any address result is trusted.
 //
 //   npx hardhat run scripts/arc-v4-preflight.js --network arcTestnet
+//   npx hardhat run scripts/arc-v4-preflight.js --network arcMainnet
 //
 // WHY THIS EXISTS. CLAUDE.md §15.2 records four selectors verified against DEPLOYED
 // bytecode -- on BASE. Base is not Arc. The adapter hand-declares its interfaces because
@@ -17,35 +19,47 @@
 // questions get asked.
 //
 // ⚠ AND THE PROBE ITSELF IS VALIDATED FIRST. A probe that returns empty for everything
-// proves nothing (CLAUDE.md §10, §12.8). Three known-good Arc Testnet addresses are read
-// before any candidate; if they do not come back with code, the run aborts rather than
-// reporting a chain-wide absence that is really a broken RPC.
+// proves nothing (CLAUDE.md §10, §12.8). Each supported chain has its own three measured
+// known-good addresses. If any is empty, the run aborts rather than reporting a chain-wide
+// absence that is really a broken RPC or a mismatched endpoint.
 const hre = require("hardhat");
 const { ethers } = hre;
 
-// Known-good on Arc Testnet, used to prove the probe works before it is trusted.
-const KNOWN_GOOD = [
-  ["USDC (ERC-20 view)", "0x3600000000000000000000000000000000000000"],
-  ["LFX1 (frozen factory)", "0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b"],
-  ["Multicall3", "0xcA11bde05977b3631167028862bE2a173976CA11"],
-];
-
-// ⚠ SOURCE MATTERS HERE. These are Uniswap's ARC MAINNET addresses, from
-// github.com/Uniswap/sdks, sdks/sdk-core/src/addresses.ts, ChainId.ARC = 5042
-// (CLAUDE.md §6). Arc Testnet is 5042002 and sdk-core carries NO entry for it, so there
-// is no published testnet address to check -- these are probed on the hypothesis that a
-// testnet deployment might mirror mainnet, which is a guess and is labelled as one.
-const ARC_MAINNET_V4 = [
-  ["v4 PoolManager     (arc mainnet addr)", "0x8366a39cc670b4001a1121b8f6a443a643e40951"],
-  ["v4 PositionManager (arc mainnet addr)", "0x6049c9a0e26405c0985f9e3685c87d0ae917f82b"],
-  ["v4 StateView       (arc mainnet addr)", "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b"],
-  ["v4 Quoter          (arc mainnet addr)", "0x8dc178efb8111bb0973dd9d722ebeff267c98f94"],
-];
-
-// Documented by Circle for Arc Testnet under "Common Ethereum contracts"
-// (docs.arc.io/arc/references/contract-addresses), same canonical address as every
-// other chain. The one v4 dependency with a first-party Arc source.
+const USDC = ["USDC (ERC-20 view)", "0x3600000000000000000000000000000000000000"];
+const MULTICALL3 = ["Multicall3", "0xcA11bde05977b3631167028862bE2a173976CA11"];
 const PERMIT2 = ["Permit2", "0x000000000022D473030F116dDEE9F6B43aC78BA3"];
+
+// The Hardhat --network selection supplies config.chainId. These profiles select the
+// corresponding live self-validation and candidate sets; they do not override the network.
+const CHAIN_PROFILES = {
+  5042002: {
+    name: "Arc Testnet",
+    knownGood: [
+      USDC,
+      ["LFX1 (frozen factory)", "0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b"],
+      MULTICALL3,
+    ],
+    candidateLabel: "Arc MAINNET addresses, probed on testnet as a hypothesis",
+    v4: [
+      ["v4 PoolManager     (arc mainnet hypothesis)", "0x8366a39cc670b4001a1121b8f6a443a643e40951"],
+      ["v4 PositionManager (arc mainnet hypothesis)", "0x6049c9a0e26405c0985f9e3685c87d0ae917f82b"],
+      ["v4 StateView       (arc mainnet hypothesis)", "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b"],
+      ["v4 Quoter          (arc mainnet hypothesis)", "0x8dc178efb8111bb0973dd9d722ebeff267c98f94"],
+    ],
+  },
+  5042: {
+    name: "Arc Mainnet",
+    // All three returned code in the §23.8 read-only mainnet battery.
+    knownGood: [USDC, MULTICALL3, PERMIT2],
+    candidateLabel: "measured Arc MAINNET addresses",
+    v4: [
+      ["v4 PoolManager     (arc mainnet measured)", "0x8366ef8116b6e6fa66119069092c9b4ea3f5e2b2"],
+      ["v4 PositionManager (arc mainnet measured)", "0x4b2c77d209d3405f41a037ec6c77f7f5b8e2ca80"],
+      ["v4 StateView       (arc mainnet measured)", "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b"],
+      ["v4 Quoter          (arc mainnet measured)", "0x8dc178efb8111bb0973dd9d722ebeff267c98f94"],
+    ],
+  },
+};
 
 // keccak256 of Permit2's DEPLOYED code on Base mainnet at block 50,900,000 -- the chain
 // CLAUDE.md 15.2's selectors were verified against. Recorded so the comparison below is
@@ -95,33 +109,44 @@ async function report(label, addr) {
 }
 
 async function main() {
+  const configuredChainId = hre.network.config && hre.network.config.chainId;
+  if (!Number.isSafeInteger(configuredChainId)) {
+    throw new Error("selected Hardhat network has no integer chainId -- refusing to report");
+  }
+  const profile = CHAIN_PROFILES[configuredChainId];
+  if (!profile) {
+    throw new Error(`unsupported preflight chain ${configuredChainId} -- refusing to report`);
+  }
+
   const net = await ethers.provider.getNetwork();
   const block = await ethers.provider.getBlockNumber();
   console.log(`network ${hre.network.name}  chainId ${net.chainId}  block ${block}\n`);
 
-  if (net.chainId !== 5042002n) {
-    throw new Error(`expected Arc Testnet 5042002, got ${net.chainId} -- refusing to report`);
+  if (net.chainId !== BigInt(configuredChainId)) {
+    throw new Error(
+      `expected configured chain ${configuredChainId}, got ${net.chainId} -- refusing to report`
+    );
   }
 
-  console.log("KNOWN-GOOD (validating the probe before trusting any absence):");
+  console.log(`KNOWN-GOOD ${profile.name} (validating the probe before trusting any absence):`);
   let goodWithCode = 0;
-  for (const [label, addr] of KNOWN_GOOD) {
+  for (const [label, addr] of profile.knownGood) {
     const { n } = await report(label, addr);
     if (n > 0) goodWithCode++;
   }
-  if (goodWithCode < KNOWN_GOOD.length) {
+  if (goodWithCode < profile.knownGood.length) {
     throw new Error(
-      `probe validation FAILED: ${goodWithCode}/${KNOWN_GOOD.length} known-good addresses ` +
+      `probe validation FAILED: ${goodWithCode}/${profile.knownGood.length} known-good addresses ` +
       `returned code. A NO CODE result below would be meaningless. Aborting.`
     );
   }
-  console.log(`  probe validated: ${goodWithCode}/${KNOWN_GOOD.length} known-good returned code\n`);
+  console.log(`  probe validated: ${goodWithCode}/${profile.knownGood.length} known-good returned code\n`);
 
-  console.log("CANDIDATE v4 (Arc MAINNET addresses, probed on testnet as a hypothesis):");
+  console.log(`CANDIDATE v4 (${profile.candidateLabel}):`);
   const v4 = [];
-  for (const [label, addr] of ARC_MAINNET_V4) v4.push([label, addr, await report(label, addr)]);
+  for (const [label, addr] of profile.v4) v4.push([label, addr, await report(label, addr)]);
 
-  console.log("\nPERMIT2 (first-party Arc Testnet source: Circle's contract-addresses page):");
+  console.log(`\nPERMIT2 (${profile.name}):`);
   const permit2 = await report(PERMIT2[0], PERMIT2[1]);
 
   console.log("\nCONTROLS (Base v4 -- these MUST be absent, or we are on the wrong chain):");
@@ -186,7 +211,7 @@ async function main() {
   // CLAUDE.md §15.1 records graduation gas at 508,982 and says plainly that the figure
   // means NOTHING until it sits beside Arc's block gas limit, which had never been read.
   // It costs one call, so it is read here rather than left outstanding.
-  console.log("\nARC TESTNET BLOCK GAS LIMIT (§15.1 records this as never measured):");
+  console.log(`\n${profile.name.toUpperCase()} BLOCK GAS LIMIT:`);
   let maxLimit = 0n;
   for (const tag of [block, block - 1, block - 2]) {
     const b = await ethers.provider.getBlock(tag);
@@ -204,7 +229,7 @@ async function main() {
   // byte-identical to Base's, then §15.2's three Permit2 selectors are verified on ARC
   // and not merely on Base -- which is half of that section's standing pre-flight, and
   // it can be closed permanently rather than re-argued.
-  if (size(permit2.code) > 0) {
+  if (configuredChainId === 5042002 && size(permit2.code) > 0) {
     const hash = ethers.keccak256(permit2.code);
     console.log("\nPERMIT2 CODE IDENTITY (§15.2's pre-flight, the half that can be closed):");
     console.log(`  arc testnet keccak256(code) ${hash}`);
@@ -235,13 +260,13 @@ async function main() {
   const anyV4 = v4.some(([, , r]) => r.n > 0);
   console.log("\n" + "=".repeat(72));
   console.log(anyV4
-    ? "VERDICT: some v4 code found on Arc Testnet -- read the table above."
-    : "VERDICT: NO UNISWAP v4 ON ARC TESTNET at any address checked.");
+    ? `VERDICT: required v4 code found on ${profile.name} -- read the table above.`
+    : `VERDICT: NO UNISWAP v4 ON ${profile.name.toUpperCase()} at any address checked.`);
   console.log(`  Permit2: ${size(permit2.code) > 0 ? "PRESENT" : "ABSENT"}`);
   console.log("=".repeat(72));
 }
 
-module.exports = { SELECTORS, main };
+module.exports = { CHAIN_PROFILES, SELECTORS, main };
 if (require.main === module) {
   main().catch((e) => { console.error(String(e.message || e)); process.exit(1); });
 }

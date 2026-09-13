@@ -74,8 +74,15 @@ function requiredFromAdapter() {
   return result;
 }
 
-function loadPreflight(expected, omit = {}) {
-  const addresses = {
+function loadPreflight(expected, options = {}) {
+  const configuredChainId = options.configuredChainId ?? 5042002;
+  const providerChainId = options.providerChainId ?? configuredChainId;
+  const omit = options.omit || {};
+  const candidateAddresses = configuredChainId === 5042 ? {
+    permit2: "0x000000000022d473030f116ddee9f6b43ac78ba3",
+    poolm: "0x8366ef8116b6e6fa66119069092c9b4ea3f5e2b2",
+    posm: "0x4b2c77d209d3405f41a037ec6c77f7f5b8e2ca80",
+  } : {
     permit2: "0x000000000022d473030f116ddee9f6b43ac78ba3",
     poolm: "0x8366a39cc670b4001a1121b8f6a443a643e40951",
     posm: "0x6049c9a0e26405c0985f9e3685c87d0ae917f82b",
@@ -85,7 +92,7 @@ function loadPreflight(expected, omit = {}) {
     ["0xedeed1f05d34421add0f59b7340588ab2bbac04b", "0x6000"],
     ["0xca11bde05977b3631167028862be2a173976ca11", "0x6000"],
   ]);
-  for (const [key, address] of Object.entries(addresses)) {
+  for (const [key, address] of Object.entries(candidateAddresses)) {
     const selectors = expected[key].filter(([selector]) =>
       !(omit.target === key && omit.selector === selector));
     codes.set(address, omit.target === key && omit.noCode
@@ -93,13 +100,16 @@ function loadPreflight(expected, omit = {}) {
   }
   const logs = [];
   const provider = {
-    getNetwork: async () => ({ chainId: 5042002n }),
+    getNetwork: async () => ({ chainId: BigInt(providerChainId) }),
     getBlockNumber: async () => 100,
     getCode: async (address) => codes.get(address.toLowerCase()) || "0x",
     getBlock: async (number) => ({ number, gasLimit: 30000000n, gasUsed: 0n }),
   };
   const runtime = {
-    network: { name: "offline-testnet-fixture" },
+    network: {
+      name: configuredChainId === 5042 ? "offline-mainnet-fixture" : "offline-testnet-fixture",
+      config: { chainId: configuredChainId },
+    },
     ethers: {
       ...ethers, provider,
       Contract: class { async allowance() { return [0n, 0n, 0n]; } },
@@ -131,15 +141,18 @@ describe("Arc v4 preflight", function () {
     expect(actual).to.deep.equal(expected);
   });
 
-  it("P2 main probes every required selector against its actual target", async function () {
+  it("P2 both chain profiles probe every required selector against their configured targets", async function () {
     const expected = requiredFromAdapter();
-    const fixture = loadPreflight(expected);
-    await fixture.main();
     const names = { permit2: "Permit2", poolm: "PoolManager", posm: "PositionManager" };
-    for (const [target, rows] of Object.entries(expected)) {
-      for (const [selector, signature] of rows) {
-        const row = names[target].padEnd(16) + " " + selector + " PRESENT  " + signature;
-        expect(fixture.logs.some((line) => line.includes(row)), row).to.equal(true);
+    for (const configuredChainId of [5042002, 5042]) {
+      const fixture = loadPreflight(expected, { configuredChainId });
+      await fixture.main();
+      for (const [target, rows] of Object.entries(expected)) {
+        for (const [selector, signature] of rows) {
+          const row = names[target].padEnd(16) + " " + selector + " PRESENT  " + signature;
+          expect(fixture.logs.some((line) => line.includes(row)), `${configuredChainId}: ${row}`)
+            .to.equal(true);
+        }
       }
     }
   });
@@ -149,11 +162,21 @@ describe("Arc v4 preflight", function () {
     for (const [target, rows] of Object.entries(expected)) {
       const omissions = [...rows.map(([selector]) => ({ target, selector })), { target, noCode: true }];
       for (const omit of omissions) {
-        const fixture = loadPreflight(expected, omit);
+        const fixture = loadPreflight(expected, { omit });
         let error;
         try { await fixture.main(); } catch (caught) { error = caught; }
         expect(error && error.message, JSON.stringify(omit)).to.include("required selector preflight FAILED");
       }
     }
+  });
+
+  it("P4 main aborts when the provider chain id differs from the selected network", async function () {
+    const expected = requiredFromAdapter();
+    const fixture = loadPreflight(expected, { configuredChainId: 5042, providerChainId: 5042002 });
+    let error;
+    try { await fixture.main(); } catch (caught) { error = caught; }
+    expect(error && error.message).to.equal(
+      "expected configured chain 5042, got 5042002 -- refusing to report"
+    );
   });
 });
