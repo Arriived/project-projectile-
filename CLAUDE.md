@@ -2029,24 +2029,22 @@ operational gaps are now the project's real risk rather than the code.
 
 ⚠ **Live mode POLLS `eth_getLogs`. It is not a subscription, and it must not become one.**
 
-### Arc does not support filters. Measured 31 August 2026, on BOTH hosts.
+### Filter support varies by provider; polling remains primary
 
-| method | `rpc.testnet.arc.io` | `rpc.testnet.arc.network` |
-|---|---|---|
-| `eth_newFilter` | ~~`-32603 internal error`~~ → **`-32601 method not supported`** | same |
-| `eth_newBlockFilter` | ~~`-32603`~~ → **`-32601`** | same |
+| measurement | `rpc.testnet.arc.io` | `rpc.testnet.arc.network` | Circle-contact mainnet endpoint |
+|---|---|---|---|
+| `eth_newFilter` | ~~`-32603 internal error`~~ → **`-32601 method not supported`** | same | **filter ID returned** |
+| `eth_newBlockFilter` | ~~`-32603`~~ → **`-32601`** | same | not measured in the 13 September battery |
 
-⚠ **THE ERROR CODE CHANGED, AND THE RATIONALE BELOW IS NOW STALE. Re-measured on BOTH
-hosts, 5 September 2026: both filter methods return `-32601 method not supported`, not
-`-32603 internal error`.** Circle appears to have fixed the bug this section was written
-about — `-32601` is the standard "method not found" code, and §11.11 itself says that had
-Arc returned it, ethers' downgrade-to-polling fallback would have fired and the 29-hour
-outage would not have happened.
+The two testnet hosts returned `-32601` when re-measured on 5 September 2026. The
+Circle-contact mainnet endpoint behaved differently on 13 September: `eth_newFilter`
+succeeded and returned filter IDs. The old `-32603` finding describes the historical
+testnet incident, not that mainnet endpoint.
 
-**The polling design still stands and must not change.** Its justification was never the
-error code: a dropped or silently-dead subscription reproduces the outage regardless of
-how the failure is reported, and polling from the checkpoint is self-healing. Only the
-REASONING below is out of date, not the conclusion. Measured with viem 2.56 the same day:
+**The polling design still stands and must not change.** Provider filter support varies,
+filter objects carry server-side lifetime and routing assumptions, and a dropped or
+silently-dead filter reproduces the outage. Polling `eth_getLogs` from the checkpoint is
+the provider-independent, self-healing path. Measured with viem 2.56 on 5 September:
 `createContractEventFilter` throws, viem's bare `catch {}` engages the `getLogs` fallback
 correctly, and `getContractEvents` returns our `Trade` events — so viem, unlike ethers,
 handles this properly either way.
@@ -2734,11 +2732,12 @@ helper** in a common module rather than a fourth private copy.
 9. **zh-Hans** needs a translator, not a session.
 
 **Provider decision is MADE — do not reopen it.** Goldsky Edge at launch, our own indexer,
-Turbo in October as a resilience layer. ⚠ **Edge passes filter methods through to the node**,
-so `eth_newFilter` will return `-32601` (see §11.11 — it was `-32603` until Arc fixed it,
-re-measured 5 September 2026) on mainnet exactly as on testnet and **the polling
-design stays correct**. The `getLogs` range cap on Arc mainnet is **still unanswered** —
-default 20K, heavier chains 1K; Goldsky has the question with engineering.
+Turbo in October as a resilience layer. Filter behavior must be measured per endpoint:
+the two testnet hosts returned `-32601` on 5 September, while the Circle-contact mainnet
+endpoint returned filter IDs on 13 September (§23.8). **Polling stays primary because
+provider filter support and filter-object lifetime vary.** The Circle-contact endpoint's
+measured `eth_getLogs` maximum is 10,000 blocks (`-32614` above it); Goldsky Edge still
+needs its own range and archive probes before use.
 
 ## 12.9 ⚠ What this section could NOT verify
 
@@ -2831,11 +2830,12 @@ in a different cache entry and is unreachable.
 unchanged curve the figure survives all three polls, so the mechanism discriminates rather
 than blanket-refusing.
 
-## 13.2 ⚠ `eth_newFilter` NOW RETURNS `-32601`, NOT `-32603`
+## 13.2 ⚠ `eth_newFilter` behavior varies by provider
 
-See §11.11, amended in place. Both hosts, both filter methods, measured 5 September 2026.
-Circle appears to have fixed the bug §11.11 was written about. **The polling design is
-unchanged and must stay** — its justification was never the error code.
+The two testnet hosts returned `-32601` for both filter methods on 5 September 2026. The
+Circle-contact mainnet endpoint returned filter IDs successfully on 13 September (§23.8).
+**Polling remains primary because provider support and server-side filter lifetime vary,**
+not because Arc universally rejects `eth_newFilter`.
 
 ## 13.3 ⚠ THE REOWN 403 WAS A TRUNCATED PROJECT ID, NOT THE ALLOWLIST
 
@@ -5448,13 +5448,15 @@ the **router** embeds — and `UniswapV2Library.pairFor` uses the ROUTER's hardc
 (`UniswapV2Library.sol:18-26`). ⚠ Arc's router is **21,902 bytes against canonical mainnet's
 21,943 — 41 bytes shorter**, which is precisely why the two cannot be assumed equal.
 
-**The router-side probe is the one outstanding v2 gate.** Zero gas: search the router's
-runtime bytecode for `96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f`.
-Validated in both directions — present in canonical mainnet Router02, **absent** in mainnet
-USDC (2,186 bytes) and in the mainnet V2 Factory itself (13,859 bytes), both real contracts,
-so a `false` is a real answer. Absence escalates rather than concludes: recompute
-`allPairs(0)` from whatever hash the router actually embeds and require a match.
-**Procedure in `CONTRACT_DEPLOY_RUNBOOK.md` §10.**
+✅ **The router-side init-code-hash gate is CLOSED, measured on Arc mainnet
+13 September 2026.** Router `0x1f7d7550b1b028f7571e69a784071f0205fd2efa`
+contains the canonical hash
+`96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f`.
+More strongly, `getAmountsOut(1, [pair.token0(), pair.token1()])` succeeded through the
+router's own `pairFor` path against pair `0x573c4f9c3568cfd0c34cd58c0d91ef0704713b79`
+and returned `[1, 0]`; zero is expected integer rounding for one raw input unit. The
+embedded constant and executable router-to-pair read agree, so the V2 fallback gate closes.
+**Procedure and activation controls remain in `CONTRACT_DEPLOY_RUNBOOK.md` §10.**
 
 ## 20.20 ✅ `CONTRACT_DEPLOY_RUNBOOK.md` AND `arcMainnet` NOW EXIST
 
@@ -6891,6 +6893,42 @@ last 45 lines only — so this is "not observed", not "did not fire". §23.6 rec
 on the previous deploy and `RUNBOOK.md` predicts it; nothing suggests it stopped.
 
 
+## 23.8 Arc private-mainnet RPC battery — measured 13 September 2026
+
+All probes were read-only and gas-free against the Circle-contact endpoint
+`https://rpc.arc-scan.org`; no transaction was sent. Live RPC output is the evidence for
+the measurements below. Repository citations identify why each result matters.
+
+| probe | finding |
+|---|---|
+| 1 | **VERIFIED — chain identity.** `eth_chainId = 0x13b2`; `net_version = 5042`. |
+| 2 | **VERIFIED — latest block.** Sample head `0x13b5766`; gas limit `0x1c9c380` = 30,000,000; `baseFeePerGas = 0x4a817c800` = 20 gwei. Current and parent `extraData` were the same eight-byte value, equal to the current base fee as the recorded next-block fee encoding requires. |
+| 3 | **VERIFIED — block time.** A 100-block sample averaged 0.51 seconds per block. |
+| 4 | **VERIFIED — preflight reference addresses.** Mainnet USDC `0x3600…0000` has 1,798 bytes and Multicall3 `0xcA11…CA11` has 3,808; the testnet LFX1 `0xEDeed…C04b` is empty on chain 5042. The testnet-only preflight cannot gate mainnet until retargeted. |
+| 5 | **INFERRED — o1 factory.** `0xeE3E862Efde6DCd6DF5648AF0E2731B9D1dF4605` has 24,466 bytes. Address occupancy supports that this endpoint exposes the deployment's chain, but exact contract identity is UNKNOWN without an expected runtime hash. **Chain continuity into public mainnet is not established by RPC evidence.** |
+| 6 | **VERIFIED — V2 router code and constant.** `0x1f7d…2efa` has 21,902 bytes and contains canonical pair init-code hash `96e8ac42…8845f`. |
+| 7 | **VERIFIED — V2 pair.** `0x573c…13b79` returned reserves of `10^21` raw units on each side and a timestamp. |
+| 8 | **VERIFIED — V2 router-side gate CLOSED.** `getAmountsOut(1, [pair.token0(), pair.token1()])` succeeded through the router's own `pairFor` and returned `[1, 0]`; the zero output is raw-unit rounding. The embedded hash and executable pair lookup agree (§20.19). |
+| 9 | **VERIFIED — V4 core code.** PoolManager has 24,009 bytes; PositionManager has 23,877. |
+| 10 | **VERIFIED — V4 readers.** Quoter `0x8Dc1…8F94` has 6,118 bytes; StateView `0xF333…673b` has 3,531. |
+| 11 | **VERIFIED — Universal Router.** The Arc-specific router `0x4fca4a…9fb1` has 24,546 bytes; canonical candidate `0x66a989…` is empty. |
+| 12 | **VERIFIED — Multicall3.** `0xcA11…CA11` has 3,808 bytes. |
+| 13 | **VERIFIED — deployment infrastructure.** Permit2 has 9,152 bytes; the Arachnid CREATE2 proxy has 69. |
+| 14 | **VERIFIED — all seven adapter selectors.** ERC-20 `approve` succeeded; PoolManager `initialize` returned `TickSpacingTooSmall(0)` and `extsload(0)` returned storage; PositionManager `modifyLiquidities` returned `DeadlinePassed(0)`, `nextTokenId()` returned 529, `getPositionLiquidity(0)` returned 0, and `ownerOf(0)` returned `Error("NOT_MINTED")`. These are the real adapter calls (`BallistaV4Adapter.sol:300`, :383, :413, :450, :455). |
+| 15 | **VERIFIED — USDC interface.** `decimals() = 6`, `symbol() = USDC`, and `totalSupply()` is nonzero. |
+| 16 | **VERIFIED — USDC proxy storage.** The EIP-1967 implementation slot read zero; slot 0 contained `0xf5a5658b55983e2aa037cac7a8431b510e8a97f4`, matching §20.4. |
+| 17 | **VERIFIED — one balance.** For funded sender `0x167b…2421`, native balance was `145409611073325000` and ERC-20 balance was `145409`; truncating native units by `10^12` matched exactly, with sub-6dp remainder `611073325000` (§2, §11.15). |
+| 18 | **VERIFIED — `eth_getLogs` cap.** Ranges of 1,000, 5,000 and 10,000 blocks succeeded; 20,000 failed with **`-32614`** and an explicit **10,000-block maximum**. The indexer's 500-block chunks remain inside it (`indexer/src/index.js:69`). |
+| 19 | **VERIFIED — archive depth.** USDC code and `totalSupply()` were readable at head minus 100,000 blocks. This establishes at least that recovery depth, not unlimited archive history. |
+| 20 | **VERIFIED — filter behavior on this endpoint.** `eth_newFilter` returned filter IDs successfully. This endpoint does not reproduce the historical testnet `-32603` or current testnet `-32601`; polling remains primary because provider filter support varies (§11.11, §13.2). |
+| 21 | **VERIFIED — LFX1 gas.** With deployer `0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb`, rehearsal-only treasury `0x9c72FB09FeD2AFf58E0Ba3120f9541a93c521227`, and bootstrap-router binding, the 26,188-byte creation input estimated **5,654,084 gas**, 217 above the earlier 5,653,867 measurement (runbook :78-91). |
+| 22 | **VERIFIED — hook and adapter gas.** The 9,521-byte hook CREATE2 payload estimated **1,862,999 gas**. With its exact 8,153-byte runtime injected at the predicted address, the 8,137-byte adapter creation estimated **1,656,880 gas** and passed its constructor binding read (`BallistaV4Adapter.sol:174-175`). **Full stack: 9,173,963 gas, approximately 0.183 USDC at 20 gwei.** |
+| 23 | **VERIFIED — deployer state and remaining estimable path.** The rehearsal deployer had pending nonce 0 and zero balance. The nonce yields predicted adapter `0x6f8Db1FA18189BBf69C31876433ae1E47dC29acF`, LFX1 `0x57FE5007a96e04E4401E847A9741b60126355A46`, and mined hook `0xa5d988852f999B0557d4bb54a73077Df5AB4A044` (`deploy-v4-stack.js:140-179`). Funding remains a deploy stop. |
+
+The supplied treasury is a **rehearsal value only**. Production treasury and hook protocol
+recipient remain undecided; `protocolRecipient` is immutable (`BallistaFeeHook.sol:73`,
+:153-167). Constructor-specific gas probes 21 and 22 must be repeated with the production
+recipient and final predicted addresses before the real deploy.
 ---
 
 # 24. SESSION OF 11 SEPTEMBER 2026 (continued) — step 2 closed out, a report-only audit, and the handover
@@ -7122,7 +7160,7 @@ These come after the Critical above.
 | Medium | `CLAUDE.md:5520` says everything is derivable from our logs alone. The hook never sees the trader (`BallistaFeeHook.sol:263`, `Hooks.sol:300`), and it emits nothing when the fee rounds to zero (:277). The hook is immutable. | Document that analytics must join PoolManager's `Swap` and the transaction sender. |
 | Low-Med | "A mis-mined salt fails silently" is false: BaseHook's constructor reverts `HookAddressNotValid` (`BaseHook.sol:18-19`, `Hooks.sol:83-101`). The claim is made at `CLAUDE.md:4795-4797`, :4850-4853 and :5395-5397; runbook :28-30, :60-64 and :124-125; `mine-hook-salt.js:16`; `deploy-v4-stack.js:46-49`. The runbook also blames a stray nonce on the hook's flags, but CREATE2 does not use the nonce. | Amend those passages to "the deploy reverts". Name the real stray-nonce failure: the adapter and LFX1 address predictions, caught by `requireNonce` and the adapter's binding check. |
 | Low | **VERIFIED — 10 USDC throwaway procedure recorded here; NOT EXECUTED.** Runbook :102-103 cites V4AdapterMath M8, which is pure math on a harness; the real graduation test is `Fork.v4.test.js:444-469`. The runbook procedure gap (:105-107, :331) remains to be updated. | **VERIFIED procedure:** (1) Use a separate three-contract stack, unchanged production artifacts, an explicitly supplied treasury argument for that stack, and `--bootstrap-router`. Predict adapter at nonce n+1 and LFX1 at n+2; mine the real hook initcode; deploy hook via CREATE2 at n, adapter at n+1, then LFX1 at n+2, with no intervening deployer transactions; require the seven binding reads (`scripts/deploy-v4-stack.js:140-179`, :231-284). (2) After deployment and read-back, the new factory owner calls `setDefaultGraduationThreshold(10_000_000)`, waits for confirmation, and reads the value back, before creating any token. This uses the existing owner setter: no constructor argument and no source edit (`LFX1.sol:211`, :818-821; `Fork.v4.test.js:452`). (3) Read a fresh economics hash, create the throwaway token and verify its threshold snapshot; the fork rehearsal uses poolBoost=false, waits past the snipe window, then buys with 12 USDC and checks graduation, price, dust and burned LP (`Fork.v4.test.js:148-170`, :452-469; `LFX1.sol:352`).<br>**INFERRED, NOT MEASURED:** With the same compiled artifact and USDC address, throwaway LFX1 runtime bytecode is identical to production: `usdc` is its only compiler-recorded immutable; the threshold setter changes storage (`LFX1.sol:24`, :114, :211-220, :818-821; `artifacts/build-info/1e1cd9211385185a02bf694606361e02.json`, `LFX1.evm.deployedBytecode.immutableReferences`). No comparison of two live mainnet deployments was made.<br>**VERIFIED limitation:** This is NOT an equivalent economic test. A 10 USDC threshold leaves substantially more unsold tokens entering liquidity; it establishes neither production-sized graduation gas nor liquidity behaviour (`Fork.v4.test.js:334-338`, :447-465; `LFX1.sol:649-651`).<br>**VERIFIED production-setter consequences:** Existing tokens retain their snapshotted thresholds. Every token created while the default is 10 USDC keeps that snapshot permanently; restoring `8_000_000_000` affects later launches only (`LFX1.sol:24`, :352, :818-821).<br>**VERIFIED in-flight protection:** `currentEconomicsHash()` includes the threshold. If the changed threshold is in effect when a pending creation executes and its pinned hash no longer matches, creation reverts with `EconomicsChanged()` before fee collection or token deployment; a creation executed first keeps its original snapshot (`LFX1.sol:285-299`, :313, :322-337, :352). |
-| Low | §20.14 (`CLAUDE.md:5048`, :5054) calls the corrector "insurance for the v2 branch" and calls v2 "fully verified". The corrector only takes v4 pool keys (`BallistaPoolCorrector.sol:102-130`), and v2's router-side check is still open (§20.19). | Correct both sentences. |
+| Low | **PARTLY SUPERSEDED 13 September 2026.** The V2 router-side gate is now CLOSED (§20.19, §23.8): the canonical hash is embedded and `getAmountsOut` succeeded through the router's own `pairFor`. The remaining contradiction is that §20.14 calls the corrector "insurance for the v2 branch", while the corrector only accepts v4 pool keys (`BallistaPoolCorrector.sol:102-130`). | Remove the incorrect "insurance for the v2 branch" description; the V2 verification claim now stands. |
 | Low | §20.7 (`CLAUDE.md:4740-4757`, :4778) and §20.8 (:4833) still describe the superseded LFX1-first order, with a `proposeRouter` step, and nothing points them to §20.18. | Add a pointer under the §20.7 heading. |
 | Low | `BallistaV4Adapter.sol:205` names a test that does not exist. `mine-hook-salt.js:5-6` documents 3 of the hook's 5 constructor arguments. | Update the comment and the usage. An adapter edit does not change the hook's salt (§20.9). |
 

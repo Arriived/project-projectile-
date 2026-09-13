@@ -486,7 +486,7 @@ contract, so its gate lives there and is not read here.
 
 ## CLAUDE.md coverage
 
-Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **102**.
+Identifiers exposed by the contracts that `CLAUDE.md` never mentions: **101**.
 
 Not every one needs prose — a getter for a constant that is already described by
 its constant does not. But anything here that changes BEHAVIOUR and is unexplained
@@ -558,7 +558,6 @@ is the shape of the symbol-lock gap, and should be read as a candidate.
 - `LFX1.Unpaused`
 - `LFX1Token.metadataURI`
 - `LFX1Token.setMetadataURI`
-- `LFX1Token.totalSupply`
 - `LFX1Token.ERC20InsufficientAllowance`
 - `LFX1Token.ERC20InsufficientBalance`
 - `LFX1Token.ERC20InvalidApprover`
