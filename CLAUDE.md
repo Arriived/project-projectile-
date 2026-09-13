@@ -1509,17 +1509,41 @@ reverted**. Quotes come from `quoteBuy`/`quoteSell` on the contract — §1.3.
     blocks of a dead contract. Reset it whenever the factory address changes.
 - **Licence: UNLICENSED. Settled, not an open item.** All rights reserved, no rights granted, no entity name required and none used. BUSL-1.1 was considered and **dropped** rather than filling `[LICENSOR]`: it needed a named licensor the project did not want to publish, and verifying on a public explorer arguably starts its four-year clock — both problems disappear with UNLICENSED. Blockscout shows `license_type: none`, which is correct and already set; **`unlicense` on that list is The Unlicense, a public-domain dedication, and must never be selected.** OpenZeppelin's sources remain MIT.
   The trade-off accepted: with no `[LICENSOR]`, there is no named copyright holder in the headers. CLAUDE.md previously argued a clear copyright line matters more than the licence choice for DMCA against hosted frontends and GitHub mirrors. That lever is weaker now. `LICENSE` states all-rights-reserved explicitly to compensate, but a takedown would rest on the repo and deployment history rather than on a name in the source.
-- **CCTP V2 bridging is REQUIRED non-contract scope — it is NOT descoped.** It is the
-  day-one frontend onramp and sits at the **top of the entire funnel**: a user on
-  Base / Ethereum / Solana must be able to buy an Arc-native token without manually
-  bridging first. What was removed from this file was the claim that it is a *contract*
-  feature — `LFX1` does not and will not implement bridging. The frontend does.
-  **Do not read its absence from the contract sections as descoped.**
-  Use Circle's **Forwarding Service** (Bridge Kit, or `depositForBurnWithHook`) rather
-  than a custom relayer: no wallets to fund, no retries to manage, and fees are taken from
-  the minted USDC so users need no destination gas. Arc testnet is CCTP **domain 26** and
-  is a supported Forwarding Service destination; **Arc mainnet is still absent from
-  Circle's published CCTP address list — verify before relying on it.**
+- **CCTP V2 bridging is REQUIRED non-contract scope, but DEFERRED as of 13 September
+  2026 — it is not open implementation work.** It remains the intended frontend onramp
+  for users arriving from Base / Ethereum / Solana; `LFX1` does not and will not implement
+  bridging. The blocker is upstream support: **Arc mainnet is NOT a CCTP v2 Forwarding
+  Service destination.** Three current sources agree:
+  - The `arc-docs` MCP server was queried directly. Arc Docs says mainnet addresses are
+    "not yet available", marks both Private Mainnet and Public Mainnet "Upcoming", scopes
+    the CCTP prerequisites to Arc Testnet, and uses `Arc_Testnet` in every Forwarding
+    Service example
+    (`https://docs.arc.io/arc/references/contract-addresses`,
+    `https://docs.arc.io/arc/concepts/deployment-model`,
+    `https://docs.arc.io/integrate/exchanges/cctp-bridging`,
+    `https://docs.arc.io/app-kit/tutorials/bridge/use-forwarding-service`).
+  - Circle's supported-chains table lists **Arc testnet**, not Arc mainnet, as a Forwarding
+    Service destination
+    (`https://developers.circle.com/cctp/concepts/supported-chains-and-domains`).
+  - Bridge Kit 1.14.1's inventory includes `Arc_Testnet` and no Arc-mainnet chain
+    definition (`https://www.npmjs.com/package/@circle-fin/bridge-kit`).
+  **Domain 26 is Arc TESTNET.** It appears in a testnet-scoped guide and cannot be cited
+  as an Arc-mainnet assignment.
+  The Forwarding Service cannot forward to a contract when `destinationCaller` is set,
+  so an atomic bridge-into-purchase was never available even if Arc mainnet gained
+  Forwarding Service support. The best possible flow mints USDC to the user's wallet;
+  the user then buys in a second Arc transaction. Without the Forwarding Service, plain
+  CCTP requires the destination mint transaction and recreates the destination-gas
+  bootstrap problem the Forwarding Service was chosen to solve.
+  **Recheck condition:** only reopen implementation after Arc mainnet's public CCTP launch,
+  when both Circle's table and
+  `getSupportedChains({ forwarderSupported: true })` list Arc mainnet. Bridge Kit must
+  also publish a package release containing the Arc-mainnet chain definition; day-one
+  protocol support alone would not make the SDK see it.
+  `parked/bridge-kit` at `412b7de` is dependency installation only: exactly
+  `app/package.json` and `app/package-lock.json`, adding
+  `@circle-fin/adapter-solana`, `@circle-fin/adapter-viem-v2`, and
+  `@circle-fin/bridge-kit`. It contains no SDK imports or implementation code.
 - **Owner is a single EOA** by the operator's deliberate decision. Do not re-raise.
 - **`ARCHITECTURE.md`** holds 140 comment blocks / 748 lines moved out of the deployed source. Published nowhere; it is the only copy of that reasoning.
 
