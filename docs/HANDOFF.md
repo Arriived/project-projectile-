@@ -24,8 +24,10 @@ plus a fee-capturing hook built this month — see §6 and §7 below for which, 
 gets decided.
 
 **CLAUDE.md is canonical. This file is not.** Read this file to orient and to find the
-right section fast; verify everything you act on against `CLAUDE.md`, the repo, or live
-state — never against this file's own prose.
+right section fast; read §24.4–§24.6 before relying on older sections or the runbook, because
+those sections record corrections and distinguish implemented fixes from live verification.
+Verify everything you act on against the repo or live state; the documentation is a starting
+point, not proof.
 
 ## 2. How to verify you are in the right place
 
@@ -158,8 +160,8 @@ against `https://rpc.testnet.arc.io` this session returned **24,033 bytes**, mat
 - `contracts/LFX1.sol`, deployed at the Testnet address above, is **closed**. Do not propose
   changing it without a reason written down first (`CLAUDE.md` §"The contract is CLOSED",
   §7).
-- A one-factory-one-adapter-one-hook cycle, enforced by immutables and verified against
-  source this session:
+- Each deployed adapter and hook has immutable bindings to one factory and to each other.
+  This does not prevent deploying a replacement pair bound to the same factory (§24.5):
   - `contracts/BallistaV4Adapter.sol`: `lfx1` and `hook` immutables (lines 49, 54).
     Constructor rejects a zero hook (`ZeroHook`, line 145), wrong permission flags
     (`HookFlagsWrong`, line 157), and a hook not bound back to this exact adapter
@@ -170,15 +172,19 @@ against `https://rpc.testnet.arc.io` this session returned **24,033 bytes**, mat
     `sender == adapter` (line 215, `NotAdapter`).
   - Neither contract is deployed anywhere — no v4-stack entry exists in `deployments/`.
     Built, tested locally and against a real Base fork; unpublished.
-- Replacing any one of the three means replacing all three and starting new pools —
-  `hooks` is part of Uniswap v4's `PoolKey`, so a new hook is a different pool and burned
-  liquidity in the old one cannot migrate. Full reasoning: `CLAUDE.md` §20.6, §20.7, §20.9,
-  §21.
+- **Recovery depends on whether graduation has happened** (`CLAUDE.md` §24.5).
+  Already-graduated pools retain their immutable hook in the `PoolKey`; a replacement hook
+  makes a different pool and cannot migrate the old pool's burned liquidity.
+  Tokens parked at `GRADUATION_READY` can instead be rerouted to v2 or to a new adapter/hook
+  pair bound to the **same LFX1**, because `graduate()` reads the router at call time.
+  Either route needs the owner key and the 24-hour router timelock; holders cannot trade
+  while parked. **The end-to-end recovery outcome is inferred, not executed.**
 
 ## 6. The Wednesday sequence
 
-**`CONTRACT_DEPLOY_RUNBOOK.md` (repo root) has the procedure. This is an outline of its
-shape, not a substitute for reading it — follow the runbook, not this list.**
+**`CONTRACT_DEPLOY_RUNBOOK.md` (repo root) has the procedure, but its outstanding corrections
+are recorded in `CLAUDE.md` §24.4 and must be resolved before execution.** This is an outline,
+not a substitute for the runbook or those corrections. §24.6 lists the pre-launch work.
 
 1. **Preflight** (runbook §4): `eth_getCode` every dependency the deploy needs (PoolManager,
    PositionManager, Permit2, and — for the v2 fallback — the V2 router/factory), with the
@@ -189,23 +195,34 @@ shape, not a substitute for reading it — follow the runbook, not this list.**
    and the *predicted* LFX1 address; then the adapter (real hook now, LFX1 still predicted);
    then LFX1 last, with `initialRouter_` set to the now-real adapter address. `CLAUDE.md`
    §20.18/§21.9 explains why the order is LFX1-last rather than LFX1-first.
-3. **Fresh-key discipline.** A dedicated deployer key that signs nothing else, ever — not a
-   test transaction, not an approval. Why a stray transaction fails silently: it advances
-   the EOA's nonce, which invalidates the mined hook salt with no error at deploy time — the
-   hook and adapter still deploy successfully, just bound to the wrong addresses, and every
-   graduation then reverts forever with no recovery (both bindings are immutable). Runbook
-   §1; `CLAUDE.md` §20.7, §20.8.
+3. **Fresh-key discipline until read-back passes.** Use a dedicated deployer key and send
+   no unrelated transaction before the step-5 read-back below (runbook §6). A stray
+   transaction changes the adapter/LFX1 nonce predictions; CREATE2 does not use the EOA
+   nonce, so it does not itself change the hook's flags. Nonce assertions and the adapter's
+   constructor binding check detect mismatches (`CLAUDE.md` §24.4).
+   After read-back, the deployer is also LFX1's owner and remains needed for router changes
+   (including the v2 fallback), revoke/pause actions, and intended configuration changes.
+   A fresh LFX1 defaults to a 5-minute symbol lock and 10-second cooldown; matching testnet's
+   0/5 settings requires two owner transactions (§24.5). Do not apply those implicitly.
 4. The nonce is **re-read and asserted immediately before each of the two later deploys**
-   (the adapter, then LFX1) — abort on any mismatch, before sending.
-5. **Read-back gate, both directions — a hard stop, not a check, before `proposeRouter` is
-   ever called**: `hook.adapter()` must equal the deployed adapter address, and
-   `adapter.hook()` must equal the deployed hook address. Runbook §6.
+   (the adapter, then LFX1). **Still open:** the script lacks a nonce re-check immediately
+   before the hook's CREATE2 send and prints, but does not assert, the chain ID. §24.4 records
+   both missing guards; §24.6 requires them before launch.
+5. **Read-back gate before any token is created or the stack is used**, including when
+   `initialRouter_` bootstraps the adapter immediately. Read all runbook §6 bindings back,
+   including `hook.adapter()` and `adapter.hook()`, and stop on any mismatch. Bootstrap does
+   not call `proposeRouter`; subsequent router changes do require proposal and the 24-hour
+   timelock (`CLAUDE.md` §24.5).
 6. **Explorer verification** — target is genuinely unsettled (Blockscout vs an
    Etherscan-compatible API); runbook §7 flags this as open, not assumed.
 7. **Post-deploy checks before any token is created** — runbook §8.
-8. **Private-mainnet / throwaway phase** — runbook §9. Throwaway graduation threshold is
-   **10 USDC**, not the older ~54.2 USDC figure that no longer applies (`CLAUDE.md` §15.4's
-   amendment).
+8. **Private-mainnet / throwaway phase** — runbook §9, subject to §24.4's corrections.
+   The throwaway threshold is **10 USDC**, not the older ~54.2 figure. The real graduation
+   evidence is `test/Fork.v4.test.js` test 4; `V4AdapterMath` M8 is only a math-harness test.
+   The runbook still lacks the throwaway steps. Its selector preflight also needs updating:
+   the adapter no longer calls `initializePool`; include the actual `initialize`, `extsload`
+   and `getPositionLiquidity` calls identified in §24.4. These are open procedure corrections,
+   not evidence that Arc testing has passed.
 
 ## 7. The decision point
 
@@ -232,7 +249,8 @@ open — see item 1 in §8.
 2. **[Blocks the v4 path] Private-mainnet deploy of the v4 stack.** Blocked on
    `ARC_MAINNET_RPC_URL` (must come from Circle directly or a Circle-named provider, never a
    search result) and on funding the dedicated deployer key. `CLAUDE.md` §20.5 states the
-   five conditions this phase must prove or the launch reverts to v2.
+   five conditions this phase must prove or the launch reverts to v2; apply §24.4's selector
+   and throwaway-procedure corrections before treating that older list as executable.
 3. **[Is the literal subject of §7] Hook + adapter tested against real Arc, not only a Base
    fork.** No decision about which venue ships can be made responsibly until this exists.
 4. **[Doesn't block Wednesday; blocks trust in the interim] `ballista.trading` is missing
@@ -241,22 +259,34 @@ open — see item 1 in §8.
 5. **[Doesn't block Wednesday] Two open Goldsky Edge questions** (mainnet coverage
    specifically for Edge, and its per-IP rps ceiling) and two more about archive depth and
    catch-up request caps — `CLAUDE.md` §11.17 items 1–4, §18.6's dedicated-RPC context.
-6. **[Doesn't block Wednesday] No claims UI exists.** Confirmed this session — zero
-   references to `claimCreatorFees`, `claimTreasuryFees`, or the hook's `sweep` / `claim` /
-   `claimToken` anywhere in `app/src`. Creators cannot collect fees through the product yet.
-   `CLAUDE.md` §24.4.
-7. Everything else still open in `CLAUDE.md` §12.8 / §21.10 / §24.6 not listed above.
+6. **[Required before launch by §24.6] No claims UI exists.** The recorded audit found
+   `claimCreatorFees` only in the ABI and no UI for the hook's `sweep` / `claim` / `claimToken`.
+   Creators cannot collect fees through the product yet (`CLAUDE.md` §24.4).
+7. **Other work explicitly required before launch by §24.6:** a written frontend/indexer/
+   database cutover procedure; the missing deploy nonce and chain-ID guards; the §24.4
+   documentation/runbook corrections; and `verify:reserves:live` after a real trade.
+   The cutover finding includes hardcoded testnet configuration and absent frontend chain
+   filtering, which would mix testnet/mainnet tokens if the database were reused (§24.4).
+8. **Live WalletConnect verification remains open.** The chain-ID parsing fix is implemented
+   and red-proved, but §24.4/§24.6 record no real phone WalletConnect session confirming create
+   and trade are enabled. Passing the pure-function checks does not close that verification.
+9. Everything else still open in `CLAUDE.md` §12.8 / §21.10 / §24.4–§24.6. Read the later
+   corrections before carrying an older item forward; this entry point is not a second audit.
 
 ## 9. Known traps, one line each
 
-- **The salt asymmetry.** Editing the hook's source — including a comment — changes its
-  compiled bytecode and silently invalidates a previously-mined CREATE2 salt; editing the
-  adapter never does, because the adapter's address depends only on `(deployer, nonce)`, not
-  on its own bytecode. → `CLAUDE.md` §20.9.
-- **The constructor ordering trap.** `adapter_` must be the last constructor argument on the
-  hook, and `hook_` the last on the adapter — reordering either changes the initcode and
-  silently invalidates every mined salt, with no error at deploy time. → `CLAUDE.md` §21.8
-  item 6; the constructors in `contracts/BallistaFeeHook.sol` / `BallistaV4Adapter.sol`.
+- **The salt asymmetry.** A hook source/initcode change requires re-mining and revalidating
+  its CREATE2 address. If the address no longer matches the declared permissions,
+  `BaseHook`'s constructor reverts `HookAddressNotValid`; it does not deploy silently with
+  missing callbacks. Adapter-only edits do not change the hook salt, because the adapter's
+  CREATE address depends on `(deployer, nonce)`, not its bytecode. → `CLAUDE.md` §24.4,
+  correcting §20.9.
+- **Constructor argument ordering.** Keep each caller's argument encoding aligned with the
+  constructor: `adapter_` is last on the hook and `hook_` last on the adapter. Changing the
+  hook's encoded arguments changes its initcode and requires re-mining; reordering the
+  adapter's constructor alone does **not** change the hook salt. A hook permission/address
+  mismatch reverts, and an adapter binding mismatch reverts `HookNotBoundToThis`.
+  → `CLAUDE.md` §24.4; the two constructors.
 - **`Hooks.isValidHookAddress(IHooks(address(0)), fee)` returns `true` for a static fee** —
   confirmed this session against the pinned
   `node_modules/@uniswap/v4-core/src/libraries/Hooks.sol:124-126`. A hookless v4 pool is
