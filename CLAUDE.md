@@ -7218,7 +7218,7 @@ two owner transactions, and the symbol lock is inside the economics hash (`LFX1.
    60 pure-function checks, and by nothing on a real wallet.
 5. **Before 16 September, whatever the order:**
    - the claims UI;
-   - a written cutover procedure;
+   - the cutover procedure: **WRITTEN, NOT EXECUTED** — [docs/MAINNET_CUTOVER.md](docs/MAINNET_CUTOVER.md);
    - the deploy script's nonce and chain-ID guards;
    - the CLAUDE.md and runbook corrections listed in §24.4;
    - `verify:reserves:live` re-run after a real trade. §23.4 notes that no trade has happened

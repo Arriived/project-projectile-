@@ -262,8 +262,8 @@ open — see item 1 in §8.
 6. **[Required before launch by §24.6] No claims UI exists.** The recorded audit found
    `claimCreatorFees` only in the ABI and no UI for the hook's `sweep` / `claim` / `claimToken`.
    Creators cannot collect fees through the product yet (`CLAUDE.md` §24.4).
-7. **Other work explicitly required before launch by §24.6:** a written frontend/indexer/
-   database cutover procedure; the missing deploy nonce and chain-ID guards; the §24.4
+7. **Other work explicitly required before launch by §24.6:** the frontend/indexer/
+   database cutover ([MAINNET_CUTOVER.md](MAINNET_CUTOVER.md), written, not executed); the missing deploy nonce and chain-ID guards; the §24.4
    documentation/runbook corrections; and `verify:reserves:live` after a real trade.
    The cutover finding includes hardcoded testnet configuration and absent frontend chain
    filtering, which would mix testnet/mainnet tokens if the database were reused (§24.4).
