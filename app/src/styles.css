@@ -1247,6 +1247,12 @@ code.addr-full {
 .chart-tf:hover { color: var(--text); background: var(--soft); }
 .chart-tf.on { color: var(--text); border-color: var(--text); background: var(--soft); font-weight: 500; }
 .chart-reset { margin-left: 6px; }
+@media (max-width: 480px) {
+  /* At 380px the seven timeframes occupy their own wrapped row instead of squeezing
+     the heading or overflowing the chart card. */
+  .chart-tfs { width: 100%; margin-left: 0; justify-content: flex-start; }
+  .chart-reset { margin-left: 0; }
+}
 /* Stacked default; the desktop grid overrides this to 520px. */
 /* ⚠ overflow:hidden IS LOAD-BEARING, NOT TIDINESS. lightweight-charts sizes its own
    canvas from the container, and the container sizes from its content -- so once the

@@ -26,7 +26,7 @@ next to `migrations/`, which is what it operates on.
    SUPABASE_URL=... SUPABASE_ANON_KEY=... node indexer/scripts/verify-anon-access.js
    ```
 
-   Expect **11/11**.
+   Expect **12/12**.
 
    ⚠ **Why step 2 is not enough.** `tokens_with_volume` is `SECURITY INVOKER`, so the
    caller needs its own SELECT rights. Without them the view returns **zero rows and no

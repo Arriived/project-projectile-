@@ -1,4 +1,4 @@
-// The price chart. CANDLESTICKS, from token_candles_1m.
+// The price chart. CANDLESTICKS, from the one-second and one-minute candle views.
 //
 // ── ⚠ EMPTY BUCKETS: CARRIED FORWARD, NOT LEFT AS GAPS ────────────────────────
 //
@@ -60,6 +60,7 @@ import {
   type PricePoint,
   type TimeframeId,
 } from "../../hooks/useCandles";
+import { trailingCandleWindow } from "../../lib/candleWindow";
 
 /**
  * ⚠ THE CHART TAKES ITS OWN COLOUR OPTIONS AND WILL NOT INHERIT CSS VARIABLES. A dark page
@@ -122,6 +123,7 @@ function themeOptions(pal: (typeof PALETTE)[keyof typeof PALETTE]) {
 export function PriceChart({
   points,
   candles,
+  secondCandles,
   now,
   isFlatLaunch,
   isHistoryUnchartable,
@@ -130,8 +132,9 @@ export function PriceChart({
 }: {
   points: PricePoint[];
   candles: Candle[];
+  secondCandles: Candle[];
   /**
-   * UNIX seconds, floored to the minute: the clock useCandles filled to. Passed in, not read
+   * UNIX seconds, advanced on the second boundary: the clock useCandles filled to. Passed in, not read
    * here -- a Date.now() in render changed on every render and rebuilt the series with it.
    */
   now: number;
@@ -158,14 +161,18 @@ export function PriceChart({
   localeNow.current = locale;
 
   const [tf, setTf] = useState<TimeframeId | null>(null);
-  const chosen = tf ?? defaultTimeframe(candles, now);
+  const chosen = tf ?? defaultTimeframe(secondCandles.length ? secondCandles : candles, now);
 
   const series = useMemo((): Bar[] => {
-    if (candles.length === 0) {
+    const source = chosen === "1S" ? secondCandles : candles;
+    if (source.length === 0) {
       // No chartable trades: fall back to the flat launch line the hook already builds,
       // rendered as flat candles so the series type does not change under the user.
       return points.map((p) => ({ time: p.time, open: p.value, high: p.value, low: p.value, close: p.value }));
     }
+    // 1S always means one real second. Its history is narrowed to ten minutes rather than
+    // allowing forwardFillCandles to widen its step after 600 bars.
+    if (chosen === "1S") return trailingCandleWindow(source, now, 1, 600);
     const spec = TIMEFRAMES.find((x) => x.id === chosen)!;
     // ALL: one bucket wide enough to hold the whole span in ~120 candles.
     const bucket =
@@ -173,7 +180,7 @@ export function PriceChart({
         ? Math.max(60, Math.ceil((now - Math.min(...candles.map((c) => c.time))) / 120 / 60) * 60)
         : spec.seconds;
     return forwardFillCandles(aggregateCandles(candles, bucket), now, bucket);
-  }, [candles, points, chosen, now]);
+  }, [candles, secondCandles, points, chosen, now]);
 
   const hasChart = series.length > 0;
 
@@ -224,7 +231,7 @@ export function PriceChart({
       timeScale: {
         ...look.chart.timeScale,
         timeVisible: true,
-        secondsVisible: false,
+        secondsVisible: chosen === "1S",
         // ⚠ THE FIX FOR "BARE VERTICAL LINES." lightweight-charts' default minBarSpacing
         // is 0.5px, so fitContent() over many buckets in a narrow mobile column happily
         // compresses each candle's rendered width below what a body rectangle needs to
@@ -291,6 +298,12 @@ export function PriceChart({
     chart.current?.applyOptions(look.chart);
     bars.current?.applyOptions(look.series);
   }, [theme]);
+
+  // Seconds are useful only for the 1S view. Apply this without recreating the chart, so
+  // switching timeframe retains the same chart instance and its interaction state.
+  useEffect(() => {
+    chart.current?.applyOptions({ timeScale: { secondsVisible: chosen === "1S" } });
+  }, [chosen]);
 
   // ── DATA: THE SMALLEST CHANGE THAT GETS THERE ─────────────────────────────────────────
   //
@@ -371,6 +384,9 @@ export function PriceChart({
       )}
 
       <p className="hint chart-note">{t("chart.midPriceNote")}</p>
+      {chosen === "1S" && hasChart && (
+        <p className="hint chart-note">{t("chart.oneSecondNote")}</p>
+      )}
       {/* The scale factor and the timezone, each stated ONCE here rather than repeated
           on every axis label -- that repetition is exactly what made the price axis 12
           characters wide. See lib/chartFormat.ts. */}

@@ -18,6 +18,7 @@
 
 import { readFileSync } from "node:fs";
 import { planSeriesUpdate, type Bar } from "../src/lib/chartSeries.ts";
+import { trailingCandleWindow, type OhlcBar } from "../src/lib/candleWindow.ts";
 import {
   priceScaleFor,
   priceScaleLabel,
@@ -121,6 +122,45 @@ console.log("\n── the component is built for it ──");
     "K13 useCandles memoises what it returns",
     /useMemo\(/.test(candles),
     "a fresh array per render changes PriceChart's inputs every time"
+  );
+}
+
+console.log("\n── one-second candles mean one second ──");
+{
+  const migration = stripComments(
+    readFileSync(new URL("../../indexer/migrations/008_one_second_candles.sql", import.meta.url), "utf8")
+  );
+  check(
+    "K25 1S aggregation buckets on the chain's block_time at an exact second boundary",
+    /date_trunc\('second',\s*tr\.block_time\)/.test(migration) &&
+      /ORDER BY p\.block_number ASC,\s*p\.id ASC/.test(migration),
+    "the view must not use created_at, minutes, or timestamp ordering"
+  );
+
+  const sparse: OhlcBar[] = [
+    { time: 100, open: 1, high: 2, low: 1, close: 2 },
+    { time: 103, open: 2, high: 3, low: 2, close: 3 },
+  ];
+  const filled = trailingCandleWindow(sparse, 103, 1, 10);
+  const empty101 = filled.find((c) => c.time === 101);
+  const empty102 = filled.find((c) => c.time === 102);
+  check(
+    "K26 empty 1S buckets carry the previous close as an honest flat candle",
+    !!empty101 && !!empty102 &&
+      [empty101, empty102].every((c) => c.open === 2 && c.high === 2 && c.low === 2 && c.close === 2)
+  );
+
+  const bounded = trailingCandleWindow(
+    [{ time: 0, open: 1, high: 1, low: 1, close: 1 }],
+    1_000,
+    1,
+    600
+  );
+  check(
+    "K27 the 1S label stays exact past 600 seconds by narrowing to 600 one-second bars",
+    bounded.length === 600 && bounded[0].time === 401 && bounded[599].time === 1_000 &&
+      bounded.every((c, i) => i === 0 || c.time - bounded[i - 1].time === 1),
+    `length=${bounded.length}, first=${bounded[0]?.time}, last=${bounded.at(-1)?.time}`
   );
 }
 

@@ -2,8 +2,9 @@
 //
 // ── THE PRICE IS THE CURVE'S MID, NEVER THE EXECUTION PRICE ──────────────────
 //
-// `token_candles_1m` derives price from `virtual_usdc_reserves / virtual_token_reserves`
-// per trade (migration 004). It must never be swapped for `usdc_amount / token_amount`.
+// The candle views derive price from `virtual_usdc_reserves / virtual_token_reserves`
+// per trade (migrations 004 and 008). It must never be swapped for
+// `usdc_amount / token_amount`.
 //
 // Measured on real rows before 004 existed: adjacent buys and sells at the SAME reserve
 // level differed by 5.3x, because execution price includes the snipe tax and the fees.
@@ -23,7 +24,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Address } from "viem";
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from "../config";
-import { useMinuteClock } from "./useMinuteClock";
+import { useSecondClock } from "./useSecondClock";
 
 /** A lightweight-charts line point. `time` is a UNIX second. */
 export type PricePoint = { time: number; value: number };
@@ -32,13 +33,11 @@ export type PricePoint = { time: number; value: number };
 export type Candle = { time: number; open: number; high: number; low: number; close: number };
 
 /**
- * The timeframes offered. `token_candles_1m` is the FLOOR -- 1m is the finest bucket the
- * view produces and everything coarser is aggregated from it here.
- *
- * ⚠ NO SUB-MINUTE OPTION. That would need another migration and a re-derivation of candle
- * logic, and it is not authorised. The floor is a data property, not a UI choice.
+ * The timeframes offered. 1S reads `token_candles_1s`; every coarser timeframe is
+ * aggregated from `token_candles_1m` here.
  */
 export const TIMEFRAMES = [
+  { id: "1S", seconds: 1 },
   { id: "1M", seconds: 60 },
   { id: "5M", seconds: 300 },
   { id: "1H", seconds: 3600 },
@@ -213,8 +212,10 @@ export type CandleResult = {
   points: PricePoint[];
   /** Raw 1-minute OHLC, unfilled. The chart aggregates and fills per timeframe. */
   candles: Candle[];
+  /** Raw one-second OHLC from token_candles_1s, newest 601 non-empty buckets. */
+  secondCandles: Candle[];
   /**
-   * The clock the fills ran to: UNIX seconds, floored to the minute (useMinuteClock).
+   * The clock the fills ran to: UNIX seconds, advanced on each second boundary.
    * PriceChart fills to the same value, so the chart and this hook read one clock.
    */
   now: number;
@@ -309,12 +310,43 @@ export function useCandles(
     },
   });
 
-  // ⚠ ONE MINUTE CLOCK AND A MEMOISED RESULT. This read Date.now() and built fresh arrays on
+  const secondQ = useQuery({
+    queryKey: ["candles-1s", token],
+    enabled: ready,
+    refetchInterval: 1_000,
+    staleTime: 500,
+    queryFn: async (): Promise<Candle[]> => {
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/token_candles_1s` +
+          `?select=bucket,open,high,low,close,trade_count` +
+          `&token_address=eq.${token}&order=bucket.desc&limit=601`,
+        {
+          headers: {
+            apikey: SUPABASE_ANON_KEY!,
+            Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          },
+        }
+      );
+      if (!res.ok) throw new Error(`one-second candles ${res.status}`);
+      const rows = (await res.json()) as CandleRow[];
+      return rows.reverse().map((r) => ({
+        time: Math.floor(new Date(r.bucket).getTime() / 1000),
+        open: Number(r.open),
+        high: Number(r.high),
+        low: Number(r.low),
+        close: Number(r.close),
+      }));
+    },
+  });
+
+  // ⚠ ONE SHARED CLOCK AND A MEMOISED RESULT. This read Date.now() and built fresh arrays on
   // every call, so PriceChart got new inputs on every render of the page -- and rebuilt the
   // whole chart for them. The result now changes only when the data, the launch price or the
-  // minute changes. See CLAUDE.md §23.
-  const now = useMinuteClock();
-  const { data, isLoading, isError } = q;
+  // second changes. See CLAUDE.md §23.
+  const now = useSecondClock();
+  const { data } = q;
+  const isLoading = q.isLoading || secondQ.isLoading;
+  const isError = q.isError || secondQ.isError;
 
   return useMemo((): CandleResult => {
     const traded = data?.points ?? EMPTY_POINTS;
@@ -329,6 +361,7 @@ export function useCandles(
       if (launchPrice === undefined || createdAtSeconds === undefined) {
         return {
           candles: EMPTY_CANDLES,
+          secondCandles: EMPTY_CANDLES,
           points: EMPTY_POINTS,
           isFlatLaunch: false,
           isHistoryUnchartable: false,
@@ -339,6 +372,7 @@ export function useCandles(
       }
       return {
         candles: EMPTY_CANDLES,
+        secondCandles: EMPTY_CANDLES,
         points: forwardFill([{ time: createdAtSeconds, value: launchPrice }], now),
         isFlatLaunch: !hasTrades,
         isHistoryUnchartable: hasTrades,
@@ -358,6 +392,7 @@ export function useCandles(
 
     return {
       candles: data?.candles ?? EMPTY_CANDLES,
+      secondCandles: secondQ.data ?? EMPTY_CANDLES,
       points: forwardFill(seeded, now),
       isFlatLaunch: false,
       isHistoryUnchartable: false,
@@ -365,5 +400,5 @@ export function useCandles(
       isError,
       now,
     };
-  }, [data, isLoading, isError, launchPrice, createdAtSeconds, now]);
+  }, [data, secondQ.data, isLoading, isError, launchPrice, createdAtSeconds, now]);
 }

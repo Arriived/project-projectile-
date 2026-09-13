@@ -19,7 +19,7 @@
 --
 -- So after this file returns all-true, run the ANON-key half:
 --
---   node indexer/scripts/verify-anon-access.js      (expects 11/11)
+--   node indexer/scripts/verify-anon-access.js      (expects 12/12)
 --
 -- See indexer/RUNBOOK.md for the full sequence.
 
@@ -32,7 +32,7 @@ UNION ALL
 -- ── 2. views ─────────────────────────────────────────────────────────────────
 SELECT 'view: ' || v,
        (to_regclass('public.' || v) IS NOT NULL)
-FROM unnest(ARRAY['tokens_with_volume','token_candles_1m']) AS v
+FROM unnest(ARRAY['tokens_with_volume','token_candles_1m','token_candles_1s']) AS v
 
 UNION ALL
 -- ── 3. columns every migration adds ──────────────────────────────────────────
@@ -67,7 +67,7 @@ UNION ALL
 -- ── 5. the anon SELECT grants the frontend depends on ────────────────────────
 SELECT 'anon SELECT on ' || g.obj,
        has_table_privilege('anon', 'public.' || g.obj, 'SELECT')
-FROM unnest(ARRAY['tokens','trades','tokens_with_volume','token_candles_1m']) AS g(obj)
+FROM unnest(ARRAY['tokens','trades','tokens_with_volume','token_candles_1m','token_candles_1s']) AS g(obj)
 
 UNION ALL
 -- ── 6. anon must NOT be able to write, and must NOT see operational tables ───
@@ -87,7 +87,7 @@ UNION ALL
 --
 -- Supabase grants INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER by default on every new
 -- object in public. Migration 000 revokes those on the base TABLES; the views were created
--- afterwards and kept all six until 007. Neither view is auto-updatable (GROUP BY, window
+-- afterwards and kept all six until 007. The grouped views are not auto-updatable (GROUP BY, window
 -- functions) so it was not exploitable -- but the grant layer is meant to be the first
 -- barrier, and the next view might be a simple one.
 --
@@ -96,7 +96,7 @@ UNION ALL
 -- exactly like launch day.
 SELECT 'view grant: anon CAN SELECT ' || v,
        has_table_privilege('anon', 'public.' || v, 'SELECT')
-FROM unnest(ARRAY['tokens_with_volume','token_candles_1m']) AS v
+FROM unnest(ARRAY['tokens_with_volume','token_candles_1m','token_candles_1s']) AS v
 
 UNION ALL
 SELECT 'view grant: anon CANNOT ' || p.priv || ' ' || p.obj,
@@ -105,13 +105,15 @@ FROM (VALUES
   ('tokens_with_volume','INSERT'),('tokens_with_volume','UPDATE'),('tokens_with_volume','DELETE'),
   ('tokens_with_volume','TRUNCATE'),('tokens_with_volume','REFERENCES'),('tokens_with_volume','TRIGGER'),
   ('token_candles_1m','INSERT'),('token_candles_1m','UPDATE'),('token_candles_1m','DELETE'),
-  ('token_candles_1m','TRUNCATE'),('token_candles_1m','REFERENCES'),('token_candles_1m','TRIGGER')
+  ('token_candles_1m','TRUNCATE'),('token_candles_1m','REFERENCES'),('token_candles_1m','TRIGGER'),
+  ('token_candles_1s','INSERT'),('token_candles_1s','UPDATE'),('token_candles_1s','DELETE'),
+  ('token_candles_1s','TRUNCATE'),('token_candles_1s','REFERENCES'),('token_candles_1s','TRIGGER')
 ) AS p(obj,priv)
 
 UNION ALL
 -- ── 7. applied-state ─────────────────────────────────────────────────────────
 SELECT 'migration recorded: ' || v,
        EXISTS (SELECT 1 FROM public.schema_migrations WHERE version = v)
-FROM unnest(ARRAY['000','001','002','003','004','005','006','007']) AS v
+FROM unnest(ARRAY['000','001','002','003','004','005','006','007','008']) AS v
 
 ORDER BY 2, 1;   -- FALSE rows sort first, so any failure is at the top.

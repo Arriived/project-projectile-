@@ -22,7 +22,7 @@
 
    None filters by chain today. Moreover, `tokens` is keyed only by contract address, the base `trades` table has no `chain_id`, and the checkpoint uses a single fixed ID. A shared project therefore needs appropriate schema, query, write and checkpoint isolation—not merely one list filter. [000_base_schema.sql:28](C:/dev/arc-launch/indexer/migrations/000_base_schema.sql:28), [000_base_schema.sql:58](C:/dev/arc-launch/indexer/migrations/000_base_schema.sql:58), [recovery.js:1](C:/dev/arc-launch/indexer/src/recovery.js:1)
 
-   For a fresh project, apply the numbered migrations through `007` using the verified generated bundle, check the schema, then verify public reads and denied writes using the **anon** key. DDL requires SQL-editor/database privileges; the service-role API credential cannot apply it. [indexer/RUNBOOK.md:7](C:/dev/arc-launch/indexer/RUNBOOK.md:7), [APPLY-ALL.sql:1270](C:/dev/arc-launch/indexer/migrations/APPLY-ALL.sql:1270)
+   For a fresh project, apply the numbered migrations through `008` using the verified generated bundle, check the schema, then verify public reads and denied writes using the **anon** key. DDL requires SQL-editor/database privileges; the service-role API credential cannot apply it. [indexer/RUNBOOK.md:7](C:/dev/arc-launch/indexer/RUNBOOK.md:7), [APPLY-ALL.sql:1292](C:/dev/arc-launch/indexer/migrations/APPLY-ALL.sql:1292)
 
    **If missed:** testnet tokens contaminate mainnet lists, feeds and candles; address collisions can overwrite records. Missing grants can also produce an apparently empty launchpad despite populated tables.
 

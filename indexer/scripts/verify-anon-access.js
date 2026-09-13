@@ -44,7 +44,7 @@ async function trueCount(table) {
 
 (async () => {
   console.log("=== anon CAN read public data ===");
-  for (const t of ["tokens_with_volume", "tokens", "trades"]) {
+  for (const t of ["tokens_with_volume", "token_candles_1s", "tokens", "trades"]) {
     const r = await fetch(`${URL}/rest/v1/${t}?select=*&limit=100`, { headers: anonH });
     const b = await r.json().catch(() => null);
     const n = Array.isArray(b) ? b.length : -1;
