@@ -59,20 +59,31 @@ const BASE_V4_CONTROLS = [
   ["v4 PositionManager (BASE addr, control)", "0x7c5f5a4bbd8fd63184577525326123b519429bdc"],
 ];
 
-// The four §15.2 records as verified on Base. Same list, same order, so the two runs
-// are directly comparable.
+// Required calls made by BallistaV4Adapter to its v4 infrastructure.
+// getSlot0 is a StateLibrary extension; the external call is extsload(bytes32).
+// Keep this list tied to executable call sites with test/ArcV4Preflight.test.js.
 const SELECTORS = {
   permit2: [
     ["0x87517c45", "approve(address,address,uint160,uint48)"],
-    ["0x36c78516", "transferFrom(address,address,uint160,address)"],
-    ["0x927da105", "allowance(address,address,address)"],
+  ],
+  poolm: [
+    ["0x6276cbbe", "initialize((address,address,uint24,int24,address),uint160)"],
+    ["0x1e2eaeaf", "extsload(bytes32)"],
   ],
   posm: [
     ["0xdd46508f", "modifyLiquidities(bytes,uint256)"],
-    ["0xf7020405", "initializePool((address,address,uint24,int24,address),uint160)"],
     ["0x75794a3c", "nextTokenId()"],
+    ["0x1efeed33", "getPositionLiquidity(uint256)"],
+    ["0x6352211e", "ownerOf(uint256)"],
   ],
 };
+
+// Extra diagnostics, not direct adapter calls: PositionManager settles through
+// transferFrom; allowance is the harmless live read used below.
+const PERMIT2_DIAGNOSTICS = [
+  ["0x36c78516", "transferFrom(address,address,uint160,address)"],
+  ["0x927da105", "allowance(address,address,address)"],
+];
 
 const size = (code) => (code === "0x" ? 0 : (code.length - 2) / 2);
 
@@ -126,20 +137,34 @@ async function main() {
   // Selector probe. Only meaningful where code exists.
   console.log("\nSELECTOR PROBE (presence in deployed bytecode -- code existing is NOT");
   console.log("evidence that it exposes what we call):");
+  const poolmEntry = v4.find(([l]) => l.startsWith("v4 PoolManager"));
   const posmEntry = v4.find(([l]) => l.startsWith("v4 PositionManager"));
   const targets = [
     ["Permit2", permit2.code, SELECTORS.permit2],
+    ["PoolManager", poolmEntry ? poolmEntry[2].code : "0x", SELECTORS.poolm],
     ["PositionManager", posmEntry ? posmEntry[2].code : "0x", SELECTORS.posm],
   ];
+  const missing = [];
   for (const [name, code, sels] of targets) {
     if (size(code) === 0) {
-      console.log(`  ${name}: NO CODE -- selector probe is meaningless here, skipped`);
+      console.log(`  ${name}: NO CODE -- required target missing`);
+      missing.push(name + ": NO CODE");
       continue;
     }
     for (const [sel, sig] of sels) {
-      const present = code.includes(sel.slice(2));
+      const present = code.toLowerCase().includes(sel.slice(2));
       console.log(`  ${name.padEnd(16)} ${sel} ${present ? "PRESENT" : "ABSENT "}  ${sig}`);
+      if (!present) missing.push(name + ": " + sig);
     }
+  }
+  if (missing.length > 0) {
+    throw new Error("required selector preflight FAILED: " + missing.join("; "));
+  }
+  console.log("  required selector bytes present; this is not proof that live calls succeed");
+
+  console.log("\nPERMIT2 ADDITIONAL DIAGNOSTICS (not direct adapter calls):");
+  for (const [sel, sig] of PERMIT2_DIAGNOSTICS) {
+    console.log(`  ${sel} ${permit2.code.toLowerCase().includes(sel.slice(2)) ? "PRESENT" : "ABSENT "}  ${sig}`);
   }
 
   // A live staticcall, because selector bytes in a blob are weaker evidence than the
@@ -204,7 +229,7 @@ async function main() {
     console.log(`  embeds THIS chain's id as an immutable: ${arcHasOwnChainId}`);
     console.log("  hashes differ ONLY by the cached chainId + DOMAIN_SEPARATOR immutables");
     console.log("  (35 bytes, 2 runs at offsets 6974 and 6983 -- measured, see §15.8)");
-    console.log(`  => the three Permit2 selectors above are verified ON ARC, not merely on Base`);
+    console.log("  required Permit2 selector checked above; auxiliary probes are reported separately");
   }
 
   const anyV4 = v4.some(([, , r]) => r.n > 0);
@@ -216,4 +241,7 @@ async function main() {
   console.log("=".repeat(72));
 }
 
-main().catch((e) => { console.error(String(e.message || e)); process.exit(1); });
+module.exports = { SELECTORS, main };
+if (require.main === module) {
+  main().catch((e) => { console.error(String(e.message || e)); process.exit(1); });
+}
