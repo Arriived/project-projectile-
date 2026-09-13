@@ -292,6 +292,7 @@ console.log("\n── graduated: no stale market cap, and no invented one ──
 const priceSrc = readFileSync(new URL("../src/components/token/PriceAndProgress.tsx", import.meta.url), "utf8");
 const cardSrc = readFileSync(new URL("../src/components/list/TokenCard.tsx", import.meta.url), "utf8");
 const listSrc = readFileSync(new URL("../src/routes/TokenList.tsx", import.meta.url), "utf8");
+const hookSrc = readFileSync(new URL("../src/hooks/useTokenList.ts", import.meta.url), "utf8");
 
 // Strip comments first: every one of these files EXPLAINS the rule in prose that contains
 // the very strings being searched for. A checker that reads its own documentation is the
@@ -300,6 +301,7 @@ const strip = stripComments;
 const price = strip(priceSrc);
 const card = strip(cardSrc);
 const list = strip(listSrc);
+const hook = strip(hookSrc);
 
 check(
   "G1  the token page gates its market-cap figure on graduated",
@@ -373,7 +375,26 @@ check(
   "'None yet' is a claim about data that has not arrived"
 );
 
-const total = 39 + 8;
+check(
+  "G8a terminal source failure renders unavailable, never the healthy empty state",
+  /isLoading, isError \} = useTokenList\(\)/.test(list) &&
+    /if \(isError\)[\s\S]{0,300}list\.unavailableTitle/.test(list)
+);
+check(
+  "G8b an all-failed fallback log scan throws instead of returning an empty success",
+  /let successfulChunks = 0/.test(hook) &&
+    /successfulChunks\+\+/.test(hook) &&
+  /if \(successfulChunks === 0\)\s*\{\s*throw new Error/.test(hook)
+);
+check(
+  "G9 unknown CURVE_TOKEN_SUPPLY stays unknown and renders no numeric market cap",
+  !/curveSupply as bigint \| undefined\) \?\? 0n/.test(list) &&
+    /curveSupply === undefined \? undefined : approxMarketCapUsdc6/.test(card) &&
+    /mcap === undefined \?[\s\S]{0,120}common\.unavailable/.test(card) &&
+    sortTokens([tok({ address: "0xfirst" }), tok({ address: "0xsecond" })], "marketCap", undefined)[0].address === "0xfirst"
+);
+
+const total = 39 + 11;
 console.log(`\n${total - failures}/${total} checks passed`);
 // ⚠ process.exitCode, NOT process.exit(). process.exit() tears the event loop down
 // while the console.log lines above may still be flushing, and on Windows that races

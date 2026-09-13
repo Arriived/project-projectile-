@@ -25,7 +25,7 @@ type TradeRow = {
   usdc_amount: string | number;
   token_amount: string | number;
   block_number: string | number;
-  created_at: string;
+  block_time: string | null;
 };
 
 export function TradesFeed({ token, data }: { token: Address; data: TokenData }) {
@@ -44,7 +44,7 @@ export function TradesFeed({ token, data }: { token: Address; data: TokenData })
       // them is unresolved and this feed does not pretend otherwise.
       const url =
         `${SUPABASE_URL}/rest/v1/trades` +
-        `?select=tx_hash,trader_address,is_buy,usdc_amount,token_amount,block_number,created_at` +
+        `?select=tx_hash,trader_address,is_buy,usdc_amount,token_amount,block_number,block_time` +
         `&token_address=eq.${token}&order=block_number.desc&limit=30`;
       const r = await fetch(url, {
         headers: { apikey: SUPABASE_ANON_KEY!, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
@@ -91,14 +91,16 @@ export function TradesFeed({ token, data }: { token: Address; data: TokenData })
                 <tr key={row.tx_hash}>
                   <td className={row.is_buy ? "buy" : "sell"}>{row.is_buy ? t("trade.buy") : t("trade.sell")}</td>
                   <td className="mono small">{shortAddress(row.trader_address)}</td>
-                  <td>{fmt.usdcCompact(approxBigIntFromIndexer(row.usdc_amount))} USDC</td>
+                  <td>~{fmt.usdcCompact(approxBigIntFromIndexer(row.usdc_amount))} USDC</td>
                   <td className="hint">
                     {/* approx*: token_amount arrives from PostgREST as a JSON number and
                         has ALREADY lost its low digits (trap 21). Fine for a feed, never
                         for anything acted on. */}
                     ~{fmt.tokenCompact(approxBigIntFromIndexer(row.token_amount))} {symbol}
                   </td>
-                  <td className="hint">{fmt.age(row.created_at)}</td>
+                  <td className="hint">
+                    {row.block_time ? fmt.age(row.block_time) : t("common.unavailable")}
+                  </td>
                   <td>
                     <a
                       href={`${EXPLORER_URL}/tx/${row.tx_hash}`}

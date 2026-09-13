@@ -253,6 +253,17 @@ console.log("\n── the component is wired to use all of it ──");
     /localization:\s*\{\s*timeFormatter:\s*\([^)]*\)\s*=>\s*formatLocalCrosshair\(/.test(chart)
   );
 
+  // K24. Candle query failure is a distinct state from a genuinely empty trade history.
+  const tokenPage = stripComments(
+    readFileSync(new URL("../src/routes/TokenPage.tsx", import.meta.url), "utf8")
+  );
+  check(
+    "K24 candle query errors are passed through and win over the flat no-trades state",
+    /isError=\{candles\.isError\}/.test(tokenPage) &&
+      /\{isError \? \([\s\S]*chart\.unavailable[\s\S]*\) : isLoading/.test(chart) &&
+      /!isError && isFlatLaunch/.test(chart)
+  );
+
   // K23. Item 4: the attribution CSS override actually cancels the library's own
   // bottom-left placement rather than merely adding a competing declaration.
   const css = stripComments(readFileSync(new URL("../src/styles.css", import.meta.url), "utf8"));

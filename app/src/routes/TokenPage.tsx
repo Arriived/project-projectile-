@@ -139,6 +139,7 @@ function TokenPageInner({ token }: { token: `0x${string}` }) {
               isFlatLaunch={candles.isFlatLaunch}
               isHistoryUnchartable={candles.isHistoryUnchartable}
               isLoading={candles.isLoading}
+              isError={candles.isError}
             />
           </Suspense>
         </div>

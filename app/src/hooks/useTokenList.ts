@@ -133,6 +133,7 @@ export function useTokenList(): TokenListResult {
       const from = head > span ? head - span : 0n;
 
       const created: { address: string; block: bigint }[] = [];
+      let successfulChunks = 0;
       for (let start = from; start <= head; start += CHUNK) {
         const end = start + CHUNK - 1n > head ? head : start + CHUNK - 1n;
         try {
@@ -144,6 +145,7 @@ export function useTokenList(): TokenListResult {
             fromBlock: start,
             toBlock: end,
           });
+          successfulChunks++;
           for (const l of logs) {
             created.push({ address: l.args.token as string, block: l.blockNumber ?? 0n });
           }
@@ -151,6 +153,9 @@ export function useTokenList(): TokenListResult {
           // A chunk the RPC refuses is a gap, not a failure. Keep what was read and let
           // the UI say the list is partial.
         }
+      }
+      if (successfulChunks === 0) {
+        throw new Error("RPC refused every token-list log range");
       }
       return { created, from };
     },

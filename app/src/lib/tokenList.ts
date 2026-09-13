@@ -189,7 +189,7 @@ export function matchesSearch(t: ListToken, query: string): boolean {
  * sorting it as though its buy happened at block 0 would bury it below tokens that at
  * least exist -- which is the same thing, but says so.
  */
-export function sortTokens(tokens: ListToken[], sort: SortKey, curveSupply: bigint): ListToken[] {
+export function sortTokens(tokens: ListToken[], sort: SortKey, curveSupply: bigint | undefined): ListToken[] {
   const out = [...tokens];
   switch (sort) {
     case "recentBuys":
@@ -206,6 +206,7 @@ export function sortTokens(tokens: ListToken[], sort: SortKey, curveSupply: bigi
     case "oldest":
       return out.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     case "marketCap":
+      if (curveSupply === undefined) return out;
       return out.sort((a, b) => {
         const ma = approxMarketCapUsdc6(a, curveSupply);
         const mb = approxMarketCapUsdc6(b, curveSupply);

@@ -140,6 +140,15 @@ const base = {
 };
 {
   check("C6a a clean draft with funds can launch", launchBlocker(base) === null);
+  check(
+    "C6b unknown fee, cooldown, balance, or last-launch state fails closed",
+    [
+      launchBlocker({ ...base, creationFee: undefined }),
+      launchBlocker({ ...base, launchCooldown: undefined }),
+      launchBlocker({ ...base, usdcBalance: undefined }),
+      launchBlocker({ ...base, lastLaunchTimestamp: undefined }),
+    ].every((blocker) => blocker?.kind === "unavailable")
+  );
 
   const cooling = launchBlocker({
     ...base,
@@ -201,6 +210,10 @@ console.log("\n── economics hash freshness ──");
   // `allowance < fee && creationFeeNeedsApproval(allowance, fee)` keeps the call and
   // restores the skip.
   const code = stripComments(src);
+  const tradeSrc = await import("node:fs").then((fs) =>
+    fs.readFileSync(new URL("../src/components/token/TradePanel.tsx", import.meta.url), "utf8")
+  );
+  const tradeCode = stripComments(tradeSrc);
   const INLINE_COMPARE = /\ballowance\s*[<>]=?\s*fee\b|\bfee\s*[<>]=?\s*allowance\b/;
   const callsRule = /creationFeeNeedsApproval\(\s*allowance\s*,\s*fee\s*\)/.test(code);
   const inline = code.match(INLINE_COMPARE);
@@ -221,6 +234,13 @@ console.log("\n── economics hash freshness ──");
       INLINE_COMPARE.test(s)
     ) && !INLINE_COMPARE.test("creationFeeNeedsApproval(allowance, fee)"),
     "otherwise its negative half is vacuous"
+  );
+  check(
+    "C14 create and trade require a successful receipt plus their expected event before success",
+    /receipt\.status !== "success"[\s\S]{0,160}throw new Error/.test(code) &&
+      /if \(!launched\)[\s\S]{0,100}throw new Error/.test(code) &&
+      /receipt\.status !== "success"[\s\S]{0,300}toast\.bad[\s\S]{0,200}return/.test(tradeCode) &&
+      /else \{\s*const message = t\("trade\.receiptMissingTrade"\)[\s\S]{0,240}toast\.bad[\s\S]{0,160}return/.test(tradeCode)
   );
 }
 

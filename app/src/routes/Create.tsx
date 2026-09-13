@@ -317,6 +317,9 @@ export function Create() {
       }
 
       const receipt = await client.waitForTransactionReceipt({ hash });
+      if (receipt.status !== "success") {
+        throw new Error(t("create.receiptReverted"));
+      }
 
       // The launched address comes from the RECEIPT, not from a return value: a
       // transaction's return data is not available to a sender, so the TokenCreated event
@@ -332,6 +335,10 @@ export function Create() {
         } catch {
           // Not one of ours; skip.
         }
+      }
+
+      if (!launched) {
+        throw new Error(t("create.receiptMissingToken"));
       }
 
       setPhase("done");
@@ -437,11 +444,11 @@ export function Create() {
       ))}
 
       <div className="create-fee">
-        {creationFee !== undefined && (
-          <span>
-            {t("create.feeLabel")} {fmt.usdcExact(creationFee as bigint)} USDC
-          </span>
-        )}
+        <span>
+          {t("create.feeLabel")} {creationFee === undefined
+            ? t("common.unavailable")
+            : `${fmt.usdcExact(creationFee as bigint)} USDC`}
+        </span>
       </div>
 
       <button
@@ -465,6 +472,7 @@ export function Create() {
             t("create.blockCooldown", { seconds: blocker.secondsRemaining })}
           {blocker.kind === "insufficientUsdc" &&
             t("create.blockFunds", { needed: fmt.usdcExact(blocker.needed) })}
+          {blocker.kind === "unavailable" && t("create.blockUnavailable")}
         </p>
       )}
 

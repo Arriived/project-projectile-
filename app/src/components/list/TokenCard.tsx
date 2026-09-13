@@ -52,7 +52,7 @@ export function TokenCard({
   degraded,
 }: {
   token: ListToken;
-  curveSupply: bigint;
+  curveSupply: bigint | undefined;
   /** Chain-fallback mode: identity only, so figures are omitted rather than zeroed. */
   degraded?: boolean;
 }) {
@@ -64,7 +64,7 @@ export function TokenCard({
   const name = safeText(token.name, 40) || t("token.unnamed");
   const symbol = safeText(token.symbol, 16);
 
-  const mcap = approxMarketCapUsdc6(token, curveSupply);
+  const mcap = curveSupply === undefined ? undefined : approxMarketCapUsdc6(token, curveSupply);
   const pct = approxProgressBps(token) / 100;
   const labelKind = progressLabelKind(token, MIN_RENDERABLE_PCT);
 
@@ -106,8 +106,11 @@ export function TokenCard({
           <>
             <div className="tcard-figs">
               <span>
-                {t("list.marketCap")} <Approx />
-                {fmt.usdcCompact(mcap)}
+                {t("list.marketCap")} {mcap === undefined ? (
+                  <span className="hint">{t("common.unavailable")}</span>
+                ) : (
+                  <><Approx />{fmt.usdcCompact(mcap)}</>
+                )}
               </span>
             </div>
             <div className="tcard-progress">

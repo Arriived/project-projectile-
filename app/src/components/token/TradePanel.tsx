@@ -160,6 +160,16 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
   useEffect(() => {
     if (!receipt || !address) return;
 
+    if (receipt.status !== "success") {
+      const message = t("trade.receiptReverted");
+      setSettled(null);
+      setStatus(message);
+      toast.bad(t("toast.tradeFailed"), message);
+      balances.refetch();
+      data.refetch();
+      return;
+    }
+
     let settledUsdc: bigint | undefined;
     let settledTokens: bigint | undefined;
 
@@ -220,10 +230,13 @@ export function TradePanel({ token, data }: { token: Address; data: TokenData })
             })
       );
     } else {
-      // No Trade event from us in this receipt. Say that rather than inventing a figure
-      // from a balance read that may have been raced.
-      setSettled(t("trade.settledUnknown"));
-      toast.ok(t("toast.confirmedTitle"), t("trade.settledUnknown"));
+      const message = t("trade.receiptMissingTrade");
+      setSettled(null);
+      setStatus(message);
+      toast.bad(t("toast.tradeFailed"), message);
+      balances.refetch();
+      data.refetch();
+      return;
     }
 
     balances.refetch();

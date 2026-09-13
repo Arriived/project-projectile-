@@ -129,6 +129,8 @@ export const en = {
     fdv: "FDV",
     marketCapGraduated: "Price now comes from the pool",
     noTokens: "No tokens have been launched yet.",
+    unavailableTitle: "Token list unavailable.",
+    unavailableBody: "Neither the indexer nor the Arc RPC could be reached. Try again shortly.",
     noTokensCta: "Launch the first one",
     noMatches: "Nothing matches “{query}”.",
     clearSearch: "Clear search",
@@ -233,6 +235,8 @@ export const en = {
     launch: "Launch",
     approving: "Approving the fee — check your wallet…",
     launching: "Launching — check your wallet…",
+    receiptReverted: "The launch transaction reverted. No token was launched.",
+    receiptMissingToken: "The transaction completed without a TokenCreated event. No launch was confirmed.",
     errNameEmpty: "A name is required.",
     errSymbolEmpty: "A symbol is required.",
     warnSymbolLong:
@@ -244,6 +248,7 @@ export const en = {
     blockChain: "Switch to {chain} to launch.",
     blockCooldown: "Wait {seconds}s — one launch per address at a time.",
     blockFunds: "You need about {needed} USDC — the fee plus gas, which is also USDC.",
+    blockUnavailable: "Launch settings or your USDC balance could not be read. Try again shortly.",
   },
 
   wallet: {
@@ -406,6 +411,8 @@ export const en = {
     cancelled: "Cancelled — nothing was sent.",
     cannotFill: "The curve cannot fill this trade right now. Try a smaller amount.",
     wouldFail: "This trade would fail on chain right now. The curve may have moved.",
+    receiptReverted: "The trade transaction reverted. No trade was confirmed.",
+    receiptMissingTrade: "The transaction completed without a matching Trade event. No trade was confirmed.",
     // A4: these report the amounts THIS TRANSACTION moved, decoded from its own Trade
     // event. Not a balance read afterwards, which a concurrent trade or the gas deduction
     // could have raced.

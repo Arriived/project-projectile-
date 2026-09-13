@@ -143,6 +143,7 @@ export type LaunchBlocker =
   | { kind: "cooldown"; secondsRemaining: number }
   | { kind: "insufficientUsdc"; needed: bigint; have: bigint }
   | { kind: "validation" }
+  | { kind: "unavailable" }
   | null;
 
 /**
@@ -171,19 +172,23 @@ export function launchBlocker(input: {
   if (!input.isConnected) return { kind: "notConnected" };
   if (!input.canTransact) return { kind: "wrongChain" };
   if (blocksSubmission(input.issues)) return { kind: "validation" };
-
-  if (input.lastLaunchTimestamp !== undefined && input.launchCooldown !== undefined) {
-    const ready = Number(input.lastLaunchTimestamp) + Number(input.launchCooldown);
-    if (input.nowSeconds < ready) {
-      return { kind: "cooldown", secondsRemaining: ready - input.nowSeconds };
-    }
+  if (
+    input.lastLaunchTimestamp === undefined ||
+    input.launchCooldown === undefined ||
+    input.usdcBalance === undefined ||
+    input.creationFee === undefined
+  ) {
+    return { kind: "unavailable" };
   }
 
-  if (input.creationFee !== undefined && input.usdcBalance !== undefined) {
-    const needed = input.creationFee + input.gasReserve;
-    if (input.usdcBalance < needed) {
-      return { kind: "insufficientUsdc", needed, have: input.usdcBalance };
-    }
+  const ready = Number(input.lastLaunchTimestamp) + Number(input.launchCooldown);
+  if (input.nowSeconds < ready) {
+    return { kind: "cooldown", secondsRemaining: ready - input.nowSeconds };
+  }
+
+  const needed = input.creationFee + input.gasReserve;
+  if (input.usdcBalance < needed) {
+    return { kind: "insufficientUsdc", needed, have: input.usdcBalance };
   }
 
   return null;

@@ -50,7 +50,7 @@ const WINDOW_KEY: Record<TimeWindow, "list.windowAll" | "list.window24h" | "list
 
 export function TokenList() {
   const { t } = useT();
-  const { tokens, source, unavailable, scannedFromBlock, isLoading } = useTokenList();
+  const { tokens, source, unavailable, scannedFromBlock, isLoading, isError } = useTokenList();
 
   const [query, setQuery] = useState("");
   // DEFAULT_SORT is recentBuys, set explicitly in lib/tokenList.ts. Not Newest, which
@@ -68,7 +68,7 @@ export function TokenList() {
     chainId: arc.id,
     functionName: "CURVE_TOKEN_SUPPLY",
   });
-  const supply = (curveSupply as bigint | undefined) ?? 0n;
+  const supply = curveSupply as bigint | undefined;
 
   const filtered = useMemo(() => tokens.filter((x) => matchesSearch(x, query)), [tokens, query]);
   const graduated = useMemo(() => filtered.filter((x) => x.graduated), [filtered]);
@@ -78,6 +78,17 @@ export function TokenList() {
   );
 
   const degraded = source === "chain";
+
+  if (isError) {
+    return (
+      <main className="main list">
+        <div className="card card-err" role="alert">
+          <strong>{t("list.unavailableTitle")}</strong>
+          <p className="hint">{t("list.unavailableBody")}</p>
+        </div>
+      </main>
+    );
+  }
 
   return (
     <main className="main list">

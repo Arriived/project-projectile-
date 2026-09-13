@@ -126,6 +126,7 @@ export function PriceChart({
   isFlatLaunch,
   isHistoryUnchartable,
   isLoading,
+  isError,
 }: {
   points: PricePoint[];
   candles: Candle[];
@@ -137,6 +138,7 @@ export function PriceChart({
   isFlatLaunch: boolean;
   isHistoryUnchartable: boolean;
   isLoading: boolean;
+  isError: boolean;
 }) {
   const { t, locale } = useT();
   const { theme } = useTheme();
@@ -325,7 +327,7 @@ export function PriceChart({
         {/* ⚠ SAY WHY THE LINE IS FLAT. A brand-new token's chart is flat, and without a
             label that is indistinguishable from a broken feed -- at precisely the moment
             the creator and their first buyers are looking hardest. */}
-        {isFlatLaunch && <span className="hint">{t("chart.noTradesYet")}</span>}
+        {!isError && isFlatLaunch && <span className="hint">{t("chart.noTradesYet")}</span>}
         {/* Has traded, but the history predates the reserve columns and cannot be
             recovered. Saying "no trades yet" here would be checkably false. */}
         {isHistoryUnchartable && <span className="hint">{t("chart.historyUnavailable")}</span>}
@@ -358,7 +360,9 @@ export function PriceChart({
         )}
       </div>
 
-      {isLoading && !hasChart ? (
+      {isError ? (
+        <p className="hint chart-empty">{t("chart.unavailable")}</p>
+      ) : isLoading && !hasChart ? (
         <div className="chart-skeleton" aria-hidden />
       ) : !hasChart ? (
         <p className="hint chart-empty">{t("chart.unavailable")}</p>
