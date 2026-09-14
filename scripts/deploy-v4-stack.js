@@ -27,7 +27,7 @@
 // ⚠ THREE CONSECUTIVE NONCES, NO GAPS. Any unrelated transaction from this key between
 // them shifts the rest and invalidates the mined salt. The runbook requires a DEDICATED
 // deployment key that signs nothing else, ever -- not a test transaction, not an approval.
-// The nonce is re-read and asserted immediately before each of the two later deploys.
+// The nonce is re-read and asserted immediately before every transaction in the sequence.
 //
 // ⚠ initialRouter_ IS BEHIND A DELIBERATE FLAG. Without --bootstrap-router it is
 // address(0), createToken reverts RouterNotSet (LFX1.sol:310), and the only route to a
@@ -103,6 +103,16 @@ async function requireCode(addresses, controls) {
 async function main() {
   const [deployer] = await ethers.getSigners();
   const net = await ethers.provider.getNetwork();
+  const configuredChainId = hre.network.config && hre.network.config.chainId;
+  if (!Number.isSafeInteger(configuredChainId)) {
+    throw new Error("selected Hardhat network has no integer chainId. ABORT.");
+  }
+  if (net.chainId !== BigInt(configuredChainId)) {
+    throw new Error(
+      `CHAIN ID MISMATCH: selected network ${hre.network.name} expects ${configuredChainId}, ` +
+      `provider returned ${net.chainId}. ABORT.`
+    );
+  }
 
   const POOL_MANAGER = arg("poolManager");
   const POSITION_MANAGER = arg("positionManager");
@@ -222,7 +232,7 @@ async function main() {
   if (!EXECUTE) {
     console.log("\nSTEPS 3-6 — not executed (plan only)");
     console.log("\n  Re-run with --execute to send. The nonce is re-read and asserted");
-    console.log("  before EACH of the two later deploys, and the binding is read back in");
+    console.log("  before EACH deployment, and the binding is read back in");
     console.log("  both directions before any next step is suggested.");
     console.log("");
     return;
@@ -230,6 +240,7 @@ async function main() {
 
   // ── Step 3: the hook, via CREATE2 ──────────────────────────────────────────────
   console.log("\nSTEP 3 — deploy the hook (CREATE2)");
+  await requireNonce(deployer, hookNonce, "hook CREATE2");
   await (await deployer.sendTransaction({
     to: ARACHNID_CREATE2_DEPLOYER,
     data: ethers.concat([found.salt, initCode]),
