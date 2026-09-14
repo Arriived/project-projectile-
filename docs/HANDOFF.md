@@ -150,10 +150,17 @@ unless re-run:**
   §16.2, may hang rather than fail if run against a shared public endpoint under load.
 - Frontend (`npm run verify` in `app/`): **SUITES=18, CHECKS=541, FAILED=0**.
 
-**Contract.** `0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b` on Arc Testnet — `eth_getCode`
-against `https://rpc.testnet.arc.io` this session returned **24,033 bytes**, matching
-`deployments/arcTestnet.json`. No mainnet deployment exists yet; `deployments/` holds only
-`arcTestnet.json`.
+**Contracts.** The frozen v2 factory remains
+`0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b` on Arc Testnet — `eth_getCode` against
+`https://rpc.testnet.arc.io` returned **24,033 bytes**, matching
+`deployments/arcTestnet.json`. The first v4 stack is now live on Arc private mainnet:
+hook `0xAd1286D1c8Cb5359334B084ACB4dbB6879462044`, adapter
+`0xA2C27DbC84b602d9496799096a133043B81d5799`, and LFX1
+`0x1629a7449f5F799eE0Ac04313a1A61D9FF43eA7f`. All seven bindings read back exactly;
+receipts, gas and constructor arguments are recorded in `deployments/arcMainnet.json` and
+`CLAUDE.md` §23.9. This is a rehearsal stack. Its treasury and immutable hook protocol
+recipient are the testnet key `0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb` and must not
+carry into production.
 
 ## 5. What is frozen and cannot change
 
@@ -170,8 +177,10 @@ against `https://rpc.testnet.arc.io` this session returned **24,033 bytes**, mat
   - `contracts/BallistaFeeHook.sol`: `lfx1`, `usdc`, `protocolRecipient`, `adapter`
     immutables (lines 71–74). Runtime gate: `beforeInitialize` requires
     `sender == adapter` (line 215, `NotAdapter`).
-  - Neither contract is deployed anywhere — no v4-stack entry exists in `deployments/`.
-    Built, tested locally and against a real Base fork; unpublished.
+  - The first pair is deployed on Arc private mainnet at the addresses above and bound to
+    the rehearsal LFX1. `--bootstrap-router` spent that factory's one untimelocked router
+    activation; later router changes require the full 24-hour timelock. No token had been
+    created when the deployment record was written.
 - **Recovery depends on whether graduation has happened** (`CLAUDE.md` §24.5).
   Already-graduated pools retain their immutable hook in the `PoolKey`; a replacement hook
   makes a different pool and cannot migrate the old pool's burned liquidity.

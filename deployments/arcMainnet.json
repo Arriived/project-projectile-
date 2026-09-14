@@ -1,0 +1,105 @@
+{
+  "network": "arcMainnet",
+  "chainId": 5042,
+  "deploymentKind": "private-mainnet rehearsal",
+  "commit": "8109641fdc6cd116acf5b20a95fe5ef7e66756cf",
+  "commitShort": "8109641",
+  "commitDirty": true,
+  "trackedFilesDirty": false,
+  "dirtyNote": "The only status entry was the pre-existing untracked .claude/settings.local.json; tracked sources and deployment artifacts matched the recorded commit.",
+  "rpc": "https://rpc.arc-scan.org",
+  "deployer": "0x0162C048740aF730c3a20F18A1B8E7B505198cFE",
+  "usdc": "0x3600000000000000000000000000000000000000",
+  "treasury": "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
+  "treasuryNote": "Rehearsal value and existing testnet key. The immutable hook protocol recipient must not carry into production.",
+  "bootstrapRouter": true,
+  "bootstrapRouterNote": "Spent LFX1's one untimelocked constructor router activation; every later router change requires proposeRouter plus the 24-hour timelock.",
+  "poolManager": "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+  "positionManager": "0x6049c9a0e26405c0985f9e3685c87d0ae917f82b",
+  "permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+  "hook": {
+    "address": "0xAd1286D1c8Cb5359334B084ACB4dbB6879462044",
+    "transactionHash": "0x0fc4c09555e619eb42827e70b26ac426cb5a7ef1e162d1aeff2a054737cc915f",
+    "blockNumber": 20801402,
+    "transactionIndex": 0,
+    "nonce": 0,
+    "runtimeBytes": 8153,
+    "salt": "0x000000000000000000000000000000000000000000000000000000000000155c",
+    "saltTries": 5469,
+    "initCodeHash": "0x16494ff27ff14e173730e7ee9eb5c699312fed6e3e61e4d23caf4c83b81acde2",
+    "flagBits": "0x2044",
+    "flags": [
+      "BEFORE_INITIALIZE_FLAG",
+      "AFTER_SWAP_FLAG",
+      "AFTER_SWAP_RETURNS_DELTA_FLAG"
+    ],
+    "constructorArgs": [
+      "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+      "0x1629a7449f5F799eE0Ac04313a1A61D9FF43eA7f",
+      "0x3600000000000000000000000000000000000000",
+      "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
+      "0xA2C27DbC84b602d9496799096a133043B81d5799"
+    ]
+  },
+  "adapter": {
+    "address": "0xA2C27DbC84b602d9496799096a133043B81d5799",
+    "transactionHash": "0xe2e77a888983d3f2b63637156b117c3114f0487e643f2f5a770faf1e7d2268bf",
+    "blockNumber": 20801433,
+    "transactionIndex": 2,
+    "nonce": 1,
+    "constructorArgs": [
+      "0x8366a39CC670B4001A1121B8F6A443A643e40951",
+      "0x6049c9a0e26405c0985f9e3685c87d0ae917f82b",
+      "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+      "0x1629a7449f5F799eE0Ac04313a1A61D9FF43eA7f",
+      "0xAd1286D1c8Cb5359334B084ACB4dbB6879462044"
+    ]
+  },
+  "lfx1": {
+    "address": "0x1629a7449f5F799eE0Ac04313a1A61D9FF43eA7f",
+    "transactionHash": "0xba29f40fc7204234c4e5286264e4eb7d089f73f026136b13ff1f2170c93e5874",
+    "blockNumber": 20801445,
+    "transactionIndex": 4,
+    "nonce": 2,
+    "constructorArgs": [
+      "0x3600000000000000000000000000000000000000",
+      "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
+      "0xA2C27DbC84b602d9496799096a133043B81d5799"
+    ]
+  },
+  "bindingReadback": {
+    "hook.adapter": "0xA2C27DbC84b602d9496799096a133043B81d5799",
+    "hook.lfx1": "0x1629a7449f5F799eE0Ac04313a1A61D9FF43eA7f",
+    "hook.usdc": "0x3600000000000000000000000000000000000000",
+    "hook.protocolRecipient": "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
+    "adapter.hook": "0xAd1286D1c8Cb5359334B084ACB4dbB6879462044",
+    "adapter.lfx1": "0x1629a7449f5F799eE0Ac04313a1A61D9FF43eA7f",
+    "lfx1.router": "0xA2C27DbC84b602d9496799096a133043B81d5799"
+  },
+  "gas": {
+    "hook": {
+      "gasUsed": 1831590,
+      "effectiveGasPriceWei": "20000000001",
+      "costUsdc": "0.03663180000183159"
+    },
+    "adapter": {
+      "gasUsed": 1642664,
+      "effectiveGasPriceWei": "25312500000",
+      "costUsdc": "0.0415799325"
+    },
+    "lfx1": {
+      "gasUsed": 5608406,
+      "effectiveGasPriceWei": "25312500000",
+      "costUsdc": "0.141962776875"
+    },
+    "totalGasUsed": 9082660,
+    "totalCostWei": "220174509376831590",
+    "totalCostUsdc": "0.22017450937683159",
+    "estimateAt20GweiGas": 9173963,
+    "estimateAt20GweiCostUsdc": "0.18347926",
+    "baseFeeQualification": "20 gwei is the recorded floor, not a fixed transaction price. Every cost derived from 20 gwei is a lower bound."
+  },
+  "deployerRemainingBalanceWei": "4779825490623168410",
+  "deployerRemainingBalanceUsdc": "4.77982549062316841",
+  "recordedAt": "2026-09-14T09:56:58.6243039Z"
+}

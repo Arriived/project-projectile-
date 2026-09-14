@@ -6953,6 +6953,52 @@ The supplied treasury is a **rehearsal value only**. Production treasury and hoo
 recipient remain undecided; `protocolRecipient` is immutable (`BallistaFeeHook.sol:73`,
 :153-167). Constructor-specific gas probes 21 and 22 must be repeated with the production
 recipient and final predicted addresses before the real deploy.
+
+## 23.9 First Ballista v4 stack on Arc private mainnet — deployed 14 September 2026
+
+**VERIFIED on chain 5042; no token was created during deployment.** Machine-readable
+receipt, constructor and binding data is in `deployments/arcMainnet.json`.
+
+| contract | address | transaction | block | gas used | effective gas price | cost |
+|---|---|---|---:|---:|---:|---:|
+| `BallistaFeeHook` | `0xAd1286D1c8Cb5359334B084ACB4dbB6879462044` | `0x0fc4c09555e619eb42827e70b26ac426cb5a7ef1e162d1aeff2a054737cc915f` | 20,801,402 | 1,831,590 | 20,000,000,001 wei (~20 gwei) | 0.03663180000183159 USDC |
+| `BallistaV4Adapter` | `0xA2C27DbC84b602d9496799096a133043B81d5799` | `0xe2e77a888983d3f2b63637156b117c3114f0487e643f2f5a770faf1e7d2268bf` | 20,801,433 | 1,642,664 | 25,312,500,000 wei (25.3125 gwei) | 0.0415799325 USDC |
+| `LFX1` | `0x1629a7449f5F799eE0Ac04313a1A61D9FF43eA7f` | `0xba29f40fc7204234c4e5286264e4eb7d089f73f026136b13ff1f2170c93e5874` | 20,801,445 | 5,608,406 | 25,312,500,000 wei (25.3125 gwei) | 0.141962776875 USDC |
+
+**Actual total: 9,082,660 gas and 0.22017450937683159 USDC.** The pre-deploy
+9,173,963-gas estimate was ~0.18347926 USDC **at 20 gwei**. Section 23.8's "base fee
+pinned at 20 gwei" is a floor, not a fixed transaction price: the second and third
+transactions paid 25.3125 gwei. Every USDC cost derived from 20 gwei is therefore a lower
+bound. The deployer ended at 4.77982549062316841 USDC.
+
+The hook used salt
+`0x000000000000000000000000000000000000000000000000000000000000155c`, found after
+**5,469 tries**, against init-code hash
+`0x16494ff27ff14e173730e7ee9eb5c699312fed6e3e61e4d23caf4c83b81acde2`.
+Its address ends `…462044`; the low 14 bits are **exactly `0x2044`**:
+`BEFORE_INITIALIZE_FLAG + AFTER_SWAP_FLAG + AFTER_SWAP_RETURNS_DELTA_FLAG`.
+
+**All seven immutable/live bindings read back exactly:**
+
+| read | value |
+|---|---|
+| `hook.adapter()` | `0xA2C27DbC84b602d9496799096a133043B81d5799` |
+| `hook.lfx1()` | `0x1629a7449f5F799eE0Ac04313a1A61D9FF43eA7f` |
+| `hook.usdc()` | `0x3600000000000000000000000000000000000000` |
+| `hook.protocolRecipient()` | `0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb` |
+| `adapter.hook()` | `0xAd1286D1c8Cb5359334B084ACB4dbB6879462044` |
+| `adapter.lfx1()` | `0x1629a7449f5F799eE0Ac04313a1A61D9FF43eA7f` |
+| `lfx1.router()` | `0xA2C27DbC84b602d9496799096a133043B81d5799` |
+
+`--bootstrap-router` was used, spending this LFX1 constructor's one untimelocked router
+activation. Any later router requires `proposeRouter`, the full 24-hour wait, and
+`activateRouter`.
+
+⚠ **REHEARSAL IDENTITY, NOT PRODUCTION CONFIGURATION.** Both LFX1's mutable treasury and
+the hook's immutable protocol recipient are
+`0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb`, the existing testnet key. This value must not
+carry into production. Changing LFX1's treasury later cannot change this hook's immutable
+recipient; production needs a separately deployed stack with the final recipient embedded.
 ---
 
 # 24. SESSION OF 11 SEPTEMBER 2026 (continued) — step 2 closed out, a report-only audit, and the handover
