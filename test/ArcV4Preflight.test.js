@@ -11,6 +11,17 @@ const read = (file) => fs.readFileSync(path.join(ROOT, file), "utf8");
 const ast = (file) => parser.parse(read(file));
 const abi = (file) => new ethers.Interface(JSON.parse(read(file)).abi);
 
+// CLAUDE.md §23.8, measured on the Circle-contact Arc mainnet endpoint.
+const SECTION_4_MAINNET = [
+  ["USDC (ERC-20 view)", "0x3600000000000000000000000000000000000000", 1798],
+  ["Multicall3", "0xcA11bde05977b3631167028862bE2a173976CA11", 3808],
+  ["Permit2", "0x000000000022D473030F116dDEE9F6B43aC78BA3", 9152],
+  ["v4 PoolManager     (arc mainnet measured)", "0x8366a39CC670B4001A1121B8F6A443A643e40951", 24009],
+  ["v4 PositionManager (arc mainnet measured)", "0x6049c9a0e26405c0985f9e3685c87d0ae917f82b", 23877],
+  ["v4 StateView       (arc mainnet measured)", "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b", 3531],
+  ["v4 Quoter          (arc mainnet measured)", "0x8dc178efb8111bb0973dd9d722ebeff267c98f94", 6118],
+];
+
 function calls(tree, receiver) {
   const found = [];
   parser.visit(tree, {
@@ -80,8 +91,8 @@ function loadPreflight(expected, options = {}) {
   const omit = options.omit || {};
   const candidateAddresses = configuredChainId === 5042 ? {
     permit2: "0x000000000022d473030f116ddee9f6b43ac78ba3",
-    poolm: "0x8366ef8116b6e6fa66119069092c9b4ea3f5e2b2",
-    posm: "0x4b2c77d209d3405f41a037ec6c77f7f5b8e2ca80",
+    poolm: "0x8366a39cc670b4001a1121b8f6a443a643e40951",
+    posm: "0x6049c9a0e26405c0985f9e3685c87d0ae917f82b",
   } : {
     permit2: "0x000000000022d473030f116ddee9f6b43ac78ba3",
     poolm: "0x8366a39cc670b4001a1121b8f6a443a643e40951",
@@ -123,6 +134,7 @@ function loadPreflight(expected, options = {}) {
     },
     console: { log: (line) => logs.push(String(line)), error: (line) => logs.push(String(line)) },
     process: { exit: () => { throw new Error("unexpected process.exit"); } },
+    setTimeout: (callback) => callback(),
   };
   vm.runInNewContext(fs.readFileSync(PREFLIGHT, "utf8"), sandbox, { filename: PREFLIGHT });
   return { ...sandbox.module.exports, logs };
@@ -178,5 +190,35 @@ describe("Arc v4 preflight", function () {
     expect(error && error.message).to.equal(
       "expected configured chain 5042, got 5042002 -- refusing to report"
     );
+  });
+
+  it("P5 mainnet profile exactly matches the Section 4 measured address set", function () {
+    const expected = requiredFromAdapter();
+    const { CHAIN_PROFILES } = loadPreflight(expected, { configuredChainId: 5042 });
+    const configured = JSON.parse(JSON.stringify([
+      ...CHAIN_PROFILES[5042].knownGood, ...CHAIN_PROFILES[5042].v4,
+    ]));
+    expect(configured).to.deep.equal(SECTION_4_MAINNET.map(([label, address]) => [label, address]));
+  });
+
+  it("P6 transient RPC read failures back off and recover", async function () {
+    const expected = requiredFromAdapter();
+    const fixture = loadPreflight(expected);
+    let calls = 0;
+    const value = await fixture.readWithRetry("fixture", async () => {
+      calls++;
+      if (calls < 3) {
+        const error = new Error("503 Service Unavailable");
+        error.code = -32603;
+        throw error;
+      }
+      return "answer";
+    });
+    expect(value).to.equal("answer");
+    expect(calls).to.equal(3);
+    expect(fixture.logs).to.deep.include.members([
+      "  RPC read failed (fixture); retry 2/8 in 250ms: 503 Service Unavailable",
+      "  RPC read failed (fixture); retry 3/8 in 500ms: 503 Service Unavailable",
+    ]);
   });
 });

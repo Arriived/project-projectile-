@@ -53,8 +53,8 @@ const CHAIN_PROFILES = {
     knownGood: [USDC, MULTICALL3, PERMIT2],
     candidateLabel: "measured Arc MAINNET addresses",
     v4: [
-      ["v4 PoolManager     (arc mainnet measured)", "0x8366ef8116b6e6fa66119069092c9b4ea3f5e2b2"],
-      ["v4 PositionManager (arc mainnet measured)", "0x4b2c77d209d3405f41a037ec6c77f7f5b8e2ca80"],
+      ["v4 PoolManager     (arc mainnet measured)", "0x8366a39CC670B4001A1121B8F6A443A643e40951"],
+      ["v4 PositionManager (arc mainnet measured)", "0x6049c9a0e26405c0985f9e3685c87d0ae917f82b"],
       ["v4 StateView       (arc mainnet measured)", "0xf3334192d15450cdd385c8b70e03f9a6bd9e673b"],
       ["v4 Quoter          (arc mainnet measured)", "0x8dc178efb8111bb0973dd9d722ebeff267c98f94"],
     ],
@@ -101,8 +101,44 @@ const PERMIT2_DIAGNOSTICS = [
 
 const size = (code) => (code === "0x" ? 0 : (code.length - 2) / 2);
 
+// The Circle-contact endpoint intermittently returns HTTP 503 carrying JSON-RPC -32603,
+// even for one-at-a-time reads. Retry exceptions only: a successful `eth_getCode` result
+// of `0x` is still authoritative and must remain distinguishable from a failed request.
+const RPC_READ_ATTEMPTS = 8;
+const RPC_BACKOFF_BASE_MS = 250;
+const RPC_BACKOFF_CAP_MS = 2000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function errorSummary(error) {
+  return String(error && (error.shortMessage || error.message) || error)
+    .replace(/\s+/g, " ")
+    .slice(0, 180);
+}
+
+async function readWithRetry(label, read) {
+  let lastError;
+  for (let attempt = 1; attempt <= RPC_READ_ATTEMPTS; attempt++) {
+    try {
+      return await read();
+    } catch (error) {
+      lastError = error;
+      if (attempt === RPC_READ_ATTEMPTS) break;
+      const delay = Math.min(RPC_BACKOFF_BASE_MS * (2 ** (attempt - 1)), RPC_BACKOFF_CAP_MS);
+      console.log(
+        `  RPC read failed (${label}); retry ${attempt + 1}/${RPC_READ_ATTEMPTS} ` +
+        `in ${delay}ms: ${errorSummary(error)}`
+      );
+      await sleep(delay);
+    }
+  }
+  throw new Error(
+    `RPC read failed (${label}) after ${RPC_READ_ATTEMPTS} attempts: ${errorSummary(lastError)}`,
+    { cause: lastError }
+  );
+}
+
 async function report(label, addr) {
-  const code = await ethers.provider.getCode(addr);
+  const code = await readWithRetry(`eth_getCode ${label}`, () => ethers.provider.getCode(addr));
   const n = size(code);
   console.log(`  ${label.padEnd(40)} ${addr}  ${String(n).padStart(6)} bytes${n === 0 ? "   <- NO CODE" : ""}`);
   return { code, n };
@@ -118,8 +154,8 @@ async function main() {
     throw new Error(`unsupported preflight chain ${configuredChainId} -- refusing to report`);
   }
 
-  const net = await ethers.provider.getNetwork();
-  const block = await ethers.provider.getBlockNumber();
+  const net = await readWithRetry("network", () => ethers.provider.getNetwork());
+  const block = await readWithRetry("eth_blockNumber", () => ethers.provider.getBlockNumber());
   console.log(`network ${hre.network.name}  chainId ${net.chainId}  block ${block}\n`);
 
   if (net.chainId !== BigInt(configuredChainId)) {
@@ -199,7 +235,10 @@ async function main() {
       const p2 = new ethers.Contract(PERMIT2[1], [
         "function allowance(address,address,address) view returns (uint160,uint48,uint48)",
       ], ethers.provider);
-      const a = await p2.allowance(ethers.ZeroAddress, ethers.ZeroAddress, ethers.ZeroAddress);
+      const a = await readWithRetry(
+        "Permit2 allowance()",
+        () => p2.allowance(ethers.ZeroAddress, ethers.ZeroAddress, ethers.ZeroAddress)
+      );
       console.log(`  Permit2 live staticcall allowance() -> [${a[0]}, ${a[1]}, ${a[2]}]  ANSWERS`);
     } catch (e) {
       console.log(`  Permit2 live staticcall allowance() FAILED: ${String(e.shortMessage || e.message).slice(0, 80)}`);
@@ -214,7 +253,7 @@ async function main() {
   console.log(`\n${profile.name.toUpperCase()} BLOCK GAS LIMIT:`);
   let maxLimit = 0n;
   for (const tag of [block, block - 1, block - 2]) {
-    const b = await ethers.provider.getBlock(tag);
+    const b = await readWithRetry(`eth_getBlockByNumber ${tag}`, () => ethers.provider.getBlock(tag));
     if (!b) continue;
     if (b.gasLimit > maxLimit) maxLimit = b.gasLimit;
     console.log(`  block ${b.number}  gasLimit ${b.gasLimit.toLocaleString("en-US")}  gasUsed ${b.gasUsed.toLocaleString("en-US")}`);
@@ -266,7 +305,7 @@ async function main() {
   console.log("=".repeat(72));
 }
 
-module.exports = { CHAIN_PROFILES, SELECTORS, main };
+module.exports = { CHAIN_PROFILES, SELECTORS, RPC_READ_ATTEMPTS, readWithRetry, main };
 if (require.main === module) {
   main().catch((e) => { console.error(String(e.message || e)); process.exit(1); });
 }
