@@ -29,7 +29,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
   // frontend would do with a multicall or a bundled transaction.
   async function launchAndBuyInSameBlock(ballista, usdc, creator, symbol, buys) {
     await ethers.provider.send('evm_setAutomine', [false]);
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const createTx = await ballista.connect(creator)
       .createToken('Launch', symbol, 'ipfs://a', await usdc.getAddress(), hash, false);
 
@@ -59,7 +59,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
     const { ballista, usdc, creator } = await env();
     expect(await ballista.maxCreatorLaunchBps()).to.equal(250);
 
-    const stale = await ballista.currentEconomicsHash();
+    const stale = await ballista.currentEconomicsHash(await usdc.getAddress());
     await ballista.setMaxCreatorLaunchBps(500);
     await expect(
       ballista.connect(creator).createToken('Late', 'LATE', 'u', await usdc.getAddress(), stale, false)
@@ -69,7 +69,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
 
   it('a live token keeps the cap it launched with', async function () {
     const { ballista, usdc, creator } = await env();
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Pinned', 'PIN', 'u', await usdc.getAddress(), hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -82,7 +82,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
 
   it('a non-creator cannot use the privileged path at all', async function () {
     const { ballista, usdc, creator, sniper } = await env();
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Guard', 'GRD', 'u', await usdc.getAddress(), hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -98,7 +98,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
   // their own privileged path without a bundling contract.
   it('THE POINT: a plain EOA creator reaches the privileged path in a LATER block', async function () {
     const { ballista, usdc, creator } = await env();
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Eoa', 'EOA', 'u', await usdc.getAddress(), hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -123,7 +123,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
 
   it('the window closes on elapsed SECONDS, and the ordinary path still works after', async function () {
     const { ballista, usdc, creator } = await env();
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Late', 'LTE', 'u', await usdc.getAddress(), hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -139,7 +139,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
 
   it('the LAST second of the window is inclusive, the next one is not', async function () {
     const { ballista, usdc, creator } = await env();
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Edge', 'EDG', 'u', await usdc.getAddress(), hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -163,7 +163,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
   // that and watching this test stay green.
   it('the window is snapshotted -- narrowing the global cannot shorten a live token', async function () {
     const { ballista, usdc, creator } = await env();
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Snap', 'SNP', 'u', await usdc.getAddress(), hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -183,7 +183,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
   it('the window is snapshotted -- widening the global cannot lengthen a live token', async function () {
     const { ballista, usdc, creator } = await env();
     await ballista.setCreatorLaunchWindow(1);
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Wide', 'WID', 'u', await usdc.getAddress(), hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -204,7 +204,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
     const { ballista, usdc, creator } = await env();
     expect(await ballista.creatorLaunchWindow()).to.equal(3);
 
-    const stale = await ballista.currentEconomicsHash();
+    const stale = await ballista.currentEconomicsHash(await usdc.getAddress());
     await ballista.setCreatorLaunchWindow(9);
     await expect(
       ballista.connect(creator).createToken('W', 'WIN', 'u', await usdc.getAddress(), stale, false)
@@ -225,7 +225,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
   it('a zero window is same-SECOND, which still spans more than one block on Arc', async function () {
     const { ballista, usdc, creator } = await env();
     await ballista.setCreatorLaunchWindow(0);
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Zero', 'ZRO', 'u', await usdc.getAddress(), hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -318,7 +318,7 @@ describe('Ballista — creator launch buy (timed window)', function () {
     // it, which is worse than the real chain allows.
     it('EXPLOIT ATTEMPT: loop the privileged buy across TEN blocks inside the widened window', async function () {
       const { ballista, usdc, creator } = await env();
-      const hash = await ballista.currentEconomicsHash();
+      const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
       const rc = await (await ballista.connect(creator)
         .createToken('Loop2', 'LP2', 'u', await usdc.getAddress(), hash, false)).wait();
       const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })

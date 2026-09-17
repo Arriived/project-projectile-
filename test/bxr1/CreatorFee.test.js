@@ -35,7 +35,7 @@ describe('Ballista — creator fee share', function () {
   }
 
   async function launch(ballista, usdc, creator, symbol = 'CRT') {
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const receipt = await (
       await ballista.connect(creator).createToken('Creator Coin', symbol, 'ipfs://a', await usdc.getAddress(), hash, false)
     ).wait();
@@ -309,7 +309,7 @@ describe('Ballista — creator fee share', function () {
   describe('rate is snapshotted and pinned', function () {
     it('the SELL side alone changing also invalidates a pinned hash', async function () {
       const { ballista, usdc, creator } = await deployFixture();
-      const staleHash = await ballista.currentEconomicsHash();
+      const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
       await ballista.setDefaultCreatorFees(90, 40); // buy unchanged, sell moved
       await expect(
         ballista.connect(creator).createToken('SellOnly', 'SLO', 'ipfs://a', await usdc.getAddress(), staleHash, false)
@@ -319,7 +319,7 @@ describe('Ballista — creator fee share', function () {
 
     it('is included in the economics hash', async function () {
       const { ballista, usdc, creator } = await deployFixture();
-      const staleHash = await ballista.currentEconomicsHash();
+      const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
 
       await ballista.setDefaultCreatorFees(50, 40);
 

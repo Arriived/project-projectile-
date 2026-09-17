@@ -27,17 +27,27 @@ describe('BXR1 — a second registered asset with different decimals', function 
 
     const registry = await (await ethers.getContractFactory('AssetRegistry')).deploy();
 
-    // USDC: the historic INITIAL_VIRTUAL_USDC_RESERVES figure, in USDC's own 6dp.
+    // USDC: the historic INITIAL_VIRTUAL_USDC_RESERVES figure, in USDC's own 6dp, and
+    // BXR1's former GLOBAL defaultGraduationThreshold (8,000 USDC), now the per-asset
+    // value for this registry entry specifically.
     await registry.registerAsset(
-      await usdc.getAddress(), 6, true, false, false, false, 2_667_000_000n // 2,667 USDC
+      await usdc.getAddress(), 6, true, false, false, false,
+      2_667_000_000n,  // 2,667 USDC
+      8_000_000_000n   // 8,000 USDC
     );
-    // DAI: the SAME real-world opening price (2,667 whole units of a ~$1 stablecoin),
-    // expressed in DAI's own 18dp -- 1e12 times the raw magnitude of the USDC figure
-    // above, for exactly the reason AssetRegistry.sol's own comment gives: BXR1's curve
-    // math never converts between decimal scales, so the registry entry has to already
-    // be in the asset's native units to open at the same price.
+    // DAI: the SAME real-world opening price (2,667 whole units of a ~$1 stablecoin) AND
+    // the SAME real-world graduation threshold (8,000 whole units), both expressed in
+    // DAI's own 18dp -- 1e12 times the raw magnitude of the USDC figures above, for
+    // exactly the reason AssetRegistry.sol's own comment gives: BXR1's curve math never
+    // converts between decimal scales, so the registry entry has to already be in the
+    // asset's native units, for BOTH fields, to mean the same real-world thing as the
+    // USDC entry. Registering the threshold correctly here -- rather than leaving it at
+    // a USDC-shaped default and patching it after the fact -- is what closes the residual
+    // the "graduates" test below used to have to work around.
     await registry.registerAsset(
-      await dai.getAddress(), 18, true, false, false, false, 2_667n * 10n ** 18n
+      await dai.getAddress(), 18, true, false, false, false,
+      2_667n * 10n ** 18n,  // 2,667 DAI
+      8_000n * 10n ** 18n   // 8,000 DAI
     );
 
     const ballista = await (await getBXR1Factory())
@@ -58,7 +68,7 @@ describe('BXR1 — a second registered asset with different decimals', function 
   }
 
   async function launch(ballista, quoteAsset, creator, symbol) {
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await quoteAsset.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Second Asset Coin', symbol, 'ipfs://a', await quoteAsset.getAddress(), hash, false)
     ).wait();
@@ -94,14 +104,6 @@ describe('BXR1 — a second registered asset with different decimals', function 
 
   it('a full create / buy / sell cycle works end to end against the 18-decimal asset', async function () {
     const { ballista, dai, creator, trader } = await env();
-    // defaultGraduationThreshold (8_000e6 raw units) is a GLOBAL, asset-naive constant --
-    // not a per-asset registry value like initialVirtualReserve is (see the flagged
-    // residual in the "graduates" test below). Left at its USDC-shaped default, it is an
-    // economically meaningless number of raw DAI units and the curve graduates on the
-    // very first buy, closing the sell path this test exists to exercise. Scale it to
-    // DAI's own decimals before creating THIS curve -- snapshotted per curve at creation,
-    // exactly like every other economics default, so this has no effect on any other test.
-    await ballista.setDefaultGraduationThreshold(8_000n * 10n ** 18n);
     const t = await launch(ballista, dai, creator, 'DAI2');
     const token = await ethers.getContractAt('BXR1Token', t);
 
@@ -170,16 +172,25 @@ describe('BXR1 — a second registered asset with different decimals', function 
     ).to.be.revertedWithCustomError(ballista, 'SlippageExceeded');
   });
 
-  it('graduates on the same dual trigger, purely from DAI-denominated reserves', async function () {
+  // Was: "graduates on the same dual trigger, purely from DAI-denominated reserves",
+  // and it demonstrated the OLD bug -- defaultGraduationThreshold used to be a single
+  // BXR1-wide, USDC-shaped constant, so a DAI-quoted curve graduated almost immediately
+  // on its first buy. That residual is now closed: defaultGraduationThreshold moved
+  // into AssetRegistry.AssetConfig, per asset, exactly like initialVirtualReserve
+  // already was, and env() registers DAI with a real 8,000-DAI threshold (see above).
+  // The test is kept, rewritten to prove the thing that was never actually the bug:
+  // the dual trigger itself is asset-agnostic and still reaches GRADUATED correctly
+  // once a DAI-quoted curve's OWN threshold is actually crossed.
+  it('graduates on the same dual trigger once the DAI-denominated threshold is actually crossed', async function () {
     const { ballista, dai, creator, trader } = await env();
     const t = await launch(ballista, dai, creator, 'DAI5');
-    // Threshold defaults to 8,000 raw-USDC-shaped units (8_000e6 in the constant), which
-    // is a tiny, economically meaningless number of raw DAI units (18dp) -- so a curve
-    // quoted in DAI graduates almost immediately on the very first buy. That is expected
-    // and is itself evidence the graduation threshold is asset-naive by design (the
-    // report's flagged residual, alongside the creation fee): it is a global raw-unit
-    // constant, not a per-asset registry value like the opening reserve is.
-    const rc = await (await ballista.connect(trader).buy(t, 1_000n * 10n ** 18n, 0)).wait();
+
+    // Comfortably past the curve's own realQuoteReserves >= 8,000 DAI threshold. Large
+    // enough that whichever arm fires first -- the threshold or depletion, via the
+    // partial-fill clamp -- this buy graduates the curve either way; which one is not
+    // the property under test here (that split already has its own suite in
+    // GraduationGap.test.js).
+    const rc = await (await ballista.connect(trader).buy(t, 20_000n * 10n ** 18n, 0)).wait();
     const graduated = rc.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'Graduated');
@@ -189,6 +200,29 @@ describe('BXR1 — a second registered asset with different decimals', function 
     expect(curve.state).to.equal(2n); // GRADUATED
     expect(curve.tokenReserves).to.equal(0n);
     expect(curve.realQuoteReserves).to.equal(0n);
+  });
+
+  // The acceptance test for the fix itself: with a sensible, correctly-scaled per-asset
+  // threshold in place (8,000 DAI, registered by env() above -- not a leftover
+  // USDC-shaped 8,000 raw units), the SAME 1,000 DAI buy the full-cycle test above
+  // uses to prove buy/sell round-tripping does NOT trip the graduation trigger. Before
+  // the fix this would have graduated on the very first buy, exactly as the test this
+  // one replaced demonstrated.
+  it('does NOT graduate on a modest first buy now that the per-asset threshold is sensible', async function () {
+    const { ballista, dai, creator, trader } = await env();
+    const t = await launch(ballista, dai, creator, 'DAI6');
+
+    const rc = await (await ballista.connect(trader).buy(t, 1_000n * 10n ** 18n, 0)).wait();
+    const graduated = rc.logs
+      .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+      .find((l) => l && l.name === 'Graduated');
+    expect(graduated, 'a 1,000 DAI buy must not graduate an 8,000 DAI curve').to.be.undefined;
+
+    const curve = await ballista.curves(t);
+    expect(curve.state).to.equal(0n); // still ACTIVE
+    expect(curve.tokenReserves).to.be.greaterThan(0n);
+    expect(curve.realQuoteReserves).to.be.greaterThan(0n);
+    expect(curve.realQuoteReserves).to.be.lessThan(curve.graduationThreshold);
   });
 
   it('two curves on two different quote assets never interfere with each other', async function () {
@@ -217,7 +251,7 @@ describe('BXR1 — a second registered asset with different decimals', function 
   it('createToken refuses an asset that was never registered', async function () {
     const { ballista, creator } = await env();
     const stranger = await (await ethers.getContractFactory('MockUSDC')).deploy();
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await stranger.getAddress());
     await expect(
       ballista.connect(creator).createToken('Rogue', 'RGE', 'u', await stranger.getAddress(), hash, false)
     ).to.be.revertedWithCustomError(ballista, 'AssetNotEnabled');
@@ -228,9 +262,9 @@ describe('BXR1 — a second registered asset with different decimals', function 
     const fee = await (await ethers.getContractFactory('MockFeeOnTransferUSDC')).deploy();
     await registry.registerAsset(
       await fee.getAddress(), 6, true, /* rebasing */ false, /* transferRestricted */ false,
-      /* transferFee */ true, 2_667_000_000n
+      /* transferFee */ true, 2_667_000_000n, 8_000_000_000n
     );
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await fee.getAddress());
     await expect(
       ballista.connect(creator).createToken('Fee', 'FEE', 'u', await fee.getAddress(), hash, false)
     ).to.be.revertedWithCustomError(ballista, 'AssetMisbehaves');
@@ -247,7 +281,7 @@ describe('BXR1 — a second registered asset with different decimals', function 
     await expect(ballista.connect(trader).buy(t, 100n * 10n ** 18n, 0)).to.not.be.reverted;
 
     // But no NEW curve can be created against the now-disabled asset.
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await dai.getAddress());
     await expect(
       ballista.connect(creator).createToken('Blocked', 'BLK', 'u', await dai.getAddress(), hash, false)
     ).to.be.revertedWithCustomError(ballista, 'AssetNotEnabled');

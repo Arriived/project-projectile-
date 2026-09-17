@@ -35,7 +35,7 @@ describe('Ballista — decaying snipe tax', function () {
   }
 
   async function launch(ballista, usdc, creator, symbol = 'SNP') {
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const receipt = await (
       await ballista.connect(creator).createToken('Snipe Coin', symbol, 'ipfs://a', await usdc.getAddress(), hash, false)
     ).wait();
@@ -298,14 +298,14 @@ describe('Ballista — decaying snipe tax', function () {
     it('the table version and split are both in the economics hash', async function () {
       const { ballista, usdc, creator } = await deployFixture();
 
-      let stale = await ballista.currentEconomicsHash();
+      let stale = await ballista.currentEconomicsHash(await usdc.getAddress());
       await ballista.publishSnipeTaxTable([5000, 1000]);
       await expect(
         ballista.connect(creator).createToken('A', 'AAA', 'u', await usdc.getAddress(), stale, false)
       ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged'
       );
 
-      stale = await ballista.currentEconomicsHash();
+      stale = await ballista.currentEconomicsHash(await usdc.getAddress());
       await ballista.setDefaultSnipeTaxTreasuryBps(1000);
       await expect(
         ballista.connect(creator).createToken('B', 'BBB', 'u', await usdc.getAddress(), stale, false)

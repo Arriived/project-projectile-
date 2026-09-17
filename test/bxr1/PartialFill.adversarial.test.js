@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, setGraduationThreshold, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE_USDC = 1_000_000n;
 
@@ -37,7 +37,7 @@ describe('Ballista — partial-fill adversarial testing', function () {
   }
 
   async function launchToken(ballista, usdc, creator, name, symbol, signersToApprove) {
-    const expectedHash = await ballista.currentEconomicsHash();
+    const expectedHash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const createTx = await ballista.connect(creator).createToken(name, symbol, 'ipfs://a', await usdc.getAddress(), expectedHash, false);
     const receipt = await createTx.wait();
     const event = receipt.logs
@@ -61,8 +61,8 @@ describe('Ballista — partial-fill adversarial testing', function () {
   }
 
   it('THE ACTUAL BUG: a small front-run purchase no longer reverts the large buy behind it', async function () {
-    const { ballista, usdc, creator, trader, griefer } = await deployFixture();
-    await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+    const { ballista, usdc, creator, trader, griefer, registry } = await deployFixture();
+    await setGraduationThreshold(registry, await usdc.getAddress(), 10_000_000n * ONE_USDC);
     const { tokenAddress } = await launchToken(ballista, usdc, creator, 'Adversary Coin', 'ADV', [trader, griefer]);
 
     await ballista.connect(trader).buy(tokenAddress, 7_000n * ONE_USDC, 0);
@@ -101,8 +101,8 @@ describe('Ballista — partial-fill adversarial testing', function () {
   // takes every remaining token, clamping and graduating became the same event. The
   // test is kept, inverted, so the coupling is asserted rather than assumed.
   it('the clamp and graduation are now INSEPARABLE -- clamping always depletes', async function () {
-    const { ballista, usdc, creator, trader, griefer } = await deployFixture();
-    await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+    const { ballista, usdc, creator, trader, griefer, registry } = await deployFixture();
+    await setGraduationThreshold(registry, await usdc.getAddress(), 10_000_000n * ONE_USDC);
     const { tokenAddress } = await launchToken(ballista, usdc, creator, 'Isolated Coin', 'ISO', [trader, griefer]);
 
     await ballista.connect(trader).buy(tokenAddress, 7_000n * ONE_USDC, 0);
@@ -127,8 +127,8 @@ describe('Ballista — partial-fill adversarial testing', function () {
   });
 
   it('the excess is never pulled at all -- not pulled-then-refunded, simply never taken', async function () {
-    const { ballista, usdc, creator, trader } = await deployFixture();
-    await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+    const { ballista, usdc, creator, trader, registry } = await deployFixture();
+    await setGraduationThreshold(registry, await usdc.getAddress(), 10_000_000n * ONE_USDC);
     const { tokenAddress } = await launchToken(ballista, usdc, creator, 'Excess Coin', 'EXC', [trader]);
     const usdcContract = usdc;
 
@@ -151,8 +151,8 @@ describe('Ballista — partial-fill adversarial testing', function () {
   it('clamped price cannot be manipulated by offering more than needed', async function () {
     const fixtureA = await deployFixture();
     const fixtureB = await deployFixture();
-    await fixtureA.ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
-    await fixtureB.ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+    await setGraduationThreshold(fixtureA.registry, await fixtureA.usdc.getAddress(), 10_000_000n * ONE_USDC);
+    await setGraduationThreshold(fixtureB.registry, await fixtureB.usdc.getAddress(), 10_000_000n * ONE_USDC);
 
     const a = await launchToken(fixtureA.ballista, fixtureA.usdc, fixtureA.creator, 'Coin A', 'CA', [fixtureA.trader, fixtureA.other]);
     const b = await launchToken(fixtureB.ballista, fixtureB.usdc, fixtureB.creator, 'Coin B', 'CB', [fixtureB.trader, fixtureB.other]);
@@ -175,8 +175,8 @@ describe('Ballista — partial-fill adversarial testing', function () {
   });
 
   it("slippage protection still applies to a clamped fill -- the buyer's own floor is not silently overridden", async function () {
-    const { ballista, usdc, creator, trader, griefer } = await deployFixture();
-    await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+    const { ballista, usdc, creator, trader, griefer, registry } = await deployFixture();
+    await setGraduationThreshold(registry, await usdc.getAddress(), 10_000_000n * ONE_USDC);
     const { tokenAddress } = await launchToken(ballista, usdc, creator, 'Slippage Coin', 'SLP', [trader, griefer]);
 
     await ballista.connect(trader).buy(tokenAddress, 7_000n * ONE_USDC, 0);
@@ -193,8 +193,8 @@ describe('Ballista — partial-fill adversarial testing', function () {
   // improvement: there is no longer a state where the curve holds no tokens but still
   // accepts buys. Depletion graduates, and a graduated curve rejects everything.
   it('a depleted curve is closed outright -- the old zero-fill state cannot be reached', async function () {
-    const { ballista, usdc, creator, trader } = await deployFixture();
-    await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+    const { ballista, usdc, creator, trader, registry } = await deployFixture();
+    await setGraduationThreshold(registry, await usdc.getAddress(), 10_000_000n * ONE_USDC);
     const { tokenAddress } = await launchToken(ballista, usdc, creator, 'Depleted Coin', 'DEP', [trader]);
 
     await ballista.connect(trader).buy(tokenAddress, 500_000n * ONE_USDC, 0);
@@ -240,8 +240,8 @@ describe('Ballista — partial-fill adversarial testing', function () {
     });
 
     it('ADVERSARIAL: multiple buyers at different curve positions, then everyone sells, largest holder first', async function () {
-      const { ballista, usdc, creator, trader, griefer, other } = await deployFixture();
-      await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+      const { ballista, usdc, creator, trader, griefer, other, registry } = await deployFixture();
+      await setGraduationThreshold(registry, await usdc.getAddress(), 10_000_000n * ONE_USDC);
       const { tokenAddress, token } = await launchToken(ballista, usdc, creator, 'Multi Coin', 'MLT', [trader, griefer, other]);
 
       await ballista.connect(trader).buy(tokenAddress, 3_000n * ONE_USDC, 0);
@@ -272,8 +272,8 @@ describe('Ballista — partial-fill adversarial testing', function () {
   });
 
   it('STRESS: repeated irregular buys down to full depletion never break an invariant, at a punishing 10% fee', async function () {
-    const { creator, ballista, usdc } = await deployFixture();
-    await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+    const { creator, ballista, usdc, registry } = await deployFixture();
+    await setGraduationThreshold(registry, await usdc.getAddress(), 10_000_000n * ONE_USDC);
     await ballista.setDefaultFees(1000, 1000);
     await ballista.setLaunchCooldown(0);
 

@@ -45,6 +45,15 @@ contract AssetRegistry is Ownable {
         // at the same real-world price. Whoever registers the asset is responsible for
         // choosing this number; the registry only stores and returns it.
         uint256 initialVirtualReserve;
+        // Same reasoning as initialVirtualReserve: a raw-unit figure whose meaningful
+        // magnitude depends on this asset's own decimals, so it lives here rather than
+        // as a single BXR1-wide default. Zero is deliberately NOT rejected -- BXR1's
+        // dual graduation trigger has always allowed a zero threshold (the depletion
+        // arm still reaches GRADUATION_READY, and graduationProgressBps's >= early
+        // return means a zero threshold never divides by zero), so this field keeps
+        // that same degenerate-but-not-blocked behaviour, matching initialVirtualReserve
+        // in every way except this one check.
+        uint256 defaultGraduationThreshold;
     }
 
     mapping(address => AssetConfig) private _assets;
@@ -55,7 +64,8 @@ contract AssetRegistry is Ownable {
         bool rebasing,
         bool transferRestricted,
         bool transferFee,
-        uint256 initialVirtualReserve
+        uint256 initialVirtualReserve,
+        uint256 defaultGraduationThreshold
     );
     event AssetEnabledSet(address indexed asset, bool enabled);
 
@@ -76,7 +86,8 @@ contract AssetRegistry is Ownable {
         bool rebasing,
         bool transferRestricted,
         bool transferFee,
-        uint256 initialVirtualReserve
+        uint256 initialVirtualReserve,
+        uint256 defaultGraduationThreshold
     ) external onlyOwner {
         if (asset == address(0)) revert ZeroAddress();
         if (decimals == 0) revert ZeroDecimals();
@@ -89,10 +100,11 @@ contract AssetRegistry is Ownable {
             rebasing: rebasing,
             transferRestricted: transferRestricted,
             transferFee: transferFee,
-            initialVirtualReserve: initialVirtualReserve
+            initialVirtualReserve: initialVirtualReserve,
+            defaultGraduationThreshold: defaultGraduationThreshold
         });
 
-        emit AssetRegistered(asset, decimals, rebasing, transferRestricted, transferFee, initialVirtualReserve);
+        emit AssetRegistered(asset, decimals, rebasing, transferRestricted, transferFee, initialVirtualReserve, defaultGraduationThreshold);
         emit AssetEnabledSet(asset, enabled);
     }
 

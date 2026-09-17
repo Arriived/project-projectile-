@@ -30,7 +30,7 @@ describe('Ballista — creator fee to pool boost', function () {
   }
 
   async function launch(ballista, usdc, creator, symbol, boost) {
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Boost', symbol, 'ipfs://a', await usdc.getAddress(), hash, boost)).wait();
     return rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })

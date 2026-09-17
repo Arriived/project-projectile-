@@ -97,7 +97,7 @@ describe('BXR1 — differential curve math', function () {
   }
 
   async function launch(ballista, usdc, creator, symbol) {
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Diff', symbol, 'u', await usdc.getAddress(), hash, false)).wait();
     const t = rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })

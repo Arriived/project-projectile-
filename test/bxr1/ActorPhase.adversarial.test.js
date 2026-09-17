@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { time } = require('@nomicfoundation/hardhat-network-helpers');
-const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, setGraduationThreshold, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE = 1_000_000n;
 const DAY = 24 * 3600;
@@ -134,19 +134,19 @@ describe('Ballista — actor/phase pass: compromised owner', function () {
   // the creator pays directly is the one the pinning does not cover.
   it('creationFee is NOT pinned by the economics hash -- it can change under a pinned launch', async function () {
     const { ballista, creator, usdc, treasury } = await deploy();
+    const usdcAddress = await usdc.getAddress();
 
     // What the creator sees, and signs up to.
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(usdcAddress);
     expect(await ballista.creationFee()).to.equal(5n * 10n ** 5n); // 0.5 USDC
 
     // Owner raises it 1000x between quote and execution.
     await ballista.setCreationFee(500n * ONE);
 
     // The hash the creator pinned is UNCHANGED, so the guard cannot fire.
-    expect(await ballista.currentEconomicsHash()).to.equal(hash);
+    expect(await ballista.currentEconomicsHash(usdcAddress)).to.equal(hash);
 
     const before = await usdc.balanceOf(creator.address);
-    const usdcAddress = await usdc.getAddress();
     await ballista.connect(creator).createToken('Pinned', 'PIN', '', usdcAddress, hash, false);
     const paid = before - (await usdc.balanceOf(creator.address));
 
@@ -156,9 +156,9 @@ describe('Ballista — actor/phase pass: compromised owner', function () {
 
   // Bounds the finding: every OTHER economic term the creator is exposed to IS pinned.
   it('by contrast, a hashed term makes the same launch revert', async function () {
-    const { ballista, creator, usdc } = await deploy();
-    const hash = await ballista.currentEconomicsHash();
-    await ballista.setDefaultGraduationThreshold(20_000n * ONE);
+    const { ballista, creator, usdc, registry } = await deploy();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
+    await setGraduationThreshold(registry, await usdc.getAddress(), 20_000n * ONE);
     await expect(
       ballista.connect(creator).createToken('Pinned', 'PIN2', '', await usdc.getAddress(), hash, false)
     ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
@@ -171,7 +171,7 @@ describe('Ballista — actor/phase pass: compromised owner', function () {
   it('R4: raising the base fee at all bricks launches until a lower table is published', async function () {
     const { ballista, creator, usdc } = await deploy();
     await ballista.setDefaultFees(200, 200); // accepted without complaint
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     await expect(
       ballista.connect(creator).createToken('Ceil', 'CEIL', '', await usdc.getAddress(), hash, false)
     ).to.be.revertedWithCustomError(ballista, 'BaseFeeCeilingExceeded');
@@ -191,7 +191,7 @@ describe('Ballista — actor/phase pass: donations and direct transfers', functi
       await usdc.mint(s.address, 10_000n * ONE);
       await usdc.connect(s).approve(await ballista.getAddress(), ethers.MaxUint256);
     }
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const tx = await ballista.connect(creator).createToken('Don', 'DON', '', await usdc.getAddress(), hash, false);
     const rc = await tx.wait();
     const created = rc.logs

@@ -26,7 +26,7 @@ describe('Ballista — symbol lock: can a duration of 0 disable it?', function (
   }
 
   async function launch(factory, usdc, who, symbol) {
-    const hash = await factory.currentEconomicsHash();
+    const hash = await factory.currentEconomicsHash(await usdc.getAddress());
     return factory.connect(who).createToken('T', symbol, '', await usdc.getAddress(), hash, false);
   }
 
@@ -90,10 +90,11 @@ describe('Ballista — symbol lock: can a duration of 0 disable it?', function (
   });
 
   it('symbolLockDuration is inside the economics hash, so changing it invalidates pins', async function () {
-    const { factory } = await deploy();
-    const before = await factory.currentEconomicsHash();
+    const { factory, usdc } = await deploy();
+    const usdcAddress = await usdc.getAddress();
+    const before = await factory.currentEconomicsHash(usdcAddress);
     await factory.setSymbolLockDuration(0);
-    expect(await factory.currentEconomicsHash()).to.not.equal(before);
+    expect(await factory.currentEconomicsHash(usdcAddress)).to.not.equal(before);
   });
 });
 
@@ -115,8 +116,8 @@ describe('symbol lock gas and size', function () {
 
     const size = (BXR1.bytecode.length - 2) / 2;
     const deployed = (await ethers.provider.getCode(await factory.getAddress()));
-    const hash = await factory.currentEconomicsHash();
     const usdcAddress = await usdc.getAddress();
+    const hash = await factory.currentEconomicsHash(usdcAddress);
 
     const first = await (await factory.connect(alice).createToken('T', 'AAA', '', usdcAddress, hash, false)).wait();
     const second = await (await factory.connect(alice).createToken('T', 'BBB', '', usdcAddress, hash, false)).wait();

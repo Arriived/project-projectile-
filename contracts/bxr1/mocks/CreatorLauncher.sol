@@ -12,7 +12,9 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 interface IBXR1Launch {
     function createToken(string calldata, string calldata, string calldata, address, bytes32, bool)
         external returns (address);
-    function currentEconomicsHash() external view returns (bytes32);
+    // Asset-scoped, per the graduation threshold moving into AssetRegistry -- see
+    // BXR1.sol. Every call site below now passes address(usdc) explicitly.
+    function currentEconomicsHash(address quoteAsset) external view returns (bytes32);
     function creatorLaunchBuy(address token, uint256 quoteIn, uint256 minTokensOut) external;
     function sell(address token, uint256 tokensIn, uint256 minQuoteOut) external;
 }
@@ -35,7 +37,7 @@ contract BXR1CreatorLauncher {
         external
         returns (address)
     {
-        token = ballista.createToken("Loop", symbol, "ipfs://x", address(usdc), ballista.currentEconomicsHash(), false);
+        token = ballista.createToken("Loop", symbol, "ipfs://x", address(usdc), ballista.currentEconomicsHash(address(usdc)), false);
         for (uint256 i = 0; i < times; i++) {
 
             try ballista.creatorLaunchBuy(token, quoteEach, 0) {} catch {}
@@ -47,7 +49,7 @@ contract BXR1CreatorLauncher {
         external
         returns (bool sellReverted, bytes memory err)
     {
-        token = ballista.createToken("Dump", symbol, "ipfs://x", address(usdc), ballista.currentEconomicsHash(), false);
+        token = ballista.createToken("Dump", symbol, "ipfs://x", address(usdc), ballista.currentEconomicsHash(address(usdc)), false);
         ballista.creatorLaunchBuy(token, quoteIn, 0);
         uint256 held = IERC20(token).balanceOf(address(this));
         IERC20(token).approve(address(ballista), held);

@@ -31,7 +31,7 @@ describe('BXR1 — lpRecipient', function () {
   }
 
   async function launch(ballista, usdc, creator, symbol) {
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Lp', symbol, 'u', await usdc.getAddress(), hash, false)).wait();
     return rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -130,7 +130,7 @@ describe('BXR1 — lpRecipient', function () {
 
   it('is pinned by the economics hash', async function () {
     const { ballista, usdc, creator, locker } = await env();
-    const stale = await ballista.currentEconomicsHash();
+    const stale = await ballista.currentEconomicsHash(await usdc.getAddress());
     await ballista.setLpRecipient(locker.address);
     await expect(
       ballista.connect(creator).createToken('X', 'XPIN', 'u', await usdc.getAddress(), stale, false)

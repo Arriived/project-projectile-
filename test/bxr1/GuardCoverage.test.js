@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, setGraduationThreshold, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE = 1_000_000n;
 const BPS = 10_000n;
@@ -31,7 +31,7 @@ describe('BXR1 — guards the coverage sweep found untested', function () {
   }
 
   async function launch(ballista, usdc, creator, symbol) {
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Guard', symbol, 'u', await usdc.getAddress(), hash, false)).wait();
     return rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -173,11 +173,28 @@ describe('BXR1 — guards the coverage sweep found untested', function () {
         .to.emit(ballista, 'SymbolLockDurationSet').withArgs(300n, 1234n);
       await expect(ballista.setCreationFee(7_000_000n))
         .to.emit(ballista, 'CreationFeeSet').withArgs(500_000n, 7_000_000n);
-      await expect(ballista.setDefaultGraduationThreshold(9_000_000_000n))
-        .to.emit(ballista, 'DefaultGraduationThresholdSet')
-        .withArgs(8_000_000_000n, 9_000_000_000n);
       await expect(ballista.setDefaultFees(250, 300))
         .to.emit(ballista, 'DefaultFeesSet').withArgs(100n, 250n, 100n, 300n);
+    });
+
+    // setDefaultGraduationThreshold no longer exists on BXR1 -- the threshold moved to
+    // AssetRegistry.AssetConfig, and (like initialVirtualReserve) has no setter of its
+    // own, only re-registration via registerAsset. That is a DIFFERENT observability
+    // shape than the five setters above, not a smaller one: registerAsset always emits
+    // AssetRegistered with the FULL new config, on every call, whether or not the
+    // threshold specifically changed -- there is no old-vs-new delta to assert on a
+    // single field, because re-registration does not distinguish "changed" fields from
+    // unchanged ones. What still holds is Slither's actual finding: no economics change
+    // is silent. This asserts that property on the new path.
+    it('re-registering an asset to change its graduation threshold is still observable', async function () {
+      const { usdc, registry } = await env();
+      const cfg = await registry.getAsset(await usdc.getAddress());
+      await expect(setGraduationThreshold(registry, await usdc.getAddress(), 9_000_000_000n))
+        .to.emit(registry, 'AssetRegistered')
+        .withArgs(
+          await usdc.getAddress(), cfg.decimals, cfg.rebasing, cfg.transferRestricted,
+          cfg.transferFee, cfg.initialVirtualReserve, 9_000_000_000n
+        );
     });
 
     it('the emitted OLD value is the pre-change value, not the new one', async function () {

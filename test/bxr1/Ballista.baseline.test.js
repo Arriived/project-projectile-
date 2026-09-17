@@ -56,7 +56,7 @@ async function deployFixture() {
 async function createToken(factory, usdc, creator, name, symbol, uri = "uri") {
   return factory
     .connect(creator)
-    .createToken(name, symbol, uri, await usdc.getAddress(), await factory.currentEconomicsHash(), false);
+    .createToken(name, symbol, uri, await usdc.getAddress(), await factory.currentEconomicsHash(await usdc.getAddress()), false);
 }
 
 describe("Ballista — the original pre-rename suite", function () {

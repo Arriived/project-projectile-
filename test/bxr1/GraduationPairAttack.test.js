@@ -39,7 +39,7 @@ describe('BXR1 — graduation against an adversarial pair', function () {
   }
 
   async function launch(ballista, usdc, creator, symbol) {
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
       .createToken('Pair', symbol, 'u', await usdc.getAddress(), hash, false)).wait();
     return rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })

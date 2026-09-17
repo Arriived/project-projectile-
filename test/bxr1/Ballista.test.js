@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, setGraduationThreshold, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE_USDC = 1_000_000n;
 
@@ -41,7 +41,7 @@ describe('Ballista — changes since the original build', function () {
   // moment it's sent -- this helper keeps that from being duplicated (and
   // potentially forgotten) at every call site.
   async function create(ballista, usdc, creator, name, symbol, uri) {
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     return ballista.connect(creator).createToken(name, symbol, uri, await usdc.getAddress(), hash, false);
   }
 
@@ -61,8 +61,9 @@ describe('Ballista — changes since the original build', function () {
   });
 
   it('launches with an 8,000 USDC graduation default', async function () {
-    const { ballista } = await deployFixture();
-    expect(await ballista.defaultGraduationThreshold()).to.equal(8_000n * ONE_USDC);
+    const { usdc, registry } = await deployFixture();
+    expect((await registry.getAsset(await usdc.getAddress())).defaultGraduationThreshold)
+      .to.equal(8_000n * ONE_USDC);
   });
 
   describe('symbol case-sensitivity toggle', function () {
@@ -106,7 +107,7 @@ describe('Ballista — changes since the original build', function () {
 
     it('reverts if the buy fee changes between fetching the hash and the tx mining', async function () {
       const { ballista, creator, usdc } = await deployFixture();
-      const staleHash = await ballista.currentEconomicsHash();
+      const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
 
       // Simulates the actual race: creator fetched terms, then before their
       // tx mined, the owner changed a default.
@@ -118,9 +119,9 @@ describe('Ballista — changes since the original build', function () {
     });
 
     it('reverts if the graduation threshold changes underneath a pinned hash', async function () {
-      const { ballista, creator, usdc } = await deployFixture();
-      const staleHash = await ballista.currentEconomicsHash();
-      await ballista.setDefaultGraduationThreshold(80_000n * ONE_USDC);
+      const { ballista, creator, usdc, registry } = await deployFixture();
+      const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
+      await setGraduationThreshold(registry, await usdc.getAddress(), 80_000n * ONE_USDC);
 
       await expect(
         ballista.connect(creator).createToken('Stale Threshold Coin', 'STH', 'ipfs://a', await usdc.getAddress(), staleHash, false),
@@ -129,7 +130,7 @@ describe('Ballista — changes since the original build', function () {
 
     it('reverts if symbol case-sensitivity changes underneath a pinned hash', async function () {
       const { ballista, creator, usdc } = await deployFixture();
-      const staleHash = await ballista.currentEconomicsHash();
+      const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
       await ballista.setCaseSensitiveSymbols(false);
 
       await expect(
@@ -139,7 +140,7 @@ describe('Ballista — changes since the original build', function () {
 
     it('reverts if the symbol lock duration changes underneath a pinned hash', async function () {
       const { ballista, creator, usdc } = await deployFixture();
-      const staleHash = await ballista.currentEconomicsHash();
+      const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
       await ballista.setSymbolLockDuration(600);
 
       await expect(
@@ -156,7 +157,7 @@ describe('Ballista — changes since the original build', function () {
 
     it('does NOT pin launchCooldown or creationFee -- those gate eligibility to launch, not token economics', async function () {
       const { ballista, creator, usdc } = await deployFixture();
-      const staleHash = await ballista.currentEconomicsHash();
+      const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
       await ballista.setLaunchCooldown(999);
       await ballista.setCreationFee(50n * ONE_USDC);
 

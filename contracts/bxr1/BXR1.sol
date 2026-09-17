@@ -26,8 +26,12 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     // quoted in 6-decimal USDC to open at the same price -- so it lives in
     // AssetRegistry.AssetConfig.initialVirtualReserve and is read once, at createToken,
     // never re-read for an existing curve. See createToken and AssetRegistry.sol.
-
-    uint256 public defaultGraduationThreshold = 8_000e6;
+    //
+    // defaultGraduationThreshold moved the same way -- no longer a single BXR1-wide
+    // default (an 18-decimal curve graduating on its first buy against a 6dp-shaped
+    // global constant was a real, demonstrated bug), now
+    // AssetRegistry.AssetConfig.defaultGraduationThreshold, read once per createToken
+    // via currentEconomicsHash(quoteAsset) and _buildCurve.
     address public constant BURN_ADDRESS = 0x000000000000000000000000000000000000dEaD;
 
     address public router;
@@ -179,7 +183,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     event LaunchCooldownSet(uint256 oldValue, uint256 newValue);
     event SymbolLockDurationSet(uint256 oldValue, uint256 newValue);
     event CreationFeeSet(uint256 oldValue, uint256 newValue);
-    event DefaultGraduationThresholdSet(uint256 oldValue, uint256 newValue);
     event DefaultFeesSet(uint16 oldBuyFeeBps, uint16 newBuyFeeBps, uint16 oldSellFeeBps, uint16 newSellFeeBps);
     event DefaultCreatorFeesSet(uint16 creatorBuyFeeBps, uint16 creatorSellFeeBps);
     event SnipeTaxTablePublished(uint32 indexed version, uint16[] table, uint16 maxBps);
@@ -290,11 +293,16 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         emit DefaultSnipeTaxTreasuryBpsSet(treasuryBps_);
     }
 
-    function currentEconomicsHash() public view returns (bytes32) {
+    // Asset-scoped: defaultGraduationThreshold is no longer a single BXR1-wide value,
+    // so the hash a creator pins against has to be computed for the SPECIFIC asset
+    // they intend to quote in -- one more external view call (assetRegistry.getAsset)
+    // inside createToken's guard, beyond the one _buildCurve already makes for
+    // initialVirtualReserve.
+    function currentEconomicsHash(address quoteAsset) public view returns (bytes32) {
         return keccak256(abi.encode(
             defaultBuyFeeBps,
             defaultSellFeeBps,
-            defaultGraduationThreshold,
+            assetRegistry.getAsset(quoteAsset).defaultGraduationThreshold,
             defaultCreatorBuyFeeBps,
             defaultCreatorSellFeeBps,
             maxCreatorLaunchBps,
@@ -319,7 +327,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         if (!(router != address(0))) revert RouterNotSet();
 
         if (!(uint256(defaultBuyFeeBps) + uint256(snipeTaxTableMaxBps[activeSnipeTaxTableVersion]) <= uint256(MAX_TOTAL_FEE_BPS))) revert BaseFeeCeilingExceeded();
-        if (!(expectedEconomicsHash == currentEconomicsHash())) revert EconomicsChanged();
+        if (!(expectedEconomicsHash == currentEconomicsHash(quoteAsset))) revert EconomicsChanged();
         if (!(block.timestamp >= lastLaunchTimestamp[msg.sender] + launchCooldown)) revert LaunchCooldownActive(lastLaunchTimestamp[msg.sender] + launchCooldown);
 
         // The asset gate. A void check rather than one returning the resolved config:
@@ -389,15 +397,17 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         c.quoteAsset = quoteAsset;
         c.creator = msg.sender;
         c.virtualTokenReserves = INITIAL_VIRTUAL_TOKEN_RESERVES;
-        // In quoteAsset's own native decimals -- see AssetRegistry.AssetConfig.
-        c.virtualQuoteReserves = assetRegistry.getAsset(quoteAsset).initialVirtualReserve;
+        // In quoteAsset's own native decimals -- see AssetRegistry.AssetConfig. One
+        // registry read covers both fields that live there, rather than two.
+        AssetRegistry.AssetConfig memory quoteCfg = assetRegistry.getAsset(quoteAsset);
+        c.virtualQuoteReserves = quoteCfg.initialVirtualReserve;
         c.tokenReserves = CURVE_TOKEN_SUPPLY;
         c.state = CurveState.ACTIVE;
         c.buyFeeBps = defaultBuyFeeBps;
         c.sellFeeBps = defaultSellFeeBps;
         c.creatorBuyFeeBps = defaultCreatorBuyFeeBps;
         c.creatorSellFeeBps = defaultCreatorSellFeeBps;
-        c.graduationThreshold = defaultGraduationThreshold;
+        c.graduationThreshold = quoteCfg.defaultGraduationThreshold;
         c.creationBlock = block.number;
         c.creationTimestamp = block.timestamp;
         c.snipeTaxTableVersion = activeSnipeTaxTableVersion;
@@ -846,10 +856,10 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         symbolLockDuration = symbolLockDuration_;
     }
 
-    function setDefaultGraduationThreshold(uint256 threshold_) external onlyOwner {
-        emit DefaultGraduationThresholdSet(defaultGraduationThreshold, threshold_);
-        defaultGraduationThreshold = threshold_;
-    }
+    // setDefaultGraduationThreshold removed. Matches initialVirtualReserve exactly: no
+    // BXR1-side setter, updated only by calling AssetRegistry.registerAsset(...) again
+    // for that asset -- see test/bxr1/assetRegistryHelper.js's setGraduationThreshold
+    // for the test-suite equivalent of that re-registration.
 
     function setCaseSensitiveSymbols(bool caseSensitive_) external onlyOwner {
         caseSensitiveSymbols = caseSensitive_;

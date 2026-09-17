@@ -22,7 +22,9 @@ interface IBXR1 {
     function claimCreatorFees(address asset) external returns (uint256);
     function createToken(string calldata, string calldata, string calldata, address, bytes32, bool)
         external returns (address);
-    function currentEconomicsHash() external view returns (bytes32);
+    // Asset-scoped, per the graduation threshold moving into AssetRegistry -- see
+    // BXR1.sol. Every call site below now passes the quote asset explicitly.
+    function currentEconomicsHash(address quoteAsset) external view returns (bytes32);
     function claimTreasuryFees(address asset) external returns (uint256);
     function creatorLaunchBuy(address token, uint256 quoteIn, uint256 minTokensOut) external;
     function updateMetadataURI(address token, string calldata newURI) external;
@@ -60,7 +62,7 @@ contract BXR1ReentrantRouter is IDEXRouter {
         try ballista.claimCreatorFees(quoteAsset) { claimCreatorReentered = true; } catch {}
         try ballista.claimTreasuryFees(quoteAsset) { claimTreasuryReentered = true; } catch {}
         try ballista.creatorLaunchBuy(token, 1e6, 0) { creatorLaunchBuyReentered = true; } catch {}
-        try ballista.createToken("R", "REENT", "u", quoteAsset, ballista.currentEconomicsHash(), false) {
+        try ballista.createToken("R", "REENT", "u", quoteAsset, ballista.currentEconomicsHash(quoteAsset), false) {
             createTokenReentered = true;
         } catch {}
         try ballista.updateMetadataURI(token, "reentered") { updateMetadataReentered = true; } catch {}
@@ -78,7 +80,7 @@ contract BXR1HostileCreator {
     }
 
     function launch(string calldata name, string calldata symbol) external returns (address) {
-        return ballista.createToken(name, symbol, "ipfs://x", quoteAsset, ballista.currentEconomicsHash(), false);
+        return ballista.createToken(name, symbol, "ipfs://x", quoteAsset, ballista.currentEconomicsHash(quoteAsset), false);
     }
 
     fallback() external payable { revert("HostileCreator: no"); }
@@ -103,7 +105,7 @@ contract BXR1MassLauncher {
                     string.concat(prefix, _toString(i)),
                     "ipfs://x",
                     quoteAsset,
-                    ballista.currentEconomicsHash()
+                    ballista.currentEconomicsHash(quoteAsset)
                 , false)
             );
         }

@@ -35,6 +35,12 @@ const FIRST_ASSET_DECIMALS = Number(process.env.BXR1_FIRST_ASSET_DECIMALS ?? 6);
 const FIRST_ASSET_INITIAL_VIRTUAL_RESERVE = BigInt(
   process.env.BXR1_FIRST_ASSET_INITIAL_VIRTUAL_RESERVE ?? "2667000000"
 );
+// defaultGraduationThreshold moved into AssetConfig, per asset -- BXR1 no longer
+// carries a global default of its own (see BXR1.sol and AssetRegistry.sol). Default
+// here matches the historic BXR1-wide value (8,000 USDC-equivalent raw units).
+const FIRST_ASSET_DEFAULT_GRADUATION_THRESHOLD = BigInt(
+  process.env.BXR1_FIRST_ASSET_DEFAULT_GRADUATION_THRESHOLD ?? "8000000000"
+);
 
 const receipts = [];
 
@@ -72,7 +78,8 @@ async function main() {
   console.log(`deployer   ${deployer.address}`);
   console.log(`treasury   ${treasury}`);
   console.log(`firstAsset ${FIRST_ASSET} (${FIRST_ASSET_DECIMALS}dp, ` +
-    `initialVirtualReserve=${FIRST_ASSET_INITIAL_VIRTUAL_RESERVE})`);
+    `initialVirtualReserve=${FIRST_ASSET_INITIAL_VIRTUAL_RESERVE}, ` +
+    `defaultGraduationThreshold=${FIRST_ASSET_DEFAULT_GRADUATION_THRESHOLD})`);
 
   // ── 1. CurveMath ─────────────────────────────────────────────────────
   console.log(`\n================================================================\n  STEP 1 -- CurveMath (external library)\n================================================================`);
@@ -116,7 +123,8 @@ async function main() {
         false, // rebasing
         false, // transferRestricted
         false, // transferFee
-        FIRST_ASSET_INITIAL_VIRTUAL_RESERVE
+        FIRST_ASSET_INITIAL_VIRTUAL_RESERVE,
+        FIRST_ASSET_DEFAULT_GRADUATION_THRESHOLD
       )
     );
     console.log(`  registered ${FIRST_ASSET} as the first quote asset`);

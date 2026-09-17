@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset, getBXR1Factory, USDC_EQUIVALENT_INITIAL_VIRTUAL_RESERVE } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, setGraduationThreshold, getBXR1Factory, USDC_EQUIVALENT_INITIAL_VIRTUAL_RESERVE } = require('./assetRegistryHelper');
 
 const ONE_USDC = 1_000_000n;
 const SCALE = 1_000_000n; // fixed-point scale for the measured ratio; SCALE == 1.0
@@ -43,7 +43,7 @@ describe('Ballista — graduation gap and the dual trigger', function () {
   }
 
   async function launch(ballista, usdc, creator, symbol) {
-    const hash = await ballista.currentEconomicsHash();
+    const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (
       await ballista.connect(creator).createToken('Gap Test', symbol, 'ipfs://a', await usdc.getAddress(), hash, false)
     ).wait();
@@ -96,7 +96,7 @@ describe('Ballista — graduation gap and the dual trigger', function () {
     expect(await ballista.CURVE_TOKEN_SUPPLY()).to.equal(807_000_000n * 10n ** 18n);
     expect(await ballista.LP_TOKEN_RESERVE()).to.equal(193_000_000n * 10n ** 18n);
     expect(await ballista.TOTAL_TOKEN_SUPPLY()).to.equal(1_000_000_000n * 10n ** 18n);
-    expect(await ballista.defaultGraduationThreshold()).to.equal(8_000n * ONE_USDC);
+    expect(assetCfg.defaultGraduationThreshold).to.equal(8_000n * ONE_USDC);
   });
 
   it('opens the DEX pool ABOVE the curve close, by under 5%', async function () {
@@ -175,11 +175,11 @@ describe('Ballista — graduation gap and the dual trigger', function () {
     });
 
     it('PROVES THE DEPLETION ARM FIRES: an unreachable threshold still graduates', async function () {
-      const { ballista, usdc, creator, trader } = await deployFixture();
+      const { ballista, usdc, creator, trader, registry } = await deployFixture();
       // Threshold far beyond anything the curve can ever accumulate. Without the
       // depletion arm this token would be permanently stuck: no tokens left to sell,
       // threshold unreachable, holders trapped, forever.
-      await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+      await setGraduationThreshold(registry, await usdc.getAddress(), 10_000_000n * ONE_USDC);
       const tokenAddress = await launch(ballista, usdc, creator, 'DEPL');
 
       const rc = await (
@@ -194,8 +194,8 @@ describe('Ballista — graduation gap and the dual trigger', function () {
     });
 
     it('the old permanently-stuck scenario is now impossible', async function () {
-      const { ballista, usdc, creator, trader } = await deployFixture();
-      await ballista.setDefaultGraduationThreshold(10_000_000n * ONE_USDC);
+      const { ballista, usdc, creator, trader, registry } = await deployFixture();
+      await setGraduationThreshold(registry, await usdc.getAddress(), 10_000_000n * ONE_USDC);
       const tokenAddress = await launch(ballista, usdc, creator, 'STUCK');
 
       await ballista.connect(trader).buy(tokenAddress, 1_000_000n * ONE_USDC, 0);
