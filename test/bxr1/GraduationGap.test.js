@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset, USDC_EQUIVALENT_INITIAL_VIRTUAL_RESERVE } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, getBXR1Factory, USDC_EQUIVALENT_INITIAL_VIRTUAL_RESERVE } = require('./assetRegistryHelper');
 
 const ONE_USDC = 1_000_000n;
 const SCALE = 1_000_000n; // fixed-point scale for the measured ratio; SCALE == 1.0
@@ -25,7 +25,7 @@ describe('Ballista — graduation gap and the dual trigger', function () {
     const [deployer, treasury, creator, trader] = await ethers.getSigners();
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const registry = await deployRegistryWithAsset(await usdc.getAddress());
-    const ballista = await (await ethers.getContractFactory('BXR1')).deploy(
+    const ballista = await (await getBXR1Factory()).deploy(
       await registry.getAddress(),
       treasury.address,
       ethers.ZeroAddress

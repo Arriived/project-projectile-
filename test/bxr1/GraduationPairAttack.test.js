@@ -1,6 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
-const { deployRegistryWithAsset } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE = 1_000_000n;
 const GRADUATED = 2n;
@@ -23,7 +23,7 @@ describe('BXR1 — graduation against an adversarial pair', function () {
     const [deployer, treasury, creator, a] = await ethers.getSigners();
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const registry = await deployRegistryWithAsset(await usdc.getAddress());
-    const ballista = await (await ethers.getContractFactory('BXR1'))
+    const ballista = await (await getBXR1Factory())
       .deploy(await registry.getAddress(), treasury.address, ethers.ZeroAddress);
     const router = await (await ethers.getContractFactory('MockV2Router')).deploy();
     await ballista.proposeRouter(await router.getAddress());

@@ -1,6 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
-const { deployRegistryWithAsset } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE = 1_000_000n;
 const DAY = 24 * 3600;
@@ -12,7 +12,7 @@ describe('Ballista — constructor router bootstrap', function () {
     const registry = await deployRegistryWithAsset(await usdc.getAddress());
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     const routerAddress = await router.getAddress();
-    const ballista = await (await ethers.getContractFactory('BXR1')).deploy(
+    const ballista = await (await getBXR1Factory()).deploy(
       await registry.getAddress(),
       treasury.address,
       initialRouter === 'real' ? routerAddress : ethers.ZeroAddress
@@ -39,7 +39,7 @@ describe('Ballista — constructor router bootstrap', function () {
     const registry = await deployRegistryWithAsset(await usdc.getAddress());
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     const routerAddress = await router.getAddress();
-    const B = await ethers.getContractFactory('BXR1');
+    const B = await getBXR1Factory();
     const ballista = await B.deploy(await registry.getAddress(), treasury.address, routerAddress);
     const rc = await ballista.deploymentTransaction().wait();
 

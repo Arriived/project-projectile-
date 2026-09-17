@@ -29,4 +29,31 @@ async function deployRegistryWithAsset(asset, overrides = {}) {
   return registry;
 }
 
-module.exports = { deployRegistryWithAsset, USDC_EQUIVALENT_INITIAL_VIRTUAL_RESERVE: 2_667_000_000n };
+/// _quoteBuy, _quoteSell and _ceilDiv were extracted out of BXR1.sol into an external
+/// CurveMath library (see contracts/bxr1/CurveMath.sol -- measured 345 bytes freed).
+/// BXR1's own deployed bytecode now carries two unresolved link placeholders, so
+/// `ethers.getContractFactory('BXR1')` cannot be called directly any more -- Hardhat
+/// needs the library's deployed address passed as `{ libraries: { CurveMath: addr } }`.
+///
+/// Deployed ONCE and cached for the life of the process. CurveMath is stateless (no
+/// storage, pure functions only), so its address never needs to change within a test
+/// run, and redeploying it before every fixture would be pure waste. Every test file
+/// that used to write `ethers.getContractFactory('BXR1')` now writes
+/// `getBXR1Factory()` in exactly that position -- same return type, same `.deploy(...)`
+/// chain, nothing else about the call site changes.
+let _curveMathAddress;
+
+async function getBXR1Factory() {
+  if (!_curveMathAddress) {
+    const lib = await (await ethers.getContractFactory('CurveMath')).deploy();
+    await lib.waitForDeployment();
+    _curveMathAddress = await lib.getAddress();
+  }
+  return ethers.getContractFactory('BXR1', { libraries: { CurveMath: _curveMathAddress } });
+}
+
+module.exports = {
+  deployRegistryWithAsset,
+  getBXR1Factory,
+  USDC_EQUIVALENT_INITIAL_VIRTUAL_RESERVE: 2_667_000_000n,
+};

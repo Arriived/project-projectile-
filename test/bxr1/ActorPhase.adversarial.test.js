@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { time } = require('@nomicfoundation/hardhat-network-helpers');
-const { deployRegistryWithAsset } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE = 1_000_000n;
 const DAY = 24 * 3600;
@@ -21,7 +21,7 @@ describe('Ballista — actor/phase pass: compromised owner', function () {
     const b = await routerB.getAddress();
     const c = await routerC.getAddress();
     const registry = await deployRegistryWithAsset(await usdc.getAddress());
-    const ballista = await (await ethers.getContractFactory('BXR1')).deploy(
+    const ballista = await (await getBXR1Factory()).deploy(
       await registry.getAddress(), treasury.address, a
     );
     for (const s of [creator, sniper]) {
@@ -184,7 +184,7 @@ describe('Ballista — actor/phase pass: donations and direct transfers', functi
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     const registry = await deployRegistryWithAsset(await usdc.getAddress());
-    const ballista = await (await ethers.getContractFactory('BXR1')).deploy(
+    const ballista = await (await getBXR1Factory()).deploy(
       await registry.getAddress(), treasury.address, await router.getAddress()
     );
     for (const s of [creator, donor]) {

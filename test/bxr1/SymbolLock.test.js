@@ -1,6 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
-const { deployRegistryWithAsset } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE = 1_000_000n;
 
@@ -14,7 +14,7 @@ describe('Ballista — symbol lock: can a duration of 0 disable it?', function (
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const registry = await deployRegistryWithAsset(await usdc.getAddress());
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
-    const factory = await (await ethers.getContractFactory('BXR1')).deploy(
+    const factory = await (await getBXR1Factory()).deploy(
       await registry.getAddress(), treasury.address, await router.getAddress()
     );
     for (const s of [alice, bob]) {
@@ -105,7 +105,7 @@ describe('symbol lock gas and size', function () {
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const registry = await deployRegistryWithAsset(await usdc.getAddress());
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
-    const BXR1 = await ethers.getContractFactory('BXR1');
+    const BXR1 = await getBXR1Factory();
     const factory = await BXR1.deploy(
       await registry.getAddress(), treasury.address, await router.getAddress()
     );

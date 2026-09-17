@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE_USDC = 1_000_000n;
 
@@ -13,7 +13,7 @@ describe('Ballista — changes since the original build', function () {
     const usdc = await USDC.deploy();
 
     const registry = await deployRegistryWithAsset(await usdc.getAddress());
-    const Ballista = await ethers.getContractFactory('BXR1');
+    const Ballista = await getBXR1Factory();
     const ballista = await Ballista.deploy(await registry.getAddress(), treasury.address, ethers.ZeroAddress);
 
     // createToken() refuses to launch while router is unset, so the fixture has to
@@ -56,7 +56,7 @@ describe('Ballista — changes since the original build', function () {
 
   it('the BXR1 artifact resolves -- contracts/ keeps the neutral name', async function () {
     const { ballista } = await deployFixture();
-    const artifact = await ethers.getContractFactory('BXR1');
+    const artifact = await getBXR1Factory();
     expect(artifact).to.not.be.undefined;
   });
 
@@ -251,7 +251,7 @@ describe('Ballista — changes since the original build', function () {
       const [deployer, treasury, creator] = await ethers.getSigners();
       const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
       const registry = await deployRegistryWithAsset(await usdc.getAddress());
-      const ballista = await (await ethers.getContractFactory('BXR1')).deploy(
+      const ballista = await (await getBXR1Factory()).deploy(
         await registry.getAddress(),
         treasury.address,
         ethers.ZeroAddress

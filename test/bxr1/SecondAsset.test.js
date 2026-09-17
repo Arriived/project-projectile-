@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
 
 const BPS = 10_000n;
 
@@ -40,7 +40,7 @@ describe('BXR1 — a second registered asset with different decimals', function 
       await dai.getAddress(), 18, true, false, false, false, 2_667n * 10n ** 18n
     );
 
-    const ballista = await (await ethers.getContractFactory('BXR1'))
+    const ballista = await (await getBXR1Factory())
       .deploy(await registry.getAddress(), treasury.address, ethers.ZeroAddress);
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());

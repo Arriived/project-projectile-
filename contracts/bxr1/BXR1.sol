@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/utils/Pausable.sol";
 
 import "./BXR1Token.sol";
 import "./AssetRegistry.sol";
+import "./CurveMath.sol";
 import "../interfaces/IDEXRouter.sol";
 
 contract BXR1 is Ownable, ReentrancyGuard, Pausable {
@@ -133,27 +134,15 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     // whether an asset may be used for a NEW curve at all. See createToken.
     AssetRegistry public immutable assetRegistry;
 
-    struct BuyQuote {
-        uint256 tokensOut;
-        uint256 newVirtualQuote;
-        uint256 newVirtualToken;
-        uint256 actualQuoteIn;
-        uint256 actualFee;
-    }
-
+    // BuyQuote and SellQuote now live in CurveMath.sol, alongside the functions that
+    // build them (_quoteBuy / _quoteSell delegate there). FeeSplit stays here: it is
+    // built by _splitBuyFee, which was measured and deliberately NOT extracted -- see
+    // CurveMath.sol's header comment.
     struct FeeSplit {
         uint256 creatorCut;
         uint256 treasuryCut;
         uint256 curveCut;
         uint256 snipeToTreasury;
-    }
-
-    struct SellQuote {
-        uint256 actualTokensIn;
-        uint256 newVirtualQuote;
-        uint256 newVirtualToken;
-        uint256 quoteOutGross;
-        uint256 fee;
     }
 
     event TokenCreated(address indexed token, address indexed creator, string name, string symbol, string metadataURI);
@@ -201,12 +190,9 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     error AssetMisbehaves(address asset, bool rebasing, bool transferRestricted, bool transferFee);
     error BaseFeeCeilingExceeded();
     error BpsExceedsDenominator();
-    error ClampCostExceededOffer();
-    error ClampInputExceededOffer();
     error CreatorAllocationUsed();
     error CreatorBuyShareExceedsFee();
     error CreatorSellShareExceedsFee();
-    error CurveMathError();
     error CurveNotActive(CurveState state);
     error EconomicsChanged();
     error FeeBelowCreatorShare();
@@ -450,44 +436,17 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         return string(b);
     }
 
+    // Delegates to CurveMath.quoteBuy -- see CurveMath.sol. Kept as a thin internal
+    // wrapper (rather than calling CurveMath.quoteBuy at every call site) so the
+    // three call sites below read exactly as they did before the extraction.
     function _quoteBuy(
         uint256 quoteIn,
         uint16 buyFeeBps,
         uint256 virtualQuoteReserves,
         uint256 virtualTokenReserves,
         uint256 tokenReservesAvailable
-    ) internal pure returns (BuyQuote memory q) {
-        uint256 k = virtualQuoteReserves * virtualTokenReserves;
-        uint256 fee = (quoteIn * buyFeeBps) / BPS_DENOMINATOR;
-        uint256 quoteInAfterFee = quoteIn - fee;
-        uint256 newVirtualQuote = virtualQuoteReserves + quoteInAfterFee;
-
-        uint256 newVirtualToken = _ceilDiv(k, newVirtualQuote);
-        if (!(newVirtualToken <= virtualTokenReserves)) revert CurveMathError();
-        uint256 tokensOut = virtualTokenReserves - newVirtualToken;
-
-        if (tokensOut <= tokenReservesAvailable) {
-
-            q.tokensOut = tokensOut;
-            q.newVirtualQuote = newVirtualQuote;
-            q.newVirtualToken = newVirtualToken;
-            q.actualQuoteIn = quoteIn;
-            q.actualFee = fee;
-            return q;
-        }
-
-        // Clamp: solve the curve backwards from the tokens actually available to the
-        // input that buys exactly them, then re-add the fee.
-        q.tokensOut = tokenReservesAvailable;
-        q.newVirtualToken = virtualTokenReserves - q.tokensOut;
-
-        q.newVirtualQuote = _ceilDiv(k, q.newVirtualToken);
-        uint256 clampedQuoteInAfterFee = q.newVirtualQuote - virtualQuoteReserves;
-
-        q.actualQuoteIn = _ceilDiv(clampedQuoteInAfterFee * BPS_DENOMINATOR, BPS_DENOMINATOR - buyFeeBps);
-        q.actualFee = q.actualQuoteIn - clampedQuoteInAfterFee;
-
-        if (!(q.actualQuoteIn <= quoteIn)) revert ClampCostExceededOffer();
+    ) internal pure returns (CurveMath.BuyQuote memory q) {
+        return CurveMath.quoteBuy(quoteIn, buyFeeBps, virtualQuoteReserves, virtualTokenReserves, tokenReservesAvailable);
     }
 
     function updateMetadataURI(address token, string calldata newURI) external {
@@ -503,7 +462,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     function _settleBuy(
         address token,
         Curve storage c,
-        BuyQuote memory q,
+        CurveMath.BuyQuote memory q,
         uint16 taxBps
     ) internal {
         FeeSplit memory f = _splitBuyFee(c, q.actualQuoteIn, q.actualFee);
@@ -569,7 +528,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         uint256 available =
             c.tokenReserves < remainingAllowance ? c.tokenReserves : remainingAllowance;
 
-        BuyQuote memory q = _quoteBuy(
+        CurveMath.BuyQuote memory q = _quoteBuy(
             quoteIn, c.buyFeeBps, c.virtualQuoteReserves, c.virtualTokenReserves, available
         );
         if (!(q.tokensOut >= minTokensOut)) revert SlippageExceeded(q.tokensOut, minTokensOut);
@@ -594,7 +553,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         if (!(quoteIn > 0)) revert ZeroAmount();
 
         uint16 taxBps = _snipeTaxBps(c);
-        BuyQuote memory q = _quoteBuy(
+        CurveMath.BuyQuote memory q = _quoteBuy(
             quoteIn, c.buyFeeBps + taxBps, c.virtualQuoteReserves, c.virtualTokenReserves, c.tokenReserves
         );
         if (!(q.tokensOut >= minTokensOut)) revert SlippageExceeded(q.tokensOut, minTokensOut);
@@ -602,39 +561,15 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         _settleBuy(token, c, q, taxBps);
     }
 
+    // Delegates to CurveMath.quoteSell -- see CurveMath.sol.
     function _quoteSell(
         uint256 tokensIn,
         uint16 sellFeeBps,
         uint256 virtualQuoteReserves,
         uint256 virtualTokenReserves,
         uint256 realQuoteReservesAvailable
-    ) internal pure returns (SellQuote memory q) {
-        uint256 k = virtualQuoteReserves * virtualTokenReserves;
-        uint256 newVirtualToken = virtualTokenReserves + tokensIn;
-
-        uint256 newVirtualQuote = _ceilDiv(k, newVirtualToken);
-        if (!(newVirtualQuote <= virtualQuoteReserves)) revert CurveMathError();
-        uint256 quoteOutGross = virtualQuoteReserves - newVirtualQuote;
-
-        if (quoteOutGross <= realQuoteReservesAvailable) {
-
-            q.actualTokensIn = tokensIn;
-            q.newVirtualToken = newVirtualToken;
-            q.newVirtualQuote = newVirtualQuote;
-            q.quoteOutGross = quoteOutGross;
-            q.fee = (quoteOutGross * sellFeeBps) / BPS_DENOMINATOR;
-            return q;
-        }
-
-        // Clamp: same inversion as the buy side, driven by available USDC instead.
-        q.quoteOutGross = realQuoteReservesAvailable;
-        q.newVirtualQuote = virtualQuoteReserves - q.quoteOutGross;
-
-        q.newVirtualToken = _ceilDiv(k, q.newVirtualQuote);
-        q.actualTokensIn = q.newVirtualToken - virtualTokenReserves;
-        q.fee = (q.quoteOutGross * sellFeeBps) / BPS_DENOMINATOR;
-
-        if (!(q.actualTokensIn <= tokensIn)) revert ClampInputExceededOffer();
+    ) internal pure returns (CurveMath.SellQuote memory q) {
+        return CurveMath.quoteSell(tokensIn, sellFeeBps, virtualQuoteReserves, virtualTokenReserves, realQuoteReservesAvailable);
     }
 
     function sell(address token, uint256 tokensIn, uint256 minQuoteOut) external nonReentrant whenNotPaused {
@@ -644,7 +579,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         if (!(block.number > c.creationBlock)) revert TradingNotOpenYet();
         if (!(tokensIn > 0)) revert ZeroAmount();
 
-        SellQuote memory q = _quoteSell(tokensIn, c.sellFeeBps, c.virtualQuoteReserves, c.virtualTokenReserves, c.realQuoteReserves);
+        CurveMath.SellQuote memory q = _quoteSell(tokensIn, c.sellFeeBps, c.virtualQuoteReserves, c.virtualTokenReserves, c.realQuoteReserves);
 
         uint256 quoteOut = q.quoteOutGross - q.fee;
         if (!(quoteOut >= minQuoteOut)) revert SlippageExceeded(quoteOut, minQuoteOut);
@@ -665,10 +600,10 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         emit Trade(token, msg.sender, false, quoteOut, q.actualTokensIn);
     }
 
-    // Rounds up. Every division on the curve rounds against the trader.
-    function _ceilDiv(uint256 a, uint256 b) internal pure returns (uint256) {
-        return (a + b - 1) / b;
-    }
+    // _ceilDiv moved into CurveMath.sol -- it was only ever called from _quoteBuy and
+    // _quoteSell, both of which now delegate there. Every division on the curve still
+    // rounds against the trader; the rounding direction did not change, only its
+    // address.
 
     function _creatorCut(uint256 tradeAmount, uint16 creatorFeeBps, uint256 feeCharged)
         internal
@@ -784,7 +719,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         if (!(_performGraduation(token))) revert GraduationFailed();
     }
 
-    function quoteBuy(address token, uint256 quoteIn) external view returns (BuyQuote memory) {
+    function quoteBuy(address token, uint256 quoteIn) external view returns (CurveMath.BuyQuote memory) {
         Curve storage c = _curves[token];
         if (!(c.token == token)) revert UnknownToken();
         if (!(c.state == CurveState.ACTIVE)) revert CurveNotActive(c.state);
@@ -792,7 +727,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         return _quoteBuy(quoteIn, c.buyFeeBps + _snipeTaxBps(c), c.virtualQuoteReserves, c.virtualTokenReserves, c.tokenReserves);
     }
 
-    function quoteSell(address token, uint256 tokensIn) external view returns (SellQuote memory) {
+    function quoteSell(address token, uint256 tokensIn) external view returns (CurveMath.SellQuote memory) {
         Curve storage c = _curves[token];
         if (!(c.token == token)) revert UnknownToken();
         if (!(c.state == CurveState.ACTIVE)) revert CurveNotActive(c.state);

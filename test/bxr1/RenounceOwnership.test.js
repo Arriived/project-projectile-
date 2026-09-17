@@ -1,6 +1,6 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
-const { deployRegistryWithAsset } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
 
 const DEAD = '0x000000000000000000000000000000000000dEaD';
 
@@ -17,7 +17,7 @@ describe('Ballista — R17: ownership cannot be renounced', function () {
     const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const registry = await deployRegistryWithAsset(await usdc.getAddress());
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
-    const factory = await (await ethers.getContractFactory('BXR1')).deploy(
+    const factory = await (await getBXR1Factory()).deploy(
       await registry.getAddress(), treasury.address, await router.getAddress()
     );
     return { owner, treasury, stranger, factory, router };

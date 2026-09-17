@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE_USDC = 1_000_000n;
 const ACTIVE = 0n;
@@ -16,7 +16,7 @@ describe('Ballista — graduation state machine adversarial testing', function (
     const usdc = await USDC.deploy();
     const registry = await deployRegistryWithAsset(await usdc.getAddress());
 
-    const Ballista = await ethers.getContractFactory('BXR1');
+    const Ballista = await getBXR1Factory();
     const ballista = await Ballista.deploy(await registry.getAddress(), treasury.address, ethers.ZeroAddress);
     const ballistaAddress = await ballista.getAddress();
 

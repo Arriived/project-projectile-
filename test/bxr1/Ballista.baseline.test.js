@@ -1,7 +1,7 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelper');
 
 const USDC = (n) => ethers.parseUnits(n.toString(), 6);
 const TOKENS = (n) => ethers.parseUnits(n.toString(), 18);
@@ -21,7 +21,7 @@ async function deployFixture() {
 
   const usdc = await (await ethers.getContractFactory("MockUSDC")).deploy();
   const registry = await deployRegistryWithAsset(await usdc.getAddress());
-  const factory = await (await ethers.getContractFactory("BXR1")).deploy(
+  const factory = await (await getBXR1Factory()).deploy(
     await registry.getAddress(),
     treasury.address,
     ethers.ZeroAddress
@@ -293,7 +293,7 @@ describe("Ballista — the original pre-rename suite", function () {
       const [owner, treasury, alice] = await ethers.getSigners();
       const usdc = await (await ethers.getContractFactory("MockUSDC")).deploy();
       const registry = await deployRegistryWithAsset(await usdc.getAddress());
-      const bare = await (await ethers.getContractFactory("BXR1")).deploy(
+      const bare = await (await getBXR1Factory()).deploy(
         await registry.getAddress(),
         treasury.address,
         ZERO
@@ -314,7 +314,7 @@ describe("Ballista — the original pre-rename suite", function () {
   describe("constructor validation", function () {
     it("rejects zero addresses", async function () {
       const [, treasury] = await ethers.getSigners();
-      const Factory = await ethers.getContractFactory("BXR1");
+      const Factory = await getBXR1Factory();
       await expect(Factory.deploy(ZERO, treasury.address, ZERO)).to.be.reverted;
     });
   });
