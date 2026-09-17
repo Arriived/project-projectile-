@@ -7331,3 +7331,299 @@ two owner transactions, and the symbol lock is inside the economics hash (`LFX1.
    - the CLAUDE.md and runbook corrections listed in §24.4;
    - `verify:reserves:live` re-run after a real trade. §23.4 notes that no trade has happened
      since the deploy.
+
+---
+
+# 25. SESSION OF 17 SEPTEMBER 2026 — the pivot begins: BXR1, a provider-agnostic launch protocol
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§24. Nothing above this line was
+deleted. Everything in §1–§24 is about `contracts/LFX1.sol` and the `ballista-migration`
+branch's frontend/indexer/deploy work — none of it is touched or superseded by this
+section. **This section lives on a NEW branch, `bxr1`**, created off `ballista-migration`
+at `dbb4d91`. `docs/HANDOFF.md` is the entry point for a session picking this branch up
+cold; this section is the detailed record behind it.
+
+## 25.1 The pivot's premise
+
+**Ballista is moving from a USDC-only bonding-curve launchpad to a provider-agnostic
+launch protocol.** The quote asset a curve trades against becomes a registry entry, not an
+assumption baked into the contract. `LFX1.sol` is the frozen, deployed, adversarially-tested
+reference implementation — proof the mechanics work, not a constraint on how the pivot is
+built. **Contracts are rewritten as needed to make the pivot real, not contorted to preserve
+LFX1's exact shape.** Where a change conflicts with something LFX1 does, the decision is
+made explicitly and recorded (see §25.3's exact-balance-delta entry for the clearest
+example: kept, but re-justified for a reason LFX1 never needed).
+
+⚠ **§6, §7, §17, §20 and every "the contract is frozen" line elsewhere in this file are
+about `LFX1.sol` specifically and remain fully true.** `contracts/LFX1.sol` and
+`contracts/LFX1Token.sol` are untouched by any of this work — verified after every commit
+in this session via `git diff --stat -- contracts/LFX1.sol contracts/LFX1Token.sol`,
+empty every time. Nothing in §25 lifts the freeze on LFX1 itself; it explains why a
+*sibling* contract now exists that is not bound by it.
+
+## 25.2 The copy, and what stayed a control
+
+`contracts/LFX1.sol` was copied into `contracts/bxr1/BXR1.sol` (and `LFX1Token.sol` into
+`BXR1Token.sol`), renamed only, **byte-identical in behaviour on first compile** — the copy
+step itself made no functional change, only the mechanical renames (`LFX1`→`BXR1` etc.) and
+import-path fixes for the one-directory-deeper location. The original files were never
+edited: `git diff` against both has stayed empty through every commit in this session, and
+the original's **251-test suite** (`test/*.test.js`, the pre-existing LFX1 suite, now joined
+by newer v4-stack tests — 303 passing + 48 pending at HEAD) is the control that must stay
+green throughout the pivot. It has, every time it was run.
+
+`test/bxr1/` holds a parallel copy of the relevant original test files (`ActorPhase`,
+`Audit`, `Ballista`, `CreatorFee`, `CreatorLaunchBuy`, `CurveDifferential`, `Exploit`,
+`Graduation`, `GraduationGap`, `GraduationPairAttack`, `GuardCoverage`, `LpRecipient`,
+`MetadataURI`, `PartialFill`, `PoolBoost`, `RenounceOwnership`, `RouterBootstrap`,
+`SnipeTax`, `SymbolLock`, `UsdcTransferIntegrity` — 21 files, 22 with the new
+`SecondAsset.test.js`), pointed at `BXR1` instead of `LFX1`, that gets modified in step with
+the contract as the pivot proceeds. `contracts/bxr1/mocks/` holds `BXR1`-prefixed copies of
+the two mock contracts (`CreatorLauncher.sol`, `Attackers.sol` — only the four of the
+original eight `Attackers.sol` contracts whose interface actually calls into BXR1; the other
+four are asset-agnostic already and are reused directly from `contracts/mocks/`) that
+exercise BXR1 through its own ABI rather than LFX1's.
+
+Two untracked files found via `git status` at the very start of this work
+(`docs/threshold-budget-report.md`, `docs/MANUAL_LIFECYCLE.md` plus its scripts) were, on
+inspection, real content from the Arc mainnet rehearsal rather than scratch — committed as
+`dbb4d91` on `ballista-migration` *before* branching, per the operator's explicit
+instruction, so `bxr1` branches off a tree with nothing unexplained left behind.
+
+## 25.3 AssetRegistry and BXR1's generic quote asset
+
+**`contracts/bxr1/AssetRegistry.sol`**, new. Per asset, keyed by address:
+
+| field | what it is |
+|---|---|
+| `decimals` | the asset's own ERC-20 decimals |
+| `enabled` | the fast disable lever — flips independently of everything else |
+| `rebasing`, `transferRestricted`, `transferFee` | the three misbehaviour flags |
+| `initialVirtualReserve` | the curve's opening quote-side virtual reserve, in the asset's own native decimals |
+| `defaultGraduationThreshold` | the graduation threshold, in the asset's own native decimals |
+
+**Both `initialVirtualReserve` and `defaultGraduationThreshold` are raw-unit figures whose
+meaningful magnitude depends on the asset's own decimals** — a curve quoted in an
+18-decimal asset needs a different raw magnitude than one quoted in 6-decimal USDC to open
+at the same real-world price, and the same is true of the threshold it graduates at.
+Neither is normalised or derived from `decimals` by the registry; whoever registers the
+asset chooses both numbers, in that asset's own native units.
+
+**Adding an asset is a registry write, never a BXR1 contract change** — that split is the
+entire point of the file. **Neither figure has a separate setter.** The only way to change
+either is to call `registerAsset(...)` again for that asset, which rewrites the whole
+`AssetConfig` — decimals, `enabled`, all three misbehaviour flags, both raw-unit fields —
+in one call. This matches `setAssetEnabled`'s own restraint: it is the *only* single-field
+setter that exists, because flipping `enabled` alone (leaving every other field untouched)
+is the one operation common enough to deserve its own function; everything else is
+re-registration.
+
+**Re-registering an asset already backing a live curve does NOT retroactively change that
+curve** — BXR1 resolves and snapshots a curve's quote-asset config exactly ONCE, at
+`createToken`, into the `Curve` struct, and never re-reads the registry for an existing
+curve's lifetime. This is the same per-launch-snapshot property every other BXR1 economics
+default already has (fees, graduation threshold defaults, snipe tax table, `lpRecipient`
+— see §1.8, §7A).
+
+**BXR1's changes from LFX1, to make the quote asset generic:**
+
+- The single `IERC20 public immutable usdc` is gone. `Curve` gains `address quoteAsset`,
+  resolved from `createToken`'s new `address quoteAsset` parameter and snapshotted once,
+  alongside every other per-curve economics field, in a single `_buildCurve` internal
+  function (extracted from `createToken`'s body for a stack-too-deep reason — see §25.4).
+- Every `Usdc`-named field and local is renamed off it: `virtualUsdcReserves` →
+  `virtualQuoteReserves`, `realUsdcReserves` → `realQuoteReserves`,
+  `defaultGraduationThresholdUsdc` → (now per-asset, see above), `creationFeeUsdc` →
+  `creationFee`, and so on through every quote/fee-adjacent identifier in the file.
+- **Fee accrual is keyed by asset, not global.** `treasuryFeesAccrued` became
+  `mapping(address => uint256)`; `creatorFeesAccrued` became
+  `mapping(address => mapping(address => uint256))` (creator → asset → amount). Two
+  curves quoted in different assets never let their fees conflate under one counter —
+  proven directly in `SecondAsset.test.js`'s "two curves on two different quote assets
+  never interfere with each other".
+- **`claimTreasuryFees(address asset)` and `claimCreatorFees(address asset)`** both take
+  the asset to settle now, for the same reason: a treasury or creator owed fees in more
+  than one asset claims each separately.
+- **`createToken` gates on the registry's flags, at creation time, not as a warning read
+  anywhere else.** `_requireAssetUsable(quoteAsset)` reverts `AssetNotEnabled` if the
+  asset is not enabled, or `AssetMisbehaves` if any of the three misbehaviour flags is
+  set. An asset that was never registered and one explicitly disabled refuse identically
+  (the registry's zero-value sentinel has `enabled == false` either way) — no separate
+  existence check exists to forget.
+- **`currentEconomicsHash()` is now asset-scoped: `currentEconomicsHash(address
+  quoteAsset)`.** `defaultGraduationThreshold` moved into the registry per-asset (§25.6),
+  so the hash a creator pins against has to be computed for the specific asset they
+  intend to quote in — one more external `assetRegistry.getAsset(...)` call inside
+  `createToken`'s guard, beyond the one `_buildCurve` already makes.
+
+**The exact-balance-delta check in `_settleBuy` is kept, and its justification is
+re-derived rather than carried over unexamined.** LFX1's own comment (§1.6) frames it as a
+proof about Arc USDC's specific 18dp-native/6dp-ERC20 duality. BXR1 keeps the identical
+check — measure the actual balance delta around the quote-asset pull, revert on any
+shortfall — but re-labels it a **general** defence: proven exact against that one specific
+duality, it does the same job against *any* registered asset that turns out to
+under-deliver on transfer, which is precisely the fee-on-transfer misbehaviour
+`AssetRegistry`'s `transferFee` flag exists to keep out at registration, with this check as
+the loud backstop if one ever gets through. `UsdcTransferIntegrity.test.js` proves it fires
+identically regardless of the quote asset's decimals.
+
+**Curve math itself is untouched in behaviour.** `_quoteBuy`/`_quoteSell` work in raw
+integer units and were never decimal-aware to begin with; no normalisation layer was added
+for the pivot, deliberately — `SecondAsset.test.js` proves an 18-decimal curve and a
+6-decimal curve behave identically in percentage terms (same fee bps, same clamp shape,
+same slippage enforcement) despite trading at raw magnitudes 1e12 apart.
+
+⚠ **`currentPrice()`'s `1e18` scaling was left uncalibrated, deliberately, and is a known
+residual — see §25.7.** It was already a fixed, uncalibrated WAD convention in LFX1
+(calibrated for a 6dp-quote/18dp-token pair); the pivot did not add a normalisation layer to
+it, on the same "curve math does not know about decimals" principle, and it is flagged in
+BXR1.sol's own comment for whoever consumes it next.
+
+## 25.4 The CurveMath extraction and the byte-budget work
+
+**`_quoteBuy`, `_quoteSell` and `_ceilDiv` were extracted into `contracts/bxr1/CurveMath.sol`,
+an external, stateless library.** Two stack-too-deep compiler errors were hit while wiring
+the asset-genericity work into `createToken` (one field too many for 0.8.24 at 200 runs,
+inlining the asset gate and the `Curve` struct literal) and were fixed by extracting
+functions (`_requireAssetUsable`, `_buildCurve`) — **never `viaIR`**, per the project's
+standing rule (§5).
+
+**Measured, not estimated:**
+
+| | before | after | delta |
+|---|---|---|---|
+| BXR1 deployed bytes | 24,484 | 24,139 | **−345** |
+| buy gas, with the balance-delta check | 174,396 | 178,331 | **+3,935** |
+
+The 345 bytes came from moving the two largest, most arithmetic-dense functions in the
+file; the 3,935 gas is the cost of one cold external `CALL` plus struct calldata/returndata
+ABI encoding, paid on every `buy()`/`sell()`/`creatorLaunchBuy()` forever. `CurveMath`
+itself deploys separately, 1,298 bytes, once, and never needs redeploying — it is
+stateless.
+
+**Library linking is now a hard requirement at deploy time.** BXR1's compiled bytecode
+carries two unresolved link placeholders where `CurveMath`'s address goes;
+`ethers.getContractFactory('BXR1')` fails outright without `{ libraries: { CurveMath:
+address } }`, and `CurveMath` must be deployed first. `scripts/deploy-bxr1.js` (new)
+handles this — CurveMath → AssetRegistry (registering one starting asset) → BXR1 linked
+against the library — and was run end to end against the local Hardhat network before
+being committed, not just compiled. `test/bxr1/assetRegistryHelper.js` gained
+`getBXR1Factory()`, which deploys CurveMath once (cached for the process — it is stateless,
+so redeploying it per fixture would be pure waste) and returns a linked factory; every test
+file's `ethers.getContractFactory('BXR1')` became `getBXR1Factory()` in place.
+
+## 25.5 Test state
+
+**263 passing on `bxr1`** (`test/bxr1/*.test.js`, 22 files, one combined run) — the
+original 251 plus **12 new**: 10 in `SecondAsset.test.js` (the asset-genericity acceptance
+suite — registers MockDAI at 18 decimals alongside 6-decimal MockUSDC, proves a full
+create/buy/sell cycle, decimal-agnostic slippage and balance-delta enforcement, cross-asset
+fee isolation, and creation-time asset-gate rejection) plus 2 more added when the
+graduation threshold moved per-asset (§25.6): one proving an 18-decimal curve no longer
+graduates on a modest first buy, one in `GuardCoverage.test.js` proving the threshold
+change is still observable via `AssetRegistered`.
+
+**LFX1 control: 303 passing + 48 pending, `git diff` against `contracts/LFX1.sol` and
+`contracts/LFX1Token.sol` empty.** Re-confirmed after every commit in this session.
+
+## 25.6 The byte budget, and why it constrains everything after this
+
+**BXR1 is at 24,205 of 24,576 deployed bytes. 371 bytes of headroom**, measured, current as
+of `cbf69b6`. `AssetRegistry`: 1,862 bytes. `CurveMath`: 1,298 bytes (deployed separately,
+does not count against BXR1's own limit).
+
+The pivot still needs, at minimum: a launch-type distinction, a binding from a curve to a
+leveraged-token vault, and per-launch-type fee-split variants — none of which were free to
+guess the cost of, so each candidate byte-saving option was **built and measured**, not
+estimated, before any of them was adopted or rejected:
+
+- **The graduation threshold moved into `AssetRegistry`, per asset** (fixing the
+  18dp-curve-graduates-on-first-buy bug — §25.3, §25.7) **cost 66 bytes**, measured:
+  24,139 → 24,205. `AssetRegistry` grew 86 bytes, 1,776 → 1,862. This is why the headroom
+  above is 371, not 437.
+- **Extracting the fee-split helpers (`_creatorCut`, `_splitBuyFee`) into the same
+  `CurveMath` library was tried and measured NEGATIVE.** Moving `_quoteBuy`/`_quoteSell`
+  alone saved 345 bytes; adding the two small fee-split helpers on top of that *increased*
+  the contract by 126 bytes relative to the quoteBuy/quoteSell-only version — net saving
+  fell to 219 bytes from 345. **Library extraction has a break-even size**: for a function
+  small enough (a handful of arithmetic ops, or one returning a multi-field struct), the
+  external-call ABI encode/decode overhead costs more bytes than the inlined body it
+  replaces. `_routeCreatorCut` could not be extracted at all regardless of size — it writes
+  contract storage (`creatorFeesAccrued`, `poolBoost`) and emits events, neither reachable
+  from a stateless external library function.
+- **Dead code removal saved ZERO, measured.** `BXR1.sol` carried an unused internal
+  function (`_resolveQuoteAsset`, a leftover from an earlier refactor iteration, never
+  called after `_requireAssetUsable`/`_buildCurve` superseded it). Deleting it produced a
+  byte-identical compile: **the optimizer already strips unreachable internal functions
+  from deployed bytecode.** There was nothing to gain here.
+- **Moving graduation orchestration into its own contract (`GraduationManager`) was built
+  and measured NEGATIVE.** `forceApprove` has to stay in BXR1 — an ERC-20 approval is
+  scoped to the approving address, and BXR1 is the one holding the token/quote balances at
+  graduation, so it is the only contract that *can* approve the router. What could
+  plausibly move — the `addLiquidity` call itself and its try/catch — turned out to be
+  almost exactly offset by what had to stay: BXR1 still needs its *own* try/catch wrapping
+  the call into `GraduationManager` (a plain call would let any unexpected revert from that
+  cross-contract hop unwind the trade that triggered graduation, breaking the property
+  "THE CORE FIX" pins), plus the same four `forceApprove` calls, plus the state transition.
+  Measured: BXR1 grew from 24,205 to **24,258 bytes even in the leanest form** (the
+  `GraduationManager` immutable declared `private`, no auto-generated getter) — a **net
+  cost of 53 bytes**, not a saving. `GraduationManager.sol` was deleted and `BXR1.sol`
+  reverted; nothing from this attempt was committed.
+- **Splitting trading out into its own contract is blocked as scoped, by the same
+  approval-scoping fact.** Whichever contract executes `buy()`/`sell()` is the one that
+  accumulates the real token/quote balances, and graduation's `forceApprove` + router call
+  needs to run from wherever those balances actually sit. A factory that "keeps createToken
+  and graduation" while a separate contract "holds buy/sell" therefore either needs
+  graduation to move into the trading contract too (contradicting the split as stated), or
+  an extra transfer hop moving reserves from the trading contract to the factory
+  immediately before every graduation attempt — which reopens exactly the properties
+  CLAUDE.md treats as load-bearing: the parked-curve recovery and permissionless-retry
+  semantics (§1.1, §1.4) would now have to survive a partially-completed transfer as well
+  as a reverting router, a materially harder property to prove and not attempted here.
+
+**Conclusion: the cheap extractions are exhausted.** 371 bytes remain, and every
+low-disruption option that could plausibly free more has been tried, measured, and either
+adopted (the threshold move, because it fixed a real bug, at real cost) or rejected on
+hard numbers (fee-split extraction, dead code, graduation-manager extraction) or ruled out
+structurally before a build was even attempted (splitting trading, on the approval-scoping
+argument above). Whatever ships next — launch types, the vault binding, per-launch-type fee
+splits — has to fit inside 371 bytes or force a harder structural choice: splitting
+`createToken`/graduation from trading despite the reopened properties, or accepting the
+deployment and gas cost of the split described above with the extra transfer hop built and
+proven safe. Neither is a small decision, and neither should be taken by default just
+because the alternative is inconvenient. See `docs/BYTE_BUDGET_REPORT.md` for the measured
+cost of each concrete pivot feature against this budget.
+
+## 25.7 Open residuals
+
+**`currentPrice()`'s `1e18` scaling is calibrated for a 6dp quote asset, and nothing calls
+it.** Grepped across `app/src` and `indexer/src`: zero call sites outside the ABI JSON
+itself. §1.3 already established for LFX1 that `currentPrice()` is unusable for price
+impact (it rounds to the integer `2` at launch scale) and that the frontend/indexer read
+raw `virtualUsdcReserves`/`virtualTokenReserves` from `curves()` instead, applying their
+own scale factor. **That is where the real hazard for a non-6dp BXR1 quote asset lives, and
+it is three independently hardcoded 6dp-shaped scale factors, not one:**
+
+| site | what it hardcodes |
+|---|---|
+| `app/src/routes/TokenPage.tsx:68` | `10 ** (LAUNCH_TOKEN_DECIMALS - USDC_ERC20_DECIMALS)` — the exponent `18 - 6 = 12` is a literal constant, not derived from the curve's actual quote asset |
+| `app/src/hooks/useCurve.ts:166`, `marketCapUsdc6(curve, totalSupply)` | the function name says what it assumes — `virtualUsdcReserves * totalSupply / virtualTokenReserves` returns a figure implicitly denominated in whatever the quote asset's raw decimals are, with nothing in the signature to catch a mismatch |
+| `indexer/migrations/003_list_page_columns.sql:214` | a literal `/ 1000000.0` baked into the SQL view computing `market_cap_usdc` |
+
+**All three are latent, not broken, today** — the frontend and indexer only ever talk to
+LFX1, which has exactly one quote asset (Arc USDC, 6 decimals), so none of the three has
+ever been exercised against anything else. Feed any of them an 18-decimal quote asset and
+each is wrong by **1e12**, silently — no revert, no error, just a price or market cap off
+by twelve orders of magnitude. This is the same class of hazard §15.5 already named once
+for the v4 adapter's `sqrtPriceX96` derivation, showing up again one layer up, in display
+code this time rather than settlement code. **All three need a genuine decimals-aware
+rewrite — reading the quote asset's actual decimals from wherever it ends up exposed to the
+frontend — before any non-6dp-quoted BXR1 launch can display a correct price or market cap
+anywhere in the product.**
+
+**Nothing in the frontend or indexer knows about `AssetRegistry` yet.** BXR1 is a
+contract-only branch at this point; `app/src` and `indexer/src` are unmodified and still
+built entirely around LFX1's single fixed USDC integration (§11, §8). Wiring either of them
+to BXR1 — reading the quote asset per curve, reading its decimals from the registry rather
+than assuming 6, fixing the three hardcoded scale factors above — is unstarted work, not
+merely undocumented.

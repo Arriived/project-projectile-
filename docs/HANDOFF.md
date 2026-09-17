@@ -7,6 +7,14 @@ that live outside the repo (what's deployed where, right now) rather than in it.
 file and `CLAUDE.md` disagree, `CLAUDE.md` is right and this file is stale — it was written
 2026-09-12 and will start drifting the moment anything changes.
 
+⚠ **RUN `git branch --show-current` BEFORE READING FURTHER. Sections 1–9 below are about
+the `ballista-migration` branch's mainnet-launch-day work (which DEX venue, the v4 hook,
+the Wednesday sequence) and do NOT apply to the `bxr1` branch.** If you are on `bxr1`, skip
+straight to **§10, at the foot of this file** — a self-contained entry point for the
+provider-agnostic pivot, written 2026-09-17. Sections 1–9 remain accurate for
+`ballista-migration` and are unchanged; they are simply about a different, parallel line of
+work than whatever brought you to `bxr1`.
+
 ## 1. Orientation
 
 Ballista is a memecoin launchpad native to Arc, Circle's stablecoin L1 (USDC is the native
@@ -311,3 +319,151 @@ open — see item 1 in §8.
   `5d3ed04`); it happened this month to `app/src/components/token/YourPosition.tsx` and was
   recovered from `git show HEAD:<path>` plus a replayed diff, not from a backup that existed
   in advance.
+
+---
+
+## 10. THE `bxr1` BRANCH — the provider-agnostic pivot. Written 2026-09-17, self-contained.
+
+**Read this section on its own if you are on the `bxr1` branch.** It does not assume you
+have read §1–§9 above, which are about `ballista-migration`'s mainnet-launch-day work and a
+different contract entirely. This section rots the same way the rest of this file does —
+verify against the repo, not against this prose — but it is written to get you oriented and
+working without needing anything else first.
+
+### 10.1 The pivot, in one paragraph
+
+Ballista is moving from a USDC-only bonding-curve launchpad to a **provider-agnostic launch
+protocol**: the quote asset a curve trades against becomes a registry entry, not an
+assumption baked into the contract. `contracts/LFX1.sol` (frozen, deployed, adversarially
+tested on Arc Testnet — see §5 above) is the **reference implementation**, proof the
+mechanics work, not a constraint on how the pivot is built. Contracts are rewritten as
+needed to make genericity real; where a change would conflict with something LFX1 does, the
+decision is made explicitly and the reason recorded, not silently preserved out of caution.
+Full detail: `CLAUDE.md` §25.
+
+### 10.2 Verify you are in the right place
+
+```bash
+git branch --show-current      # bxr1
+git rev-parse --short HEAD     # cbf69b6, if nothing has landed since this was written
+git status                     # clean
+git log origin/bxr1..HEAD --oneline   # empty -- level with origin
+```
+
+`bxr1` was branched off `ballista-migration` at `dbb4d91`. Everything on
+`ballista-migration` up to that point (the frozen LFX1, the deployed v2 factory, the v4
+hook work, the whole frontend) is reachable from `bxr1` too — this branch adds new work on
+top, it does not remove anything.
+
+### 10.3 What exists on this branch, and where
+
+| path | what |
+|---|---|
+| `contracts/bxr1/BXR1.sol` | the generic-asset rewrite of `LFX1.sol` — same mechanics, quote asset is now a parameter, not an immutable |
+| `contracts/bxr1/BXR1Token.sol` | renamed copy of `LFX1Token.sol`, no functional change |
+| `contracts/bxr1/AssetRegistry.sol` | new — per-asset config: decimals, `enabled`, the three misbehaviour flags, `initialVirtualReserve`, `defaultGraduationThreshold`, both in the asset's own native decimals |
+| `contracts/bxr1/CurveMath.sol` | new — external library holding `_quoteBuy`/`_quoteSell`/`_ceilDiv`, extracted out of BXR1 to free bytecode space (§10.4) |
+| `contracts/bxr1/mocks/` | `BXR1`-prefixed copies of the two mock contracts whose interface calls into BXR1 (`CreatorLauncher.sol`, `Attackers.sol`) |
+| `test/bxr1/*.test.js` | 22 files, parallel to the original `test/*.test.js` suite, pointed at `BXR1` |
+| `test/bxr1/assetRegistryHelper.js` | shared test helper — `deployRegistryWithAsset`, `setGraduationThreshold` (the re-registration helper that stands in for the setter AssetRegistry deliberately does not have), `getBXR1Factory` (deploys and caches the linked BXR1 factory — see §10.4) |
+| `scripts/deploy-bxr1.js` | new deploy script: CurveMath → AssetRegistry → BXR1, linked. Run end-to-end against the local Hardhat network before being committed |
+| `contracts/LFX1.sol`, `contracts/LFX1Token.sol` | **untouched.** `git diff --stat -- contracts/LFX1.sol contracts/LFX1Token.sol` must be empty. If it is not, something has gone wrong — this file is the control, not a place to make changes |
+
+**Three commits so far, in order:**
+
+| commit | what |
+|---|---|
+| `7026a5b` | BXR1/BXR1Token copied and renamed; AssetRegistry built; BXR1's quote asset made generic (§10.1) |
+| `f0da62b` | CurveMath extraction — 345 bytes freed, measured |
+| `cbf69b6` | graduation threshold moved into AssetRegistry, per asset — fixes a real bug, costs 66 bytes, measured |
+
+Read each commit message in full (`git show --stat <sha>` then `git log -1 <sha>`) before
+assuming you know what it did — they were written to be the record, not just a label.
+
+### 10.4 The byte budget — read this before touching BXR1.sol at all
+
+**BXR1 is at 24,205 of 24,576 deployed bytes. 371 bytes of headroom, measured, as of
+`cbf69b6`.** This is not a soft constraint — it is the EIP-170 contract-size limit, and a
+compile that exceeds it simply fails to deploy. Every feature added to BXR1 from here has
+to be sized against this number before it is built, not after.
+
+**What has already been measured, so it does not need re-measuring:**
+
+- Extracting `_quoteBuy`/`_quoteSell`/`_ceilDiv` into an external library: **−345 bytes**,
+  at a cost of **+3,935 gas per trade** (174,396 → 178,331, measured) and a hard
+  requirement that the library be deployed and linked before BXR1 (`{ libraries: {
+  CurveMath: address } }` — `ethers.getContractFactory('BXR1')` fails without it).
+- Extracting the small fee-split helpers into the same library on top of that: **measured
+  NEGATIVE** — costs more than it saves, because ABI encode/decode overhead exceeds the
+  inlined cost for functions that small. Library extraction has a break-even size; do not
+  assume "extract it to a library" is free money without measuring the specific function.
+- Deleting dead code (an unused internal function): **measured ZERO savings.** The
+  optimizer already strips unreachable internal functions from deployed bytecode.
+- Moving graduation orchestration into its own contract: **measured NEGATIVE**, BXR1 grew
+  53 bytes even in the leanest form. `forceApprove` has to stay wherever the balance is
+  held (BXR1), and preserving "a reverting router does not unwind the triggering trade"
+  means BXR1 needs its own try/catch around the cross-contract call too — there was
+  nothing large enough to relocate for a net win.
+- Splitting trading into its own contract: **not built** — ruled out on the same
+  approval-scoping argument (whichever contract holds the balance is the only one that can
+  approve the router) before any code was written. Doing it anyway means either moving
+  graduation into the trading contract too, or an extra transfer hop that reopens the
+  parked-curve recovery and permissionless-retry guarantees `CLAUDE.md` §1.1/§1.4 treat as
+  load-bearing.
+
+**Full detail and the exact numbers: `CLAUDE.md` §25.6.** If `docs/BYTE_BUDGET_REPORT.md`
+exists in the repo, read it too — it measures the concrete cost of the next pivot features
+(a launch-type distinction, a leveraged-vault binding, per-launch-type fee splits) against
+this same 371-byte budget, the same way: build the smallest real version, compile, measure,
+don't estimate.
+
+**The rule going forward, stated plainly: measure before you build, and measure by
+compiling, not by reasoning about what "should" be smaller.** Every one of the negative
+results above looked plausible on paper before it was built. None of them held up compiled.
+
+### 10.5 What is measured versus estimated — do not blur this distinction
+
+Everything in §10.4's table is **measured**: built, compiled, the artifact's
+`deployedBytecode.length` read directly, in most cases with a `git checkout --` revert
+immediately after so nothing speculative stayed in the tree. Nothing in this section is a
+guess dressed up as a number.
+
+What is **not yet measured, only reasoned about**: the actual gas cost of a graduation that
+crosses a per-asset threshold set far from LFX1's historic 8,000 USDC-equivalent figure (no
+reason to expect it differs, but it has not been run); the gas cost of `createToken` itself
+after the threshold move beyond the two figures already printed by
+`test/bxr1/SymbolLock.test.js`'s own size-and-gas probe (1,102,357 / 1,048,257 at `cbf69b6`
+— read those live rather than trusting this line, they move with the file). If a future
+session needs either figure, measure it the same way §10.4's table was built: run the
+relevant test, read the real number out of its output, do not estimate from the shape of
+the diff.
+
+### 10.6 What is blocked on an external answer, and what is simply not started yet
+
+**Nothing about the `bxr1` contract work itself is blocked on an external answer.** It is
+pure local Hardhat work — no RPC, no funded key, no third-party API — unlike the
+`ballista-migration` v4 hook work in §1–§9 above, which genuinely is blocked on Circle RPC
+access and Goldsky's unanswered questions (`CLAUDE.md` §11.17, §20.5). Do not import that
+urgency or those blockers into `bxr1` work; they belong to a different branch and a
+different deadline.
+
+**What is simply unstarted, not blocked:**
+
+- The frontend and indexer have never been touched by this pivot. Both are still built
+  entirely around LFX1's single fixed 6-decimal USDC integration, and both contain
+  hardcoded 6dp-shaped scale factors that would silently misprice anything quoted in a
+  different-decimals asset by 1e12 — `CLAUDE.md` §25.7 has the exact three sites
+  (`app/src/routes/TokenPage.tsx:68`, `app/src/hooks/useCurve.ts:166`,
+  `indexer/migrations/003_list_page_columns.sql:214`). None of this is broken *today*
+  because nothing has pointed either system at a non-USDC BXR1 deployment yet; all three
+  need a genuine decimals-aware rewrite before that can happen safely.
+- The harder structural choice §10.4 ends on — split trading from graduation despite the
+  reopened recovery/retry properties, or build and prove safe the extra-transfer-hop
+  redesign that keeps those properties intact — has not been decided. That decision needs
+  the operator's judgment, not an external answer; do not make it unilaterally on a
+  session's own initiative (`CLAUDE.md`'s standing rule, restated in §3 above for the other
+  branch and equally true here).
+- Whatever `docs/BYTE_BUDGET_REPORT.md` measured for the next concrete pivot features
+  (launch types, the vault binding, per-launch-type fee splits) is report-only by design —
+  read it for the numbers, but building any of it is a separate, deliberate next step, not
+  something this section authorizes.
