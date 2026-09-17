@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.24;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+
+contract BXR1Token is ERC20 {
+
+    string public metadataURI;
+
+    address public immutable creator;
+
+    address public immutable factory;
+
+    constructor(
+        string memory name_,
+        string memory symbol_,
+        uint256 totalSupply_,
+        address creator_,
+        address mintTo_,
+        string memory metadataURI_
+    ) ERC20(name_, symbol_) {
+        creator = creator_;
+        factory = msg.sender;
+        metadataURI = metadataURI_;
+        _mint(mintTo_, totalSupply_);
+    }
+
+    function setMetadataURI(string calldata newURI) external {
+        require(msg.sender == factory, "only the factory may update metadata");
+        metadataURI = newURI;
+    }
+}
