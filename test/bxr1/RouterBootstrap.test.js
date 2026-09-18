@@ -24,7 +24,7 @@ describe('Ballista — constructor router bootstrap', function () {
 
   async function create(ballista, usdc, creator, symbol) {
     const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
-    return ballista.connect(creator).createToken('Boot', symbol, 'u', await usdc.getAddress(), hash, false);
+    return ballista.connect(creator).createToken('Boot', symbol, 'u', await usdc.getAddress(), hash);
   }
 
   it('a constructor-set router is live immediately -- launches work from block zero', async function () {

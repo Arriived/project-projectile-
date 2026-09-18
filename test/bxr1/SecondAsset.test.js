@@ -55,7 +55,6 @@ describe('BXR1 — a second registered asset with different decimals', function 
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());
     await ballista.publishSnipeTaxTable([]); // steady-state economics, not sniping
-    await ballista.setLaunchCooldown(0);
 
     for (const s of [creator, trader]) {
       await usdc.mint(s.address, 10_000_000n * 10n ** 6n);
@@ -70,7 +69,7 @@ describe('BXR1 — a second registered asset with different decimals', function 
   async function launch(ballista, quoteAsset, creator, symbol) {
     const hash = await ballista.currentEconomicsHash(await quoteAsset.getAddress());
     const rc = await (await ballista.connect(creator)
-      .createToken('Second Asset Coin', symbol, 'ipfs://a', await quoteAsset.getAddress(), hash, false)
+      .createToken('Second Asset Coin', symbol, 'ipfs://a', await quoteAsset.getAddress(), hash)
     ).wait();
     return rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated').args.token;
@@ -253,7 +252,7 @@ describe('BXR1 — a second registered asset with different decimals', function 
     const stranger = await (await ethers.getContractFactory('MockUSDC')).deploy();
     const hash = await ballista.currentEconomicsHash(await stranger.getAddress());
     await expect(
-      ballista.connect(creator).createToken('Rogue', 'RGE', 'u', await stranger.getAddress(), hash, false)
+      ballista.connect(creator).createToken('Rogue', 'RGE', 'u', await stranger.getAddress(), hash)
     ).to.be.revertedWithCustomError(ballista, 'AssetNotEnabled');
   });
 
@@ -266,7 +265,7 @@ describe('BXR1 — a second registered asset with different decimals', function 
     );
     const hash = await ballista.currentEconomicsHash(await fee.getAddress());
     await expect(
-      ballista.connect(creator).createToken('Fee', 'FEE', 'u', await fee.getAddress(), hash, false)
+      ballista.connect(creator).createToken('Fee', 'FEE', 'u', await fee.getAddress(), hash)
     ).to.be.revertedWithCustomError(ballista, 'AssetMisbehaves');
   });
 
@@ -283,7 +282,7 @@ describe('BXR1 — a second registered asset with different decimals', function 
     // But no NEW curve can be created against the now-disabled asset.
     const hash = await ballista.currentEconomicsHash(await dai.getAddress());
     await expect(
-      ballista.connect(creator).createToken('Blocked', 'BLK', 'u', await dai.getAddress(), hash, false)
+      ballista.connect(creator).createToken('Blocked', 'BLK', 'u', await dai.getAddress(), hash)
     ).to.be.revertedWithCustomError(ballista, 'AssetNotEnabled');
   });
 });

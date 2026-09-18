@@ -22,7 +22,6 @@ describe('BXR1 — lpRecipient', function () {
       .deploy(await registry.getAddress(), treasury.address, ethers.ZeroAddress);
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());
-    await ballista.setLaunchCooldown(0);
     for (const s of [creator, a]) {
       await usdc.mint(s.address, 500_000_000n * ONE);
       await usdc.connect(s).approve(await ballista.getAddress(), ethers.MaxUint256);
@@ -33,7 +32,7 @@ describe('BXR1 — lpRecipient', function () {
   async function launch(ballista, usdc, creator, symbol) {
     const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
-      .createToken('Lp', symbol, 'u', await usdc.getAddress(), hash, false)).wait();
+      .createToken('Lp', symbol, 'u', await usdc.getAddress(), hash)).wait();
     return rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated').args.token;
   }
@@ -133,7 +132,7 @@ describe('BXR1 — lpRecipient', function () {
     const stale = await ballista.currentEconomicsHash(await usdc.getAddress());
     await ballista.setLpRecipient(locker.address);
     await expect(
-      ballista.connect(creator).createToken('X', 'XPIN', 'u', await usdc.getAddress(), stale, false)
+      ballista.connect(creator).createToken('X', 'XPIN', 'u', await usdc.getAddress(), stale)
     ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
   });
 });

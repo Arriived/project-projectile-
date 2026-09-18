@@ -5,7 +5,6 @@ const { deployRegistryWithAsset, getBXR1Factory } = require('./assetRegistryHelp
 
 const ONE = 1_000_000n;
 const BPS = 10_000n;
-const CURVE_SUPPLY = 807_000_000n * 10n ** 18n;
 const ACTIVE = 0n, READY = 1n, GRADUATED = 2n;
 
 // Fresh adversarial pass written AFTER the curve redesign, the dual trigger, the timed
@@ -22,7 +21,6 @@ describe('BXR1 — audit: fresh adversarial pass', function () {
       .deploy(await registry.getAddress(), treasury.address, ethers.ZeroAddress);
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());
-    await ballista.setLaunchCooldown(0);
     for (const s of [creator, a, b, c]) {
       await usdc.mint(s.address, 200_000_000n * ONE);
       await usdc.connect(s).approve(await ballista.getAddress(), ethers.MaxUint256);
@@ -33,7 +31,7 @@ describe('BXR1 — audit: fresh adversarial pass', function () {
   async function launch(ballista, usdc, creator, symbol) {
     const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
-      .createToken('Audit', symbol, 'u', await usdc.getAddress(), hash, false)).wait();
+      .createToken('Audit', symbol, 'u', await usdc.getAddress(), hash)).wait();
     return rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated').args.token;
   }
@@ -62,8 +60,6 @@ describe('BXR1 — audit: fresh adversarial pass', function () {
         .filter((l) => l && l.name === 'Graduated');
       expect(grads.length, 'exactly one Graduated event').to.equal(1);
 
-      // Solvency: the factory kept nothing it does not owe for this curve.
-      expect(await ballista.graduationProgressBps(t)).to.equal(BPS);
     });
 
     it('ATTACK: sell into a GRADUATED curve to re-open it', async function () {
@@ -120,59 +116,23 @@ describe('BXR1 — audit: fresh adversarial pass', function () {
       expect(curve.state).to.equal(ACTIVE);
       expect(curve.realQuoteReserves).to.be.lessThan(threshold);
 
-      // graduationProgressBps must be strictly under 100% while ACTIVE and under
-      // threshold -- a progress bar that reads 100% on an ACTIVE curve is a bug.
-      expect(await ballista.graduationProgressBps(t)).to.be.lessThan(BPS);
+      // graduationProgressBps() was removed 2026-09-18 as redundant view surface (see
+      // BXR1.sol's own comment); reimplemented here from curves() so this still
+      // asserts the real property -- progress strictly under 100% while ACTIVE and
+      // under threshold, never a progress bar that reads 100% on a live curve.
+      const c = await ballista.curves(t);
+      const supply = await ballista.CURVE_TOKEN_SUPPLY();
+      const byThreshold = (c.realQuoteReserves * BPS) / c.graduationThreshold;
+      const bySupply = ((supply - c.tokenReserves) * BPS) / supply;
+      const progress = byThreshold >= bySupply ? byThreshold : bySupply;
+      expect(progress).to.be.lessThan(BPS);
     });
   });
 
-  describe('timed creator window', function () {
-    it('ATTACK: a huge window must not overflow the timestamp comparison', async function () {
-      const { ballista, creator, usdc } = await env();
-      await ballista.setCreatorLaunchWindow(4294967295n); // type(uint32).max
-      const t = await launch(ballista, usdc, creator, 'HUGE');
-      await past(10_000);
-      // creationTimestamp + window is computed in uint256, so this must simply be open.
-      await expect(ballista.connect(creator).creatorLaunchBuy(t, ONE, 0)).to.not.be.reverted;
-    });
-
-    it('ATTACK: exhaust the cumulative cap, then try again inside the same window', async function () {
-      const { ballista, creator, usdc } = await env();
-      await ballista.setCreatorLaunchWindow(600);
-      const t = await launch(ballista, usdc, creator, 'CAP2');
-      const created = Number((await ballista.curves(t)).creationTimestamp);
-
-      await ethers.provider.send('evm_setNextBlockTimestamp', [created + 1]);
-      await ballista.connect(creator).creatorLaunchBuy(t, 5_000n * ONE, 0);
-      const after = await ballista.curves(t);
-      const bps = (after.creatorLaunchPurchased * BPS) / CURVE_SUPPLY;
-      expect(bps, 'clamped to exactly the 2.5% cap').to.equal(250n);
-
-      await ethers.provider.send('evm_setNextBlockTimestamp', [created + 2]);
-      await expect(ballista.connect(creator).creatorLaunchBuy(t, ONE, 0))
-        .to.be.revertedWithCustomError(ballista, 'CreatorAllocationUsed');
-    });
-
-    it('ATTACK: creator buys at the cap boundary -- the clamp fee inversion at the exempt fee', async function () {
-      const { ballista, creator, usdc } = await env();
-      await ballista.setCreatorLaunchWindow(600);
-      const t = await launch(ballista, usdc, creator, 'INV');
-      const created = Number((await ballista.curves(t)).creationTimestamp);
-      const before = await usdc.balanceOf(creator.address);
-
-      // Offer vastly more than the cap allows: the clamp must invert the fee at the
-      // UNTAXED rate and must never pull more than the cap actually costs.
-      await ethers.provider.send('evm_setNextBlockTimestamp', [created + 1]);
-      await ballista.connect(creator).creatorLaunchBuy(t, 10_000_000n * ONE, 0);
-      const spent = before - (await usdc.balanceOf(creator.address));
-      const curve = await ballista.curves(t);
-
-      expect((curve.creatorLaunchPurchased * BPS) / CURVE_SUPPLY).to.equal(250n);
-      expect(spent, 'must not pull the whole offer').to.be.lessThan(1_000n * ONE);
-      // No snipe tax may have been taken on this path even inside the tax window.
-      expect(curve.realQuoteReserves).to.be.greaterThan(0n);
-    });
-  });
+  // creatorLaunchBuy and the timed creator window it gated were removed entirely
+  // 2026-09-18 -- see CLAUDE.md section 26. There is no privileged, cap-clamped or
+  // time-windowed creator buy path left to attack; a creator obtains tokens only
+  // through the same buy() everyone else uses.
 
   describe('external-token assumptions', function () {
     // END TO END. Before the accrue-and-claim change every buy, every sell AND every

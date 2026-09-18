@@ -45,10 +45,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     uint16 public constant MAX_FEE_BPS = 1000;
     uint256 public constant BPS_DENOMINATOR = 10_000;
 
-    uint16 public maxCreatorLaunchBps = 250;
-
-    uint32 public creatorLaunchWindow = 3;
-
     // Asset-keyed, not a single total. Fees on a curve accrue in THAT curve's quote
     // asset (Curve.quoteAsset), and different curves can carry different quote assets, so
     // a single global counter would conflate amounts owed in different tokens under one
@@ -78,15 +74,14 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     uint256 public creationFee = 5e5;
     address public treasury;
 
-    uint256 public launchCooldown = 10;
-    mapping(address => uint256) public lastLaunchTimestamp;
-
-    uint256 public symbolLockDuration = 5 minutes;
-
-    mapping(bytes32 => uint256) public symbolUnlocksAt;
-
-    bool public caseSensitiveSymbols = true;
-
+    // launchCooldown, symbolLockDuration/symbolUnlocksAt and caseSensitiveSymbols were
+    // removed 2026-09-18. All three were frontend-facing anti-spam/collision surface,
+    // not chain-level safety properties, and CLAUDE.md section 7A already documented
+    // launchCooldown as "bypassable with a second address ... not a spam control" --
+    // the creation fee was always the real deterrent. Symbol-collision detection and
+    // launch-rate display are now frontend concerns: the indexer/app read the same
+    // `createToken`/`TokenCreated` history any contract-side lock would have read from,
+    // and a frontend check costs no bytecode. See CLAUDE.md section 26 for the record.
     enum CurveState { ACTIVE, GRADUATION_READY, GRADUATED }
 
     struct Curve {
@@ -116,15 +111,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         uint32 snipeTaxTableVersion;
         uint16 snipeTaxTreasuryBps;
 
-        uint16 maxCreatorLaunchBps;
-        uint32 creatorLaunchWindow;
-
         address lpRecipient;
-        bool poolBoostEnabled;
-
-        uint256 poolBoost;
-
-        uint256 creatorLaunchPurchased;
     }
 
     mapping(address => Curve) private _curves;
@@ -154,34 +141,15 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     event Graduated(address indexed token, uint256 tokenLiquidity, uint256 quoteLiquidity, uint256 lpTokensBurned);
     event GraduationReady(address indexed token);
     event GraduationAttemptFailed(address indexed token);
-    event CaseSensitiveSymbolsSet(bool caseSensitive);
 
-    event CreatorLaunchBuy(
-        address indexed token,
-        address indexed creator,
-        uint256 quoteSpent,
-        uint256 tokensReceived,
-        uint256 bpsOfCurveSupply
-    );
     event RouterProposed(address indexed router, uint256 activatableAt);
 
-    event MetadataURIUpdated(
-        address indexed token,
-        address indexed creator,
-        string oldURI,
-        string newURI
-    );
-    event PoolBoostAccrued(address indexed token, uint256 amount, uint256 total);
     event RouterActivated(address indexed router);
-    event MaxCreatorLaunchBpsSet(uint16 maxCreatorLaunchBps);
-    event CreatorLaunchWindowSet(uint32 creatorLaunchWindow);
     event RouterRevoked(address indexed router, bool wasLive);
     event CreatorFeeAccrued(address indexed token, address indexed creator, uint256 amount);
     event CreatorFeesClaimed(address indexed creator, uint256 amount);
     event TreasuryFeesClaimed(address indexed treasury, uint256 amount);
     event LpRecipientSet(address indexed oldRecipient, address indexed newRecipient);
-    event LaunchCooldownSet(uint256 oldValue, uint256 newValue);
-    event SymbolLockDurationSet(uint256 oldValue, uint256 newValue);
     event CreationFeeSet(uint256 oldValue, uint256 newValue);
     event DefaultFeesSet(uint16 oldBuyFeeBps, uint16 newBuyFeeBps, uint16 oldSellFeeBps, uint16 newSellFeeBps);
     event DefaultCreatorFeesSet(uint16 creatorBuyFeeBps, uint16 creatorSellFeeBps);
@@ -193,7 +161,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     error AssetMisbehaves(address asset, bool rebasing, bool transferRestricted, bool transferFee);
     error BaseFeeCeilingExceeded();
     error BpsExceedsDenominator();
-    error CreatorAllocationUsed();
     error CreatorBuyShareExceedsFee();
     error CreatorSellShareExceedsFee();
     error CurveNotActive(CurveState state);
@@ -201,8 +168,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     error FeeBelowCreatorShare();
     error FeeExceedsCeiling();
     error GraduationFailed();
-    error LaunchCooldownActive(uint256 readyAt);
-    error LaunchWindowClosed(uint256 closedAt);
     error NotCreator();
     error NotReadyToGraduate(CurveState state);
     error NothingToClaim();
@@ -211,7 +176,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     error RouterTimelockPending(uint256 activatableAt);
     error SlippageExceeded(uint256 received, uint256 minRequested);
     error SnipeTaxCeilingExceeded();
-    error SymbolLocked(uint256 unlocksAt);
     error TradingNotOpenYet();
     error UnknownToken();
     error ZeroAddress();
@@ -274,12 +238,11 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         return _snipeTaxTables[version];
     }
 
-    function currentSnipeTaxBps(address token) external view returns (uint16) {
-        Curve storage c = _curves[token];
-        if (!(c.token == token)) revert UnknownToken();
-        return _snipeTaxBps(c);
-    }
-
+    // currentSnipeTaxBps() (the external convenience wrapper) was removed 2026-09-18:
+    // a caller can derive the same figure from curves(token).snipeTaxTableVersion,
+    // curves(token).creationTimestamp and the public snipeTaxTable(version) view.
+    // The mechanism itself -- _snipeTaxBps, the versioned tables, publishSnipeTaxTable
+    // -- is untouched; only the redundant public accessor is gone.
     function _snipeTaxBps(Curve storage c) internal view returns (uint16) {
         uint16[] storage table = _snipeTaxTables[c.snipeTaxTableVersion];
         uint256 elapsed = block.timestamp - c.creationTimestamp;
@@ -305,13 +268,9 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
             assetRegistry.getAsset(quoteAsset).defaultGraduationThreshold,
             defaultCreatorBuyFeeBps,
             defaultCreatorSellFeeBps,
-            maxCreatorLaunchBps,
-            creatorLaunchWindow,
             lpRecipient,
             activeSnipeTaxTableVersion,
-            defaultSnipeTaxTreasuryBps,
-            caseSensitiveSymbols,
-            symbolLockDuration
+            defaultSnipeTaxTreasuryBps
         ));
     }
 
@@ -320,15 +279,13 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         string calldata symbol,
         string calldata metadataURI,
         address quoteAsset,
-        bytes32 expectedEconomicsHash,
-        bool poolBoostEnabled
+        bytes32 expectedEconomicsHash
     ) external nonReentrant whenNotPaused returns (address token) {
 
         if (!(router != address(0))) revert RouterNotSet();
 
         if (!(uint256(defaultBuyFeeBps) + uint256(snipeTaxTableMaxBps[activeSnipeTaxTableVersion]) <= uint256(MAX_TOTAL_FEE_BPS))) revert BaseFeeCeilingExceeded();
         if (!(expectedEconomicsHash == currentEconomicsHash(quoteAsset))) revert EconomicsChanged();
-        if (!(block.timestamp >= lastLaunchTimestamp[msg.sender] + launchCooldown)) revert LaunchCooldownActive(lastLaunchTimestamp[msg.sender] + launchCooldown);
 
         // The asset gate. A void check rather than one returning the resolved config:
         // holding an extra local across the rest of this function is stack-too-deep at
@@ -338,19 +295,10 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         // registry read for the one field it actually needs, in its own stack frame.
         _requireAssetUsable(quoteAsset);
 
-        bytes32 symbolHash = caseSensitiveSymbols
-            ? keccak256(bytes(symbol))
-            : keccak256(bytes(_toUpperAscii(symbol)));
-        uint256 unlocksAt = symbolUnlocksAt[symbolHash];
-        if (!(unlocksAt == 0 || block.timestamp >= unlocksAt)) revert SymbolLocked(unlocksAt);
-
         if (creationFee > 0) {
             IERC20(quoteAsset).safeTransferFrom(msg.sender, address(this), creationFee);
             treasuryFeesAccrued[quoteAsset] += creationFee;
         }
-
-        lastLaunchTimestamp[msg.sender] = block.timestamp;
-        symbolUnlocksAt[symbolHash] = block.timestamp + symbolLockDuration;
 
         BXR1Token newToken = new BXR1Token(
             name,
@@ -362,7 +310,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         );
         token = address(newToken);
 
-        _curves[token] = _buildCurve(token, quoteAsset, poolBoostEnabled);
+        _curves[token] = _buildCurve(token, quoteAsset);
 
         emit TokenCreated(token, msg.sender, name, symbol, metadataURI);
     }
@@ -390,8 +338,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     // in the same transaction, and nothing between the two calls can change it.
     function _buildCurve(
         address token,
-        address quoteAsset,
-        bool poolBoostEnabled
+        address quoteAsset
     ) internal view returns (Curve memory c) {
         c.token = token;
         c.quoteAsset = quoteAsset;
@@ -412,12 +359,9 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         c.creationTimestamp = block.timestamp;
         c.snipeTaxTableVersion = activeSnipeTaxTableVersion;
         c.snipeTaxTreasuryBps = defaultSnipeTaxTreasuryBps;
-        c.maxCreatorLaunchBps = maxCreatorLaunchBps;
-        c.creatorLaunchWindow = creatorLaunchWindow;
         c.lpRecipient = lpRecipient;
-        c.poolBoostEnabled = poolBoostEnabled;
-        // realQuoteReserves, creatorLaunchPurchased and poolBoost are left at their
-        // zero default, exactly as the original inline literal set them explicitly.
+        // realQuoteReserves is left at its zero default, exactly as the original
+        // inline literal set it explicitly.
     }
 
     // The asset gate. A CREATION-TIME gate, not a warning read anywhere else: an asset
@@ -436,16 +380,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         return cfg.initialVirtualReserve;
     }
 
-    function _toUpperAscii(string memory str) internal pure returns (string memory) {
-        bytes memory b = bytes(str);
-        for (uint256 i = 0; i < b.length; i++) {
-            if (b[i] >= 0x61 && b[i] <= 0x7A) {
-                b[i] = bytes1(uint8(b[i]) - 32);
-            }
-        }
-        return string(b);
-    }
-
     // Delegates to CurveMath.quoteBuy -- see CurveMath.sol. Kept as a thin internal
     // wrapper (rather than calling CurveMath.quoteBuy at every call site) so the
     // three call sites below read exactly as they did before the extraction.
@@ -457,16 +391,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         uint256 tokenReservesAvailable
     ) internal pure returns (CurveMath.BuyQuote memory q) {
         return CurveMath.quoteBuy(quoteIn, buyFeeBps, virtualQuoteReserves, virtualTokenReserves, tokenReservesAvailable);
-    }
-
-    function updateMetadataURI(address token, string calldata newURI) external {
-        Curve storage c = _curves[token];
-        if (!(c.token == token)) revert UnknownToken();
-        if (!(msg.sender == c.creator)) revert NotCreator();
-
-        string memory oldURI = BXR1Token(token).metadataURI();
-        BXR1Token(token).setMetadataURI(newURI);
-        emit MetadataURIUpdated(token, msg.sender, oldURI, newURI);
     }
 
     function _settleBuy(
@@ -494,8 +418,9 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         // The only site that CREDITS realQuoteReserves from a requested amount, so the
         // only one where a short transfer under-collateralises the pool rather than
         // merely short-paying the caller. Both reads are inside ReentrancyGuard's
-        // nonReentrant, held by buy() and creatorLaunchBuy() -- the only two callers of
-        // _settleBuy -- so nothing else can move the quote asset between them.
+        // nonReentrant, held by buy() -- the only caller of _settleBuy since
+        // creatorLaunchBuy was removed 2026-09-18 -- so nothing else can move the
+        // quote asset between them.
         //
         // Kept as a GENERAL defence, not an Arc-USDC-specific one. It was proven exact
         // against Arc USDC's 18dp-native / 6dp-ERC20 duality; here it does the same job
@@ -517,42 +442,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
             emit GraduationReady(token);
             if (!_performGraduation(token)) emit GraduationAttemptFailed(token);
         }
-    }
-
-    function creatorLaunchBuy(address token, uint256 quoteIn, uint256 minTokensOut)
-        external
-        nonReentrant
-        whenNotPaused
-    {
-        Curve storage c = _curves[token];
-        if (!(c.token == token)) revert UnknownToken();
-        if (!(msg.sender == c.creator)) revert NotCreator();
-        if (!(block.timestamp <= c.creationTimestamp + c.creatorLaunchWindow)) revert LaunchWindowClosed(c.creationTimestamp + c.creatorLaunchWindow);
-        if (!(c.state == CurveState.ACTIVE)) revert CurveNotActive(c.state);
-        if (!(quoteIn > 0)) revert ZeroAmount();
-
-        uint256 cap = (CURVE_TOKEN_SUPPLY * uint256(c.maxCreatorLaunchBps)) / BPS_DENOMINATOR;
-        if (!(c.creatorLaunchPurchased < cap)) revert CreatorAllocationUsed();
-        uint256 remainingAllowance = cap - c.creatorLaunchPurchased;
-
-        uint256 available =
-            c.tokenReserves < remainingAllowance ? c.tokenReserves : remainingAllowance;
-
-        CurveMath.BuyQuote memory q = _quoteBuy(
-            quoteIn, c.buyFeeBps, c.virtualQuoteReserves, c.virtualTokenReserves, available
-        );
-        if (!(q.tokensOut >= minTokensOut)) revert SlippageExceeded(q.tokensOut, minTokensOut);
-
-        c.creatorLaunchPurchased += q.tokensOut;
-        emit CreatorLaunchBuy(
-            token,
-            msg.sender,
-            q.actualQuoteIn,
-            q.tokensOut,
-            (c.creatorLaunchPurchased * BPS_DENOMINATOR) / CURVE_TOKEN_SUPPLY
-        );
-
-        _settleBuy(token, c, q, 0);
     }
 
     function buy(address token, uint256 quoteIn, uint256 minTokensOut) external nonReentrant whenNotPaused {
@@ -645,13 +534,8 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
 
     function _routeCreatorCut(address token, Curve storage c, uint256 cut) internal {
         if (cut == 0) return;
-        if (c.poolBoostEnabled) {
-            c.poolBoost += cut;
-            emit PoolBoostAccrued(token, cut, c.poolBoost);
-        } else {
-            creatorFeesAccrued[c.creator][c.quoteAsset] += cut;
-            emit CreatorFeeAccrued(token, c.creator, cut);
-        }
+        creatorFeesAccrued[c.creator][c.quoteAsset] += cut;
+        emit CreatorFeeAccrued(token, c.creator, cut);
     }
 
     // Asset-parametrized: fees accrue per (asset), and treasuryFeesAccrued is now keyed
@@ -682,7 +566,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
 
         uint256 tokenLiquidity = LP_TOKEN_RESERVE + c.tokenReserves;
 
-        uint256 quoteLiquidity = c.realQuoteReserves + c.poolBoost;
+        uint256 quoteLiquidity = c.realQuoteReserves;
 
         IERC20(token).forceApprove(router, tokenLiquidity);
         quote.forceApprove(router, quoteLiquidity);
@@ -710,7 +594,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
             c.state = CurveState.GRADUATED;
             c.tokenReserves = 0;
             c.realQuoteReserves = 0;
-            c.poolBoost = 0;
             // The amounts the router ACTUALLY took, not the amounts it was offered.
             emit Graduated(token, amountA, amountB, liquidity);
             return true;
@@ -751,35 +634,14 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     // scale factor before this change. For a quote asset whose decimals differ from 6,
     // this still returns a valid raw ratio, just at a different magnitude than a caller
     // calibrated to USDC would expect. Not fixed here; flagged for whoever consumes it.
-    function currentPrice(address token) external view returns (uint256) {
-        Curve storage c = _curves[token];
-        if (!(c.token == token)) revert UnknownToken();
-        return (c.virtualQuoteReserves * 1e18) / c.virtualTokenReserves;
-    }
-
-    function graduationProgressBps(address token) external view returns (uint256) {
-        Curve storage c = _curves[token];
-        if (!(c.token == token)) revert UnknownToken();
-
-        if (c.state != CurveState.ACTIVE) return BPS_DENOMINATOR;
-        if (c.realQuoteReserves >= c.graduationThreshold || c.tokenReserves == 0) {
-            return BPS_DENOMINATOR;
-        }
-        uint256 byThreshold =
-            (c.realQuoteReserves * BPS_DENOMINATOR) / c.graduationThreshold;
-        uint256 bySupply =
-            ((CURVE_TOKEN_SUPPLY - c.tokenReserves) * BPS_DENOMINATOR) / CURVE_TOKEN_SUPPLY;
-        return byThreshold >= bySupply ? byThreshold : bySupply;
-    }
-
-    function isSymbolAvailable(string calldata symbol) external view returns (bool) {
-        bytes32 symbolHash = caseSensitiveSymbols
-            ? keccak256(bytes(symbol))
-            : keccak256(bytes(_toUpperAscii(symbol)));
-        uint256 unlocksAt = symbolUnlocksAt[symbolHash];
-        return unlocksAt == 0 || block.timestamp >= unlocksAt;
-    }
-
+    // currentPrice(), graduationProgressBps() and isSymbolAvailable() were removed
+    // 2026-09-18: each was a pure derivation of fields already readable off curves()
+    // (virtualQuoteReserves/virtualTokenReserves for price; realQuoteReserves,
+    // graduationThreshold, tokenReserves and CURVE_TOKEN_SUPPLY for progress). The
+    // symbol lock itself (symbolUnlocksAt, symbolLockDuration) is removed in the same
+    // change -- see the comment above the removed state variables. Symbol collision
+    // detection and launch-rate display are now frontend concerns, computed from the
+    // same createToken/TokenCreated history the indexer already reads.
     function proposeRouter(address router_) external onlyOwner {
         if (!(router_ != address(0))) revert ZeroAddress();
         routerProposedAt[router_] = block.timestamp;
@@ -824,17 +686,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         emit DefaultCreatorFeesSet(creatorBuyFeeBps_, creatorSellFeeBps_);
     }
 
-    function setMaxCreatorLaunchBps(uint16 maxCreatorLaunchBps_) external onlyOwner {
-        if (!(maxCreatorLaunchBps_ <= BPS_DENOMINATOR)) revert BpsExceedsDenominator();
-        maxCreatorLaunchBps = maxCreatorLaunchBps_;
-        emit MaxCreatorLaunchBpsSet(maxCreatorLaunchBps_);
-    }
-
-    function setCreatorLaunchWindow(uint32 creatorLaunchWindow_) external onlyOwner {
-        creatorLaunchWindow = creatorLaunchWindow_;
-        emit CreatorLaunchWindowSet(creatorLaunchWindow_);
-    }
-
     function setCreationFee(uint256 creationFee_) external onlyOwner {
         emit CreationFeeSet(creationFee, creationFee_);
         creationFee = creationFee_;
@@ -846,25 +697,10 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         lpRecipient = lpRecipient_;
     }
 
-    function setLaunchCooldown(uint256 launchCooldown_) external onlyOwner {
-        emit LaunchCooldownSet(launchCooldown, launchCooldown_);
-        launchCooldown = launchCooldown_;
-    }
-
-    function setSymbolLockDuration(uint256 symbolLockDuration_) external onlyOwner {
-        emit SymbolLockDurationSet(symbolLockDuration, symbolLockDuration_);
-        symbolLockDuration = symbolLockDuration_;
-    }
-
     // setDefaultGraduationThreshold removed. Matches initialVirtualReserve exactly: no
     // BXR1-side setter, updated only by calling AssetRegistry.registerAsset(...) again
     // for that asset -- see test/bxr1/assetRegistryHelper.js's setGraduationThreshold
     // for the test-suite equivalent of that re-registration.
-
-    function setCaseSensitiveSymbols(bool caseSensitive_) external onlyOwner {
-        caseSensitiveSymbols = caseSensitive_;
-        emit CaseSensitiveSymbolsSet(caseSensitive_);
-    }
 
     function setTreasury(address treasury_) external onlyOwner {
         if (!(treasury_ != address(0))) revert ZeroAddress();

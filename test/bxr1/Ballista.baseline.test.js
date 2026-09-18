@@ -56,7 +56,7 @@ async function deployFixture() {
 async function createToken(factory, usdc, creator, name, symbol, uri = "uri") {
   return factory
     .connect(creator)
-    .createToken(name, symbol, uri, await usdc.getAddress(), await factory.currentEconomicsHash(await usdc.getAddress()), false);
+    .createToken(name, symbol, uri, await usdc.getAddress(), await factory.currentEconomicsHash(await usdc.getAddress()));
 }
 
 describe("Ballista — the original pre-rename suite", function () {
@@ -92,44 +92,19 @@ describe("Ballista — the original pre-rename suite", function () {
       expect(hasMint).to.equal(false);
     });
 
-    it("enforces the per-wallet launch cooldown", async function () {
-      const { factory, alice, usdc } = await deployFixture();
-      await createToken(factory, usdc, alice, "First", "FIRST");
-      await expect(createToken(factory, usdc, alice, "Second", "SECOND")).to.be.revertedWithCustomError(factory, 'LaunchCooldownActive'
-      );
-    });
-
-    it("allows a new launch after the cooldown elapses", async function () {
-      const { factory, alice, usdc } = await deployFixture();
-      await createToken(factory, usdc, alice, "First", "FIRST");
-      await ethers.provider.send("evm_increaseTime", [3600]);
-      await ethers.provider.send("evm_mine");
-      await expect(createToken(factory, usdc, alice, "Second", "SECOND")).to.not.be.reverted;
-    });
-
-    it("blocks exact-duplicate symbols", async function () {
+    // launchCooldown, the symbol lock, and caseSensitiveSymbols were all removed
+    // 2026-09-18 -- see CLAUDE.md section 26 and BXR1.sol's own comment above the
+    // removed state variables. CLAUDE.md section 7A already documented the cooldown
+    // as "bypassable ... not a spam control", and the symbol lock/case toggle were
+    // frontend-shaped display features, not chain-level safety. All three are now
+    // frontend concerns. This test replaces "enforces the per-wallet launch cooldown",
+    // "allows a new launch after the cooldown elapses", "blocks exact-duplicate
+    // symbols", and "treats case-variant symbols per the caseSensitiveSymbols toggle".
+    it("a creator can launch twice back to back, with an exact-duplicate symbol, in either case -- nothing on chain stops any of it any more", async function () {
       const { factory, alice, bob, usdc } = await deployFixture();
       await createToken(factory, usdc, alice, "First", "DUPE");
-      await expect(createToken(factory, usdc, bob, "Copycat", "DUPE")).to.be.revertedWithCustomError(factory, 'SymbolLocked'
-      );
-    });
-
-    // The old suite asserted CAT/cat always collide. Ballista ships lenient by design
-    // (caseSensitiveSymbols = true), so both variants launching is now correct
-    // behavior, and the collision is what the tightened mode buys you. Both halves are
-    // asserted here so the toggle cannot silently flip without a test noticing.
-    it("treats case-variant symbols per the caseSensitiveSymbols toggle", async function () {
-      const lenient = await deployFixture();
-      expect(await lenient.factory.caseSensitiveSymbols()).to.equal(true);
-      await createToken(lenient.factory, lenient.usdc, lenient.alice, "First", "CAT");
-      await expect(createToken(lenient.factory, lenient.usdc, lenient.bob, "Copycat", "cat")).to.not.be
-        .reverted;
-
-      const strict = await deployFixture();
-      await strict.factory.connect(strict.owner).setCaseSensitiveSymbols(false);
-      await createToken(strict.factory, strict.usdc, strict.alice, "First", "CAT");
-      await expect(createToken(strict.factory, strict.usdc, strict.bob, "Copycat", "cat")).to.be.revertedWithCustomError(strict.factory, 'SymbolLocked'
-      );
+      await expect(createToken(factory, usdc, alice, "Second", "DUPE")).to.not.be.reverted;
+      await expect(createToken(factory, usdc, bob, "Copycat", "dupe")).to.not.be.reverted;
     });
 
     it("charges the creation fee to treasury", async function () {
@@ -193,14 +168,22 @@ describe("Ballista — the original pre-rename suite", function () {
   });
 
   describe("buy / sell math", function () {
+    // currentPrice() (a thin wrapper around virtualQuoteReserves * 1e18 /
+    // virtualTokenReserves) was removed 2026-09-18 as redundant view surface --
+    // curves() already exposes both fields. Computed here the same way the removed
+    // function used to, directly from curves().
     it("price increases as more is bought", async function () {
       const { factory, alice, bob, usdc } = await deployFixture();
       await createToken(factory, usdc, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
+      const priceOf = async () => {
+        const c = await factory.curves(tokenAddr);
+        return (c.virtualQuoteReserves * ethers.parseUnits("1", 18)) / c.virtualTokenReserves;
+      };
 
-      const priceBefore = await factory.currentPrice(tokenAddr);
+      const priceBefore = await priceOf();
       await factory.connect(bob).buy(tokenAddr, USDC(500), 0);
-      const priceAfter = await factory.currentPrice(tokenAddr);
+      const priceAfter = await priceOf();
       expect(priceAfter).to.be.gt(priceBefore);
     });
 

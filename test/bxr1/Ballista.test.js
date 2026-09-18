@@ -42,7 +42,7 @@ describe('Ballista — changes since the original build', function () {
   // potentially forgotten) at every call site.
   async function create(ballista, usdc, creator, name, symbol, uri) {
     const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
-    return ballista.connect(creator).createToken(name, symbol, uri, await usdc.getAddress(), hash, false);
+    return ballista.connect(creator).createToken(name, symbol, uri, await usdc.getAddress(), hash);
   }
 
   // create(), plus digging the new token's address back out of the receipt.
@@ -66,37 +66,15 @@ describe('Ballista — changes since the original build', function () {
       .to.equal(8_000n * ONE_USDC);
   });
 
-  describe('symbol case-sensitivity toggle', function () {
-    it('defaults to case-sensitive: "Cat" and "cat" can both launch', async function () {
-      const { ballista, creator, usdc } = await deployFixture();
-      expect(await ballista.caseSensitiveSymbols()).to.equal(true);
-
-      await expect(create(ballista, usdc, creator, 'Cat Coin', 'Cat', 'ipfs://a')).to.not.be.reverted;
-
-      await ballista.setLaunchCooldown(0);
-
-      await expect(create(ballista, usdc, creator, 'cat coin two', 'cat', 'ipfs://b')).to.not.be.reverted;
-    });
-
-    it('once toggled off, "Cat" and "cat" collide as the same symbol', async function () {
-      const { ballista, creator, usdc } = await deployFixture();
-      await ballista.setLaunchCooldown(0);
-
-      await expect(ballista.setCaseSensitiveSymbols(false))
-        .to.emit(ballista, 'CaseSensitiveSymbolsSet')
-        .withArgs(false);
-
-      await create(ballista, usdc, creator, 'Cat Coin', 'Cat', 'ipfs://a');
-
-      await expect(
-        create(ballista, usdc, creator, 'cat coin two', 'cat', 'ipfs://b'),
-      ).to.be.revertedWithCustomError(ballista, 'SymbolLocked');
-    });
-
-    it('only owner can toggle it', async function () {
-      const { ballista, creator, usdc } = await deployFixture();
-      await expect(ballista.connect(creator).setCaseSensitiveSymbols(false)).to.be.reverted;
-    });
+  // The symbol case-sensitivity toggle and the symbol lock it gated were removed
+  // 2026-09-18 -- see CLAUDE.md section 26 and BXR1.sol's own comment above the
+  // removed state variables. "Cat" and "cat" can now both launch, unconditionally
+  // and always, and nothing on chain stops a second launch of the same symbol.
+  // Collision detection is a frontend concern now.
+  it('two launches of the same symbol both succeed -- no on-chain collision guard any more', async function () {
+    const { ballista, creator, usdc } = await deployFixture();
+    await expect(create(ballista, usdc, creator, 'Cat Coin', 'CAT', 'ipfs://a')).to.not.be.reverted;
+    await expect(create(ballista, usdc, creator, 'Copycat Coin', 'CAT', 'ipfs://b')).to.not.be.reverted;
   });
 
   describe('economics snapshot / pinning', function () {
@@ -114,7 +92,7 @@ describe('Ballista — changes since the original build', function () {
       await ballista.setDefaultFees(200, 100); // was 100/100
 
       await expect(
-        ballista.connect(creator).createToken('Stale Coin', 'STL', 'ipfs://a', await usdc.getAddress(), staleHash, false),
+        ballista.connect(creator).createToken('Stale Coin', 'STL', 'ipfs://a', await usdc.getAddress(), staleHash),
       ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
     });
 
@@ -124,27 +102,7 @@ describe('Ballista — changes since the original build', function () {
       await setGraduationThreshold(registry, await usdc.getAddress(), 80_000n * ONE_USDC);
 
       await expect(
-        ballista.connect(creator).createToken('Stale Threshold Coin', 'STH', 'ipfs://a', await usdc.getAddress(), staleHash, false),
-      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
-    });
-
-    it('reverts if symbol case-sensitivity changes underneath a pinned hash', async function () {
-      const { ballista, creator, usdc } = await deployFixture();
-      const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
-      await ballista.setCaseSensitiveSymbols(false);
-
-      await expect(
-        ballista.connect(creator).createToken('Stale Symbol Coin', 'SSC', 'ipfs://a', await usdc.getAddress(), staleHash, false),
-      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
-    });
-
-    it('reverts if the symbol lock duration changes underneath a pinned hash', async function () {
-      const { ballista, creator, usdc } = await deployFixture();
-      const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
-      await ballista.setSymbolLockDuration(600);
-
-      await expect(
-        ballista.connect(creator).createToken('Stale Lock Coin', 'SLC', 'ipfs://a', await usdc.getAddress(), staleHash, false),
+        ballista.connect(creator).createToken('Stale Threshold Coin', 'STH', 'ipfs://a', await usdc.getAddress(), staleHash),
       ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
     });
 
@@ -155,18 +113,17 @@ describe('Ballista — changes since the original build', function () {
       await expect(create(ballista, usdc, creator, 'Reconfirmed Coin', 'RCC', 'ipfs://a')).to.not.be.reverted;
     });
 
-    it('does NOT pin launchCooldown or creationFee -- those gate eligibility to launch, not token economics', async function () {
+    it('does NOT pin creationFee -- that gates eligibility to launch, not token economics', async function () {
       const { ballista, creator, usdc } = await deployFixture();
       const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
-      await ballista.setLaunchCooldown(999);
       await ballista.setCreationFee(50n * ONE_USDC);
 
-      // Neither of these is part of the pinned hash, so this should still
+      // creationFee is not part of the pinned hash, so this should still
       // succeed on the stale hash -- confirms the pin is scoped to what was
-      // actually documented (fees, threshold, symbol policy), not everything
-      // adjustable in the contract.
+      // actually documented (fees, threshold, snipe tax table/split), not
+      // everything adjustable in the contract.
       await expect(
-        ballista.connect(creator).createToken('Unpinned Coin', 'UPC', 'ipfs://a', await usdc.getAddress(), staleHash, false),
+        ballista.connect(creator).createToken('Unpinned Coin', 'UPC', 'ipfs://a', await usdc.getAddress(), staleHash),
       ).to.not.be.reverted;
     });
   });

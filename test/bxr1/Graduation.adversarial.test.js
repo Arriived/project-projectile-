@@ -44,7 +44,7 @@ describe('Ballista — graduation state machine adversarial testing', function (
 
   async function launchToken(ballista, usdc, creator, name, symbol) {
     const expectedHash = await ballista.currentEconomicsHash(await usdc.getAddress());
-    const createTx = await ballista.connect(creator).createToken(name, symbol, 'ipfs://a', await usdc.getAddress(), expectedHash, false);
+    const createTx = await ballista.connect(creator).createToken(name, symbol, 'ipfs://a', await usdc.getAddress(), expectedHash);
     const receipt = await createTx.wait();
     const event = receipt.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })

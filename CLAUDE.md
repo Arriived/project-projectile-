@@ -7627,3 +7627,175 @@ built entirely around LFX1's single fixed USDC integration (§11, §8). Wiring e
 to BXR1 — reading the quote asset per curve, reading its decimals from the registry rather
 than assuming 6, fixing the three hardcoded scale factors above — is unstarted work, not
 merely undocumented.
+
+---
+
+# 26. SESSION OF 18 SEPTEMBER 2026 — the trim applied: seven features removed, one kept
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§25. Nothing above this line was
+deleted. This section records what `docs/FEATURE_TRIM_REPORT.md` measured being turned
+into an actual, committed change to `contracts/bxr1/BXR1.sol` and its tests. `LFX1.sol`,
+`LFX1Token.sol`, `AssetRegistry.sol` and `CurveMath.sol` are untouched — confirmed with an
+**empty diff** against each, and the LFX1 control suite re-run green: **303 passing + 48
+pending, 0 failing**, identical to §25.5's baseline.
+
+## 26.1 What was removed, and why
+
+Seven of the eight candidates §25's trim report measured were applied. **Symbol collision
+detection and launch-rate limiting are deliberate removals, not omissions — both become
+frontend concerns from here**, exactly as the report's (h) finding already argued for
+`launchCooldown` specifically (`CLAUDE.md` §7A: "bypassable with a second address ... not
+a spam control").
+
+| removed | what went | why |
+|---|---|---|
+| (a) pool boost | `poolBoostEnabled`/`poolBoost` `Curve` fields, `PoolBoostAccrued`, the `_routeCreatorCut` branch, `createToken`'s sixth parameter, `_buildCurve`'s handling of it, the two `_performGraduation` sites reading/zeroing `poolBoost` | a trust-signal display feature (§1's original framing: "a **trust signal, not an economic mechanism**"), not a safety property |
+| (c) `creatorLaunchBuy` and its cap | the function, `Curve.creatorLaunchPurchased`/`maxCreatorLaunchBps`/`creatorLaunchWindow`, the two global defaults, their setters, three events, two errors | a privileged first-buy allocation, launchpad-specific product surface with no bearing on a vault-backed leveraged token |
+| (d) `caseSensitiveSymbols` | the bool, `setCaseSensitiveSymbols`, `CaseSensitiveSymbolsSet`, `_toUpperAscii` | display/collision policy — **frontend concern now** |
+| (e) the symbol lock entirely | `symbolLockDuration`, `symbolUnlocksAt`, `setSymbolLockDuration`, `SymbolLockDurationSet`, `SymbolLocked`, the lock check + write in `createToken`, and `isSymbolAvailable` (forced out — it reads `symbolUnlocksAt` directly) | symbol collision detection — **frontend concern now** |
+| (f) `updateMetadataURI` | the function, `MetadataURIUpdated` | post-launch metadata correction; not a safety property, and `BXR1Token.setMetadataURI`/`.metadataURI()` are untouched in the token contract itself |
+| (g) redundant view functions | `graduationProgressBps`, `currentPrice`, `currentSnipeTaxBps` (`isSymbolAvailable` already gone via (e)) | each is a pure derivation of fields already on `curves()` plus already-public state (`snipeTaxTable(version)`) — a caller reconstructs them off-chain for free |
+| (h) `launchCooldown` | `launchCooldown`, `lastLaunchTimestamp`, `setLaunchCooldown`, `LaunchCooldownSet`, `LaunchCooldownActive`, the check + write in `createToken` | launch-rate limiting — **frontend concern now**, and CLAUDE.md §7A already called it "not a spam control" |
+
+**(b) the snipe tax was explicitly NOT removed**, per the report's own finding that it is
+the single largest saving (2,577 measured bytes) but is the mechanism, not the surface —
+sniping deterrence is exactly the kind of thing a vault-backed leveraged launch still
+needs. `_snipeTaxTables`, `snipeTaxTableMaxBps`, `activeSnipeTaxTableVersion`,
+`_nextSnipeTaxTableVersion`, `defaultSnipeTaxTreasuryBps`, `MAX_TOTAL_FEE_BPS`,
+`Curve.snipeTaxTableVersion`/`snipeTaxTreasuryBps`, `FeeSplit.curveCut`/`snipeToTreasury`,
+`publishSnipeTaxTable`/`_publishSnipeTaxTable`/`snipeTaxTable`/`_snipeTaxBps`,
+`setDefaultSnipeTaxTreasuryBps`, the constructor's opening-table publish, `buy()`'s tax
+lookup and `_settleBuy`'s `taxBps` handling, and `_splitBuyFee`'s snipe branch are all
+**byte-identical to before the trim**. Only the redundant external convenience wrapper
+around it, `currentSnipeTaxBps`, is gone — the mechanism it exposed is fully intact and
+callable by reconstructing the same lookup from `curves()` + `snipeTaxTable(version)`, as
+`test/bxr1/SnipeTax.test.js`'s new `snipeTaxBpsOf()` helper does.
+
+## 26.2 The do-not-touch list, confirmed explicitly
+
+Every property the instruction named as untouchable was checked against the diff after
+the trim, not assumed:
+
+- **Exact-balance-delta check** — `_settleBuy`'s `balBeforeBuy`/`QuoteTransferMismatch`
+  measurement is byte-for-byte unchanged; only its explanatory comment was updated (buy()
+  is now the sole caller of `_settleBuy`, `creatorLaunchBuy` having been removed).
+- **Ceil-division against the trader** — lives entirely in `CurveMath.sol`, which has an
+  empty diff. Untouched.
+- **Per-launch snapshotting** — `_buildCurve` still snapshots every remaining economics
+  field (fees, threshold, snipe tax table version and split, `lpRecipient`) once, at
+  creation; it simply snapshots fewer fields now that (a)/(c) removed the struct members
+  they wrote.
+- **The economics hash** — `currentEconomicsHash` still pins terms and still gates
+  `createToken` with `EconomicsChanged`; it hashes eight fields instead of twelve, having
+  dropped exactly the four fields whose state no longer exists (`maxCreatorLaunchBps`,
+  `creatorLaunchWindow`, `caseSensitiveSymbols`, `symbolLockDuration`). The snipe tax's two
+  hashed fields (`activeSnipeTaxTableVersion`, `defaultSnipeTaxTreasuryBps`) remain.
+- **The dual graduation trigger with its try/catch and approval clearing** —
+  `_performGraduation`'s `try`/`catch`, both `forceApprove(router, 0)` clearing sites, and
+  `_settleBuy`'s `crossedThreshold = realQuoteReserves >= graduationThreshold ||
+  tokenReserves == 0` are byte-for-byte unchanged. Only the two `+ c.poolBoost` /
+  `c.poolBoost = 0` lines inside it were removed, per (a).
+- **Fee caps** — `MAX_FEE_BPS`, `MAX_TOTAL_FEE_BPS`, `setDefaultFees`'s ceiling check, and
+  `createToken`'s `BaseFeeCeilingExceeded` guard (which reads `snipeTaxTableMaxBps` —
+  snipe-tax state, kept) are all unchanged.
+- **Pause with `graduate()` unpausable** — `Pausable`, `whenNotPaused` on
+  `createToken`/`buy`/`sell`, and `graduate()` carrying no `whenNotPaused` modifier are
+  all unchanged.
+- **Fixed supply with no creator pre-allocation** — `BXR1Token`'s constructor still mints
+  the entire `TOTAL_TOKEN_SUPPLY` to `address(this)` (the factory), never to the creator.
+  This property was never about `creatorLaunchBuy` (a *purchase* mechanism, paid for in
+  real quote-asset funds) — it is about the token constructor, which (c)'s removal does
+  not touch at all. `BXR1Token.sol` itself has an empty diff.
+
+## 26.3 Tests: what went, what was rewritten, what stayed
+
+**Four files deleted outright**, for features with nothing left to test:
+
+| file | checks removed |
+|---|---:|
+| `test/bxr1/CreatorLaunchBuy.test.js` | 21 |
+| `test/bxr1/PoolBoost.test.js` | 9 |
+| `test/bxr1/SymbolLock.test.js` | 7 |
+| `test/bxr1/MetadataURI.test.js` | 6 |
+| **total** | **43** |
+
+**Two dead mock contracts deleted**, both entirely `creatorLaunchBuy`-shaped and with no
+other consumer: `contracts/bxr1/mocks/CreatorLauncher.sol` (`BXR1CreatorLauncher`), and
+`BXR1MassLauncher`/`BXR1LauncherFactory` out of `contracts/bxr1/mocks/Attackers.sol` (the
+latter existed solely to prove `launchCooldown` was per-address and bypassable; with no
+cooldown left, there is nothing left to bypass). `contracts/bxr1/mocks/Attackers.sol`'s
+`IBXR1` interface also dropped its `creatorLaunchBuy`/`updateMetadataURI` declarations for
+functions that no longer exist on the real contract, and every mock's `createToken` call
+lost the removed sixth parameter.
+
+**Every other file's `createToken(...)` call sites lost the removed sixth parameter**
+(`poolBoostEnabled`) — a mechanical fix across roughly a dozen files, all following the
+identical `..., hash, false)` shape.
+
+**Tests that exercised a removed feature's SIDE EFFECT rather than the feature itself
+were rewritten, not deleted**, so the property they were really checking stays covered:
+
+- `Ballista.test.js`'s three case-sensitivity tests and one symbol-lock pinning test
+  collapsed into one — "two launches of the same symbol both succeed... nothing on chain
+  stops any of it any more" — confirming the new, unconditional behavior rather than the
+  old toggle.
+- `Ballista.baseline.test.js`'s two launch-cooldown tests, the duplicate-symbol test, and
+  the case-variant test collapsed into one for the same reason.
+- **`SnipeTax.test.js`, the primary suite for the mechanism explicitly kept, needed real
+  care rather than deletion.** Its six call sites to the removed `currentSnipeTaxBps`
+  convenience view were replaced with a JS-side `snipeTaxBpsOf()` helper that reads
+  `curves()` for the snapshotted table version and creation timestamp and
+  `snipeTaxTable(version)` for the table itself, then reimplements `_snipeTaxBps`'s exact
+  lookup (elapsed-since-creation, zero past the table's end, `table[elapsed]` otherwise).
+  All 17 of its tests still exercise the real, unmodified snipe-tax mechanism — nothing
+  about the mechanism was approximated to make the tests pass.
+- `Audit.adversarial.test.js` and `GraduationGap.test.js` each had one
+  `graduationProgressBps` assertion reimplemented the same way, directly from `curves()`
+  and the public `CURVE_TOKEN_SUPPLY()` constant, so the **dual-trigger progress
+  property** (this describe block's actual subject, and adjacent to the do-not-touch
+  dual-trigger mechanism itself) stayed covered rather than merely deleted.
+- `PartialFill.adversarial.test.js`'s one `currentPrice` usage inside a 60-iteration
+  stress loop was replaced with the same raw-reserves computation the removed function
+  used to perform.
+- `GuardCoverage.test.js`'s "views reject unknown tokens" test dropped its
+  `currentPrice`/`graduationProgressBps` assertions (both views gone) and kept its
+  `quoteBuy`/`quoteSell` assertions (both real, both still guard sites worth covering).
+- `Exploit.adversarial.test.js`'s reentrancy sweep dropped
+  `creatorLaunchBuyReentered`/`updateMetadataReentered` from the list of flags it checks
+  (nothing left at those selectors to reenter) and its three case-sensitivity/symbol-lock
+  griefing tests were removed with a comment explaining why each finding no longer
+  applies, rather than silently disappearing.
+
+**One test-shape lesson worth keeping, in the family of §5/§12.6/§15.6/§16.4/§19.6/§22.7:
+a removed feature's mock can fail LOUDLY in a place that has nothing to do with the
+feature.** `Exploit.adversarial.test.js`'s "hostile contract creator cannot break trading"
+test failed with `function selector was not recognized` — not because anything about that
+test's own subject changed, but because `BXR1HostileCreator.launch()` (in the shared
+`Attackers.sol` mock) called `createToken` with the stale six-argument encoding. The fix
+was in the mock, not the test.
+
+## 26.4 The numbers
+
+| | value |
+|---|---|
+| BXR1 deployed bytes | 24,205 → **19,484** |
+| bytes saved | **4,721** |
+| headroom against 24,576 | 371 → **5,092** |
+| `test/bxr1/*.test.js` suite files | 22 → **18** |
+| checks passing | **202** |
+| checks failing | **0** |
+| LFX1 control | **303 passing + 48 pending, 0 failing** — empty diff on `LFX1.sol`/`LFX1Token.sol` |
+
+⚠ **This 4,721-byte saving is smaller than the trim report's 7,396-byte combined figure**,
+because that figure removed the snipe tax too (candidate (b), 2,577 of its own measured
+bytes) and this trim explicitly keeps it. **5,092 bytes of headroom is still comfortably
+more than `docs/BYTE_BUDGET_REPORT.md`'s measured 441-byte cost for LaunchType**, before
+the vault binding or fee split are even drafted — see §26.6's fresh LaunchType measurement
+against this trimmed baseline for a real number rather than the carried-forward one.
+
+## 26.5 The two report-only measurements
+
+Not recorded in this file. Per instruction, those two measurements (whether the snipe tax
+can move to its own contract, and a fresh LaunchType build against this trimmed baseline)
+are report-only and were written up separately, after actually being built and measured,
+rather than embedded here — see `docs/SNIPE_TAX_SPLIT_AND_LAUNCHTYPE_REPORT.md`.

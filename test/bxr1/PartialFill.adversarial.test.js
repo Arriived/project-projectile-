@@ -38,7 +38,7 @@ describe('Ballista — partial-fill adversarial testing', function () {
 
   async function launchToken(ballista, usdc, creator, name, symbol, signersToApprove) {
     const expectedHash = await ballista.currentEconomicsHash(await usdc.getAddress());
-    const createTx = await ballista.connect(creator).createToken(name, symbol, 'ipfs://a', await usdc.getAddress(), expectedHash, false);
+    const createTx = await ballista.connect(creator).createToken(name, symbol, 'ipfs://a', await usdc.getAddress(), expectedHash);
     const receipt = await createTx.wait();
     const event = receipt.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -275,7 +275,6 @@ describe('Ballista — partial-fill adversarial testing', function () {
     const { creator, ballista, usdc, registry } = await deployFixture();
     await setGraduationThreshold(registry, await usdc.getAddress(), 10_000_000n * ONE_USDC);
     await ballista.setDefaultFees(1000, 1000);
-    await ballista.setLaunchCooldown(0);
 
     const [, , , trader] = await ethers.getSigners();
     const { tokenAddress } = await launchToken(ballista, usdc, creator, 'Stress Coin', 'STR', [trader]);
@@ -296,7 +295,10 @@ describe('Ballista — partial-fill adversarial testing', function () {
       expect(tradeEvent.args.quoteAmount).to.be.lte(amount);
 
       if (curveAfter.tokenReserves > 0n) {
-        const price = await ballista.currentPrice(tokenAddress);
+        // currentPrice() (virtualQuoteReserves * 1e18 / virtualTokenReserves) was
+        // removed 2026-09-18 as redundant view surface -- computed here directly
+        // from curves(), the same fields the removed function read.
+        const price = (curveAfter.virtualQuoteReserves * ethers.parseUnits('1', 18)) / curveAfter.virtualTokenReserves;
         expect(price).to.be.gte(lastPrice);
         lastPrice = price;
       }

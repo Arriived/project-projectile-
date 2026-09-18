@@ -29,7 +29,6 @@ describe('BXR1 — USDC transfer integrity', function () {
       .deploy(await registry.getAddress(), treasury.address, ethers.ZeroAddress);
     const router = await (await ethers.getContractFactory('MockRouter')).deploy();
     await activateRouter(ballista, await router.getAddress());
-    await ballista.setLaunchCooldown(0);
     for (const s of [creator, a]) {
       await usdc.mint(s.address, 50_000_000n * ONE);
       await usdc.connect(s).approve(await ballista.getAddress(), ethers.MaxUint256);
@@ -40,7 +39,7 @@ describe('BXR1 — USDC transfer integrity', function () {
   async function launch(ballista, usdc, creator, symbol) {
     const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const rc = await (await ballista.connect(creator)
-      .createToken('Fot', symbol, 'u', await usdc.getAddress(), hash, false)).wait();
+      .createToken('Fot', symbol, 'u', await usdc.getAddress(), hash)).wait();
     return rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
       .find((l) => l && l.name === 'TokenCreated').args.token;
   }

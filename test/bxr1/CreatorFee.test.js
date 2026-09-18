@@ -37,7 +37,7 @@ describe('Ballista — creator fee share', function () {
   async function launch(ballista, usdc, creator, symbol = 'CRT') {
     const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const receipt = await (
-      await ballista.connect(creator).createToken('Creator Coin', symbol, 'ipfs://a', await usdc.getAddress(), hash, false)
+      await ballista.connect(creator).createToken('Creator Coin', symbol, 'ipfs://a', await usdc.getAddress(), hash)
     ).wait();
     const event = receipt.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -312,7 +312,7 @@ describe('Ballista — creator fee share', function () {
       const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
       await ballista.setDefaultCreatorFees(90, 40); // buy unchanged, sell moved
       await expect(
-        ballista.connect(creator).createToken('SellOnly', 'SLO', 'ipfs://a', await usdc.getAddress(), staleHash, false)
+        ballista.connect(creator).createToken('SellOnly', 'SLO', 'ipfs://a', await usdc.getAddress(), staleHash)
       ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged'
       );
     });
@@ -324,7 +324,7 @@ describe('Ballista — creator fee share', function () {
       await ballista.setDefaultCreatorFees(50, 40);
 
       await expect(
-        ballista.connect(creator).createToken('Late', 'LATE', 'ipfs://a', await usdc.getAddress(), staleHash, false)
+        ballista.connect(creator).createToken('Late', 'LATE', 'ipfs://a', await usdc.getAddress(), staleHash)
       ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged'
       );
     });

@@ -37,7 +37,7 @@ describe('Ballista — decaying snipe tax', function () {
   async function launch(ballista, usdc, creator, symbol = 'SNP') {
     const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     const receipt = await (
-      await ballista.connect(creator).createToken('Snipe Coin', symbol, 'ipfs://a', await usdc.getAddress(), hash, false)
+      await ballista.connect(creator).createToken('Snipe Coin', symbol, 'ipfs://a', await usdc.getAddress(), hash)
     ).wait();
     const event = receipt.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
@@ -78,6 +78,24 @@ describe('Ballista — decaying snipe tax', function () {
     await ethers.provider.send('evm_setNextBlockTimestamp', [target]);
   }
 
+  // currentSnipeTaxBps() (the external convenience wrapper around the internal
+  // _snipeTaxBps) was removed 2026-09-18 as redundant view surface -- see BXR1.sol's
+  // own comment above _snipeTaxBps. This reimplements the identical lookup from the
+  // two public views a caller (this test, or a frontend) is left with: curves() for
+  // the curve's snapshotted table version and creation timestamp, snipeTaxTable() for
+  // the table itself. Mirrors _snipeTaxBps's own logic exactly -- elapsed = now minus
+  // creation, zero past the end of the table, table[elapsed] otherwise -- so a test
+  // using this is still exercising the real mechanism, not a JS reimplementation of
+  // the tax curve.
+  async function snipeTaxBpsOf(ballista, tokenAddress) {
+    const curve = await ballista.curves(tokenAddress);
+    const table = await ballista.snipeTaxTable(curve.snipeTaxTableVersion);
+    const latest = await ethers.provider.getBlock('latest');
+    const elapsed = latest.timestamp - Number(curve.creationTimestamp);
+    if (elapsed >= table.length) return 0n;
+    return table[elapsed];
+  }
+
   it('publishes the opening table in the constructor', async function () {
     const { ballista } = await deployFixture();
     const version = await ballista.activeSnipeTaxTableVersion();
@@ -93,7 +111,7 @@ describe('Ballista — decaying snipe tax', function () {
     const seen = [];
     for (let t = 0; t <= OPENING_TABLE.length + 1; t++) {
       await atElapsed(ballista, tokenAddress, t);
-      seen.push(Number(await ballista.currentSnipeTaxBps(tokenAddress)));
+      seen.push(Number(await snipeTaxBpsOf(ballista, tokenAddress)));
     }
     // Table values for 0..4, then zero for anything past the end of the table.
     expect(seen).to.deep.equal([...OPENING_TABLE, 0, 0]);
@@ -104,7 +122,7 @@ describe('Ballista — decaying snipe tax', function () {
     const tokenAddress = await launch(ballista, usdc, creator);
 
     await atElapsed(ballista, tokenAddress, 0);
-    expect(await ballista.currentSnipeTaxBps(tokenAddress)).to.equal(9800);
+    expect(await snipeTaxBpsOf(ballista, tokenAddress)).to.equal(9800);
 
     const spend = 1_000n * ONE_USDC;
     const quoted = await ballista.quoteBuy(tokenAddress, spend);
@@ -221,7 +239,7 @@ describe('Ballista — decaying snipe tax', function () {
     await ethers.provider.send('evm_mine');
     const fresh = await launch(ballista, usdc, creator, 'FRSH');
     await atElapsed(ballista, fresh, 0);
-    expect(await ballista.currentSnipeTaxBps(fresh)).to.equal(9800);
+    expect(await snipeTaxBpsOf(ballista, fresh)).to.equal(9800);
 
     // Selling the FIRST token while a window is open elsewhere is unaffected either way;
     // what matters is that this token's own sell path charges only sellFeeBps.
@@ -247,7 +265,7 @@ describe('Ballista — decaying snipe tax', function () {
 
       const tokenAddress = await launch(ballista, usdc, creator, 'MAXF');
       await atElapsed(ballista, tokenAddress, 0);
-      expect(await ballista.currentSnipeTaxBps(tokenAddress)).to.equal(8900);
+      expect(await snipeTaxBpsOf(ballista, tokenAddress)).to.equal(8900);
 
       // At a 99% total fee only 1% of the spend reaches the curve, so reaching full
       // depletion takes ~8.8M USDC gross. 20M guarantees the request exceeds the
@@ -301,14 +319,14 @@ describe('Ballista — decaying snipe tax', function () {
       let stale = await ballista.currentEconomicsHash(await usdc.getAddress());
       await ballista.publishSnipeTaxTable([5000, 1000]);
       await expect(
-        ballista.connect(creator).createToken('A', 'AAA', 'u', await usdc.getAddress(), stale, false)
+        ballista.connect(creator).createToken('A', 'AAA', 'u', await usdc.getAddress(), stale)
       ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged'
       );
 
       stale = await ballista.currentEconomicsHash(await usdc.getAddress());
       await ballista.setDefaultSnipeTaxTreasuryBps(1000);
       await expect(
-        ballista.connect(creator).createToken('B', 'BBB', 'u', await usdc.getAddress(), stale, false)
+        ballista.connect(creator).createToken('B', 'BBB', 'u', await usdc.getAddress(), stale)
       ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged'
       );
     });
@@ -325,7 +343,7 @@ describe('Ballista — decaying snipe tax', function () {
       // and atElapsed refuses to pretend otherwise.
       await atElapsed(ballista, tokenAddress, 1);
       // Still the OLD table's t=1 rate, not the newly published 1 bps.
-      expect(await ballista.currentSnipeTaxBps(tokenAddress)).to.equal(9500);
+      expect(await snipeTaxBpsOf(ballista, tokenAddress)).to.equal(9500);
     });
 
     it('changing the split does not affect a token already trading', async function () {
@@ -367,7 +385,7 @@ describe('Ballista — decaying snipe tax', function () {
       await ballista.publishSnipeTaxTable([]);
       const tokenAddress = await launch(ballista, usdc, creator, 'NOTAX');
       await atElapsed(ballista, tokenAddress, 0);
-      expect(await ballista.currentSnipeTaxBps(tokenAddress)).to.equal(0);
+      expect(await snipeTaxBpsOf(ballista, tokenAddress)).to.equal(0);
     });
   });
 });

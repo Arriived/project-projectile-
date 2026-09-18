@@ -147,7 +147,7 @@ describe('Ballista — actor/phase pass: compromised owner', function () {
     expect(await ballista.currentEconomicsHash(usdcAddress)).to.equal(hash);
 
     const before = await usdc.balanceOf(creator.address);
-    await ballista.connect(creator).createToken('Pinned', 'PIN', '', usdcAddress, hash, false);
+    await ballista.connect(creator).createToken('Pinned', 'PIN', '', usdcAddress, hash);
     const paid = before - (await usdc.balanceOf(creator.address));
 
     expect(paid, 'creator paid the NEW fee despite pinning the OLD terms').to.equal(500n * ONE);
@@ -160,7 +160,7 @@ describe('Ballista — actor/phase pass: compromised owner', function () {
     const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     await setGraduationThreshold(registry, await usdc.getAddress(), 20_000n * ONE);
     await expect(
-      ballista.connect(creator).createToken('Pinned', 'PIN2', '', await usdc.getAddress(), hash, false)
+      ballista.connect(creator).createToken('Pinned', 'PIN2', '', await usdc.getAddress(), hash)
     ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
   });
 
@@ -173,7 +173,7 @@ describe('Ballista — actor/phase pass: compromised owner', function () {
     await ballista.setDefaultFees(200, 200); // accepted without complaint
     const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
     await expect(
-      ballista.connect(creator).createToken('Ceil', 'CEIL', '', await usdc.getAddress(), hash, false)
+      ballista.connect(creator).createToken('Ceil', 'CEIL', '', await usdc.getAddress(), hash)
     ).to.be.revertedWithCustomError(ballista, 'BaseFeeCeilingExceeded');
   });
 });
@@ -192,7 +192,7 @@ describe('Ballista — actor/phase pass: donations and direct transfers', functi
       await usdc.connect(s).approve(await ballista.getAddress(), ethers.MaxUint256);
     }
     const hash = await ballista.currentEconomicsHash(await usdc.getAddress());
-    const tx = await ballista.connect(creator).createToken('Don', 'DON', '', await usdc.getAddress(), hash, false);
+    const tx = await ballista.connect(creator).createToken('Don', 'DON', '', await usdc.getAddress(), hash);
     const rc = await tx.wait();
     const created = rc.logs
       .map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
