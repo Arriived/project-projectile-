@@ -7800,3 +7800,103 @@ Not recorded in this file. Per instruction, those two measurements (whether the 
 can move to its own contract, and a fresh LaunchType build against this trimmed baseline)
 are report-only and were written up separately, after actually being built and measured,
 rather than embedded here — see `docs/SNIPE_TAX_SPLIT_AND_LAUNCHTYPE_REPORT.md`.
+
+## 26.6 The cross-curve drain closed — a router can report failure while having already stolen
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as the rest of this file. This is a
+report-then-fix pair: the finding was surfaced read-only in an earlier turn of this
+session (the "broken-router retry across curves" audit), and this section is the actual
+contract change that closes it.
+
+### The finding
+
+`_performGraduation`'s zero-liquidity branch trusted a router's return value alone.
+`forceApprove` grants the router an allowance on both the launched token and the quote
+asset; the router then pulls whatever it wants via `transferFrom` *inside* the external
+call, before `_performGraduation` ever inspects `liquidity`. A router that pulls funds
+and STILL reports `liquidity == 0` looked identical to one that politely declined —
+`c.tokenReserves`/`c.realQuoteReserves` are left exactly as they were (neither is zeroed
+outside the success branch), so the curve parks at `GRADUATION_READY` claiming reserves
+that, for a draining router, have already left BXR1's actual balance.
+
+**Three scenarios, all executed against real contract code in scratch tests (deleted
+after use, `git status --porcelain` confirmed clean each time):**
+
+1. **`MockBrokenRouter`** (pulls BOTH sides, returns `liquidity == 0`) on a single curve:
+   the triggering buy's own reserves fell short of what the router took, but the shortfall
+   was small (the fee difference between `actualQuoteIn` and the pulled `quoteLiquidity`)
+   and self-contained to that one curve.
+2. **The same router, with a second curve (B) pooling extra quote-asset balance
+   alongside A**: a `graduate(A)` retry through an honest router still failed, because
+   `MockBrokenRouter` drains the TOKEN side too — BXR1's balance of A's own launched
+   token drops to zero, and the token side of any retry's pull fails regardless of how
+   much quote-asset balance sits in the shared pool.
+3. **A purpose-built router that drains ONLY the quote side** (the shape this session's
+   `QuoteOnlyDrainRouter.sol` fixture models): the token side stays untouched, so a later
+   `graduate(A)` retry through a completely honest router succeeds — paying A's stale,
+   already-spent claim out of curve B's separate, previously-safe pooled funds. B's
+   holders could then no longer sell their full position; the sell reverted for lack of
+   balance.
+
+Scenario 3 is materially different from, and stronger than, the pre-existing
+`Ballista.baseline.test.js`/`Graduation.adversarial.test.js` characterization tests
+(formerly titled "does not unwind the triggering trade" / "a zero-liquidity-returning
+router ... is caught the same way as an outright revert"). Those asserted only that the
+*triggering* trade survives and the curve parks — neither ever read BXR1's actual
+token/quote balances, and neither ever touched a second curve. They could not have
+caught this.
+
+`test/bxr1/CrossCurveDrain.test.js` reproduces scenario 3 as a permanent regression test.
+Run against the pre-fix contract, it failed exactly where the bug lives — the solvency
+invariant (`BXR1's quote balance >= every curve's recorded realQuoteReserves + every
+accrued fee`) broke **immediately after the drain, before `graduate(A)` was ever
+called**: `expected 8081119742 to be at least 16111974221` (real command output, not
+estimated). Removing the fix's balance check and re-running reproduced the identical
+failure, byte-for-byte; restoring the fix made it pass again.
+
+### The fix
+
+`_performGraduation`'s try/catch shape and its `catch` branch are **unchanged**, per the
+do-not-touch list — a router that reverts outright (`MockRevertingRouter`,
+`GasGuzzlerRouter`) still parks the curve retryably with reserves untouched, exactly as
+before, because a revert unwinds its own pull with it.
+
+Only the `liquidity == 0` success-branch path changed. BXR1 now snapshots its own
+token and quote balances immediately before the external `addLiquidity` call. If the
+router reports `liquidity == 0` **and** either balance has dropped, that is no longer
+read as "the router politely declined" — it is treated exactly like an outright revert:
+`revert GraduationFailed()`, unwinding the whole enclosing transaction (whichever
+triggered it — the auto-graduation attempt inside a `buy()`, or a standalone
+`graduate()` call) and taking the router's pull down with it. If neither balance moved,
+behavior is unchanged: park at `GRADUATION_READY`, return `false`, retryable.
+
+**This reverses part of the "does not unwind the triggering trade" decision, and the
+reversal is deliberate, not incidental.** That characterization was correct and remains
+correct for a router whose failure is an honest revert or a genuine no-op — the trade
+must survive a router that does nothing. It was never meant to cover a router that
+*moves real funds* while reporting failure; conflating "the router said no" with "the
+router took the money and said no" is exactly the gap that let scenario 3 through. Both
+`test/bxr1/Ballista.baseline.test.js` and `test/bxr1/Graduation.adversarial.test.js`
+were updated to assert the new behavior for `MockBrokenRouter` specifically (the buy now
+reverts `GraduationFailed`, and no funds are found to have left BXR1 or the buyer), while
+their sibling tests using `MockRevertingRouter`/`GasGuzzlerRouter` were left running
+unmodified — confirmed by name in the same runs — because that path never triggers the
+new check at all.
+
+### Verification
+
+| | before | after |
+|---|---|---|
+| BXR1 deployed bytes | 19,569 | **20,058** (+489) |
+| `test/bxr1/*.test.js` | 205 passing / 1 failing (pre-fix, the two updated tests still asserting old behavior) | **206 passing, 0 failing** |
+| LFX1 control (`test/*.test.js`) | — | **303 passing + 48 pending, 0 failing**, unchanged |
+| `git diff --stat -- contracts/LFX1.sol contracts/LFX1Token.sol` | — | empty |
+
+`scripts/deploy-bxr1.js:119`'s `registry.registerAsset(...)` call was also missing the
+9th argument (`creationFee`), added when `creationFee` moved into `AssetRegistry` in an
+earlier turn (section 25.6) — this was a stale caller, not a new finding, flagged in the
+same audit. Fixed alongside: a `BXR1_FIRST_ASSET_CREATION_FEE` env-overridable constant
+(default `500000`, matching the historic 0.5-USDC-equivalent figure), passed as the 9th
+argument and logged in the deploy summary. Run end-to-end against the local Hardhat
+network (`BXR1_FIRST_ASSET=0x...dEaD npx hardhat run scripts/deploy-bxr1.js --network
+hardhat`) to confirm it deploys cleanly with the corrected call, not merely compiles.

@@ -161,18 +161,37 @@ describe('Ballista — graduation state machine adversarial testing', function (
     ).to.be.revertedWithCustomError(ballista, 'CurveNotActive');
   });
 
-  it('a zero-liquidity-returning router (not a revert) is caught the same way as an outright revert', async function () {
+  // ⚠ REVERSED, 2026-09-19 -- CLAUDE.md section 26.6. This used to assert the trade
+  // stood and the curve parked in GRADUATION_READY, exactly like a router that
+  // reverts outright. That grouping was wrong: MockBrokenRouter's return-value
+  // failure is NOT like MockRevertingRouter's revert, because MockBrokenRouter
+  // pulls BOTH sides via transferFrom BEFORE reporting liquidity == 0 -- real funds
+  // already left BXR1 while the curve's recorded reserves stayed unchanged. Parking
+  // retryably on that state let a later graduate() retry through an HONEST router
+  // pay the stale claim out of a completely different curve's separate, previously
+  // safe funds (proven in test/bxr1/CrossCurveDrain.test.js). The fix treats
+  // "reported success but measurably moved funds while achieving nothing" the same
+  // as an outright revert -- the whole triggering trade unwinds, taking the
+  // router's pull with it.
+  it('a zero-liquidity router that ALSO drained funds is caught the same way as an outright revert', async function () {
     // Distinct failure mode from MockRevertingRouter -- the router call itself
-    // succeeds (doesn't revert) but signals failure through its return value.
+    // succeeds (doesn't revert) but signals failure through its return value,
+    // having already pulled funds via the allowances it was granted.
     const { ballista, usdc, creator, trader } = await deployFixtureWithRouter('MockBrokenRouter');
     const tokenAddress = await launchToken(ballista, usdc, creator, 'Broken Coin', 'BRK');
 
-    const tx = await ballista.connect(trader).buy(tokenAddress, 68_000n * ONE_USDC, 0);
-    const receipt = await tx.wait();
+    const ballistaAddress = await ballista.getAddress();
+    const token = await ethers.getContractAt('BXR1Token', tokenAddress);
+    const quoteBefore = await usdc.balanceOf(ballistaAddress);
+    const tokenBefore = await token.balanceOf(ballistaAddress);
 
-    expect(findEvent(ballista, receipt, 'Trade')).to.not.be.undefined; // trade still succeeded
-    expect(findEvent(ballista, receipt, 'GraduationAttemptFailed')).to.not.be.undefined;
-    expect((await ballista.curves(tokenAddress)).state).to.equal(GRADUATION_READY);
+    await expect(ballista.connect(trader).buy(tokenAddress, 68_000n * ONE_USDC, 0))
+      .to.be.revertedWithCustomError(ballista, 'GraduationFailed');
+
+    // No funds left BXR1 -- the revert unwound the trade AND the router's pull.
+    expect(await usdc.balanceOf(ballistaAddress)).to.equal(quoteBefore);
+    expect(await token.balanceOf(ballistaAddress)).to.equal(tokenBefore);
+    expect((await ballista.curves(tokenAddress)).state, 'the curve must remain ACTIVE, not parked on a phantom claim').to.equal(ACTIVE);
   });
 
   it('a failed attempt does not leave a stale token approval sitting on the router', async function () {

@@ -8,6 +8,7 @@ const TOKENS = (n) => ethers.parseUnits(n.toString(), 18);
 const ZERO = "0x0000000000000000000000000000000000000000";
 
 // Curve.state enum, mirrored from Ballista.sol.
+const ACTIVE = 0n;
 const GRADUATION_READY = 1n;
 const GRADUATED = 2n;
 
@@ -285,23 +286,46 @@ describe("Ballista — the original pre-rename suite", function () {
       );
     });
 
-    // Behavior deliberately changed: graduation is now decoupled, so a router that
-    // returns zero liquidity no longer unwinds the buy that triggered it. The trade
-    // stands, the curve parks in GRADUATION_READY, and graduate() is what reports the
-    // failure — retryably.
-    it("does not unwind the triggering trade when the router returns zero liquidity", async function () {
+    // ⚠ REVERSED, 2026-09-19 -- CLAUDE.md section 26.6. This test used to assert that
+    // a zero-liquidity router does NOT unwind the triggering trade: the buy stood, the
+    // curve parked in GRADUATION_READY with reserves intact, and a later graduate()
+    // reported the failure retryably. That was true and safe for a router like
+    // MockRevertingRouter or GasGuzzlerRouter (see the "graduate() works while paused"
+    // test above), which never pulls anything -- the router's OWN revert unwinds it.
+    //
+    // MockBrokenRouter is different: it pulls BOTH sides via transferFrom and THEN
+    // reports liquidity == 0. Parking retryably after that leaves the curve claiming
+    // reserves that already left BXR1's balance -- exactly the state a later
+    // permissionless graduate() retry through an HONEST router can pay out of a
+    // completely different curve's separate, previously-safe funds (proven in
+    // test/bxr1/CrossCurveDrain.test.js). The fix treats "reported success but
+    // measurably moved funds while achieving nothing" the same as an outright revert:
+    // the whole triggering trade now unwinds, taking the router's pull with it.
+    it("reverts the triggering trade when the router drains funds while reporting zero liquidity", async function () {
       const { factory, owner, alice, bob, brokenRouter, usdc } = await deployFixture();
       await activateRouter(factory.connect(owner), await brokenRouter.getAddress());
       await createToken(factory, usdc, alice, "First", "CAT");
       const tokenAddr = await getLastToken(factory, alice);
+      const token = await ethers.getContractAt("BXR1Token", tokenAddr);
 
-      await expect(factory.connect(bob).buy(tokenAddr, USDC(9_000), 0)).to.not.be.reverted;
+      const factoryUsdcBefore = await usdc.balanceOf(await factory.getAddress());
+      const factoryTokenBefore = await token.balanceOf(await factory.getAddress());
+      const bobUsdcBefore = await usdc.balanceOf(bob.address);
 
+      await expect(factory.connect(bob).buy(tokenAddr, USDC(9_000), 0))
+        .to.be.revertedWithCustomError(factory, 'GraduationFailed');
+
+      // No funds left BXR1 -- the revert unwound the trade AND the router's pull.
+      expect(await usdc.balanceOf(await factory.getAddress()), 'BXR1 quote balance must be unchanged')
+        .to.equal(factoryUsdcBefore);
+      expect(await token.balanceOf(await factory.getAddress()), 'BXR1 token balance must be unchanged')
+        .to.equal(factoryTokenBefore);
+      expect(await usdc.balanceOf(bob.address), "bob's balance must be unchanged")
+        .to.equal(bobUsdcBefore);
+
+      // The curve never reached GRADUATION_READY at all -- the whole trade is gone.
       const curve = await factory.curves(tokenAddr);
-      expect(curve.state).to.equal(GRADUATION_READY);
-
-      await expect(factory.graduate(tokenAddr)).to.be.revertedWithCustomError(factory, 'GraduationFailed'
-      );
+      expect(curve.state, 'the curve must remain ACTIVE, not parked on a phantom claim').to.equal(ACTIVE);
     });
 
     // Replaces the old "fails clearly if no router has been set yet" test, which

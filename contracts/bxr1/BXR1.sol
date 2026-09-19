@@ -598,6 +598,14 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         IERC20(token).forceApprove(router, tokenLiquidity);
         quote.forceApprove(router, quoteLiquidity);
 
+        // Balances immediately before the external call, so a router that reports
+        // liquidity == 0 (a legitimate "graduation didn't take" outcome) can be told
+        // apart from one that ALSO pulled real funds out through the allowances just
+        // granted. Only the zero-liquidity branch below reads these; the ordinary
+        // try/catch shape and the catch branch are unchanged.
+        uint256 tokenBalBefore = IERC20(token).balanceOf(address(this));
+        uint256 quoteBalBefore = quote.balanceOf(address(this));
+
         try IDEXRouter(router).addLiquidity(
             token,
             c.quoteAsset,
@@ -615,6 +623,27 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
             quote.forceApprove(router, 0);
 
             if (liquidity == 0) {
+                // A router can report failure (liquidity == 0) while having ALREADY
+                // pulled funds via the allowances above -- CLAUDE.md section 26.6.
+                // c.tokenReserves/c.realQuoteReserves are NOT zeroed on this path (only
+                // the success branch below zeroes them), so the curve keeps claiming
+                // funds that already left the building. Because BXR1 pools every curve
+                // sharing a quote asset in one ERC-20 balance with no per-curve
+                // segregation, a later permissionless graduate() retry through a
+                // completely honest router can then silently pay that stale claim out
+                // of a DIFFERENT curve's separate, previously-safe reserves -- draining
+                // it and leaving its own holders unable to sell their full position.
+                //
+                // If nothing actually moved, this is the ordinary "the pair looked
+                // wrong so the router declined" case (CLAUDE.md section 1.1), and the
+                // curve parks retryably exactly as before. If either balance dropped,
+                // the call already did real damage despite not reverting on its own,
+                // and must be treated exactly like a revert: unwind everything in this
+                // transaction, including whatever the router already pulled.
+                if (IERC20(token).balanceOf(address(this)) < tokenBalBefore
+                    || quote.balanceOf(address(this)) < quoteBalBefore) {
+                    revert GraduationFailed();
+                }
                 return false;
             }
 
