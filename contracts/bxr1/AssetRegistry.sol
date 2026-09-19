@@ -185,9 +185,11 @@ contract AssetRegistry is Ownable {
     // the result is then fixed forever in the Curve struct exactly like a STANDARD
     // asset's raw values always have been (CLAUDE.md section 27).
     //
-    // Kept in the registry rather than in BXR1, to spend registry bytes rather than
-    // BXR1 bytes against BXR1's own tighter headroom -- measured in CLAUDE.md section
-    // 27's byte report, not assumed.
+    // Kept in the registry rather than in BXR1, so this conversion's bytes land here
+    // instead of against BXR1's own tighter headroom: measured, BXR1 grew by only 101
+    // bytes for this change (CLAUDE.md section 27.6). The alternative -- doing the
+    // conversion inside BXR1 instead -- was never built or measured, so this is not a
+    // comparison of two measured options, only the cost of the one that was built.
     function launchTerms(address asset) external view returns (
         uint256 initialVirtualReserveNative,
         uint256 graduationThresholdNative,

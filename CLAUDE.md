@@ -8052,3 +8052,59 @@ this was resource contention rather than a real defect.
 repo at the same time.** Compiling and testing share the same `artifacts/` and `cache/`
 directories, and a second process reading them mid-write is exactly the kind of failure
 that looks like a real bug, costs real time to chase, and is not one.
+
+## 27.6 Implementation record — commit `3495590`, re-measured for this record
+
+⚠ **APPENDED, NOT A REWRITE.** Every number below is from a command run for this record,
+not copied out of the commit message. `launchTerms()`'s own comment previously claimed
+the registry-vs-BXR1 byte tradeoff was "measured in CLAUDE.md section 27's byte report" —
+no such report existed at the time that comment was written, and no BXR1-side
+alternative was ever built to compare against. The comment is corrected in place to say
+only what was actually measured: BXR1's own growth for the change that WAS built.
+
+### Sizes
+
+| | before (`4ad613c`) | after (`3495590`) |
+|---|---|---|
+| BXR1 deployed bytes | 20,058 | **20,159** (+101) |
+| AssetRegistry deployed bytes | 1,946 | **3,510** (+1,564) |
+| BXR1 headroom against 24,576 | 4,518 | **4,417** |
+
+`4ad613c` measured fresh in a scratch worktree (`node_modules` symlinked from the main
+repo, never reinstalled); `3495590`/current measured in the main working tree, both via
+`node -e` reading `deployedBytecode.length` off the freshly compiled artifact.
+
+### Suites
+
+`test/bxr1/*.test.js`: **218 passing, 0 failing.** LFX1 control (`test/*.test.js`):
+**303 passing + 48 pending, 0 failing**, `git diff --stat -- contracts/LFX1.sol
+contracts/LFX1Token.sol` empty.
+
+### The three mutation proofs, re-run for this record
+
+Each applied to the committed code, compiled, run against
+`test/bxr1/LeveragedLaunch.test.js` alone, then reverted and confirmed byte-identical to
+the committed source (`git diff --stat -- contracts/` empty) before the next.
+
+**1. Conversion ignores the rate** (`launchTerms`'s LEVERAGED branch scales by
+`10**decimals` only, dropping the WAD factor and the division by `rate * 1e6` entirely):
+**5 tests fail**, all four rate-dependent value checks plus the ceiling-rounding test —
+"at rate 1e18 the curve snapshots...", "at rate 2e18 ... every figure is exactly half",
+"two launches at different rates open at the same USD price, within rounding", "a rate
+change after launch leaves the curve snapshot untouched...", and "a rate that does not
+divide evenly proves ceil rounding, not floor". 7 passing, 5 failing.
+
+**2. `kind` removed from the hash** (`cfg.kind` deleted from `currentEconomicsHash`'s
+`abi.encode`): **exactly 1 test fails** — "currentEconomicsHash is unchanged by a rate
+change, changed by new USD values or a kind flip", on its own
+`'flipping kind alone must move the hash'` assertion. 11 passing, 1 failing.
+
+**3. Floor instead of ceil** (`_ceilDiv` changed to plain `a / b`): **exactly 2 tests
+fail** — "two launches at different rates open at the same USD price, within rounding"
+(on `'implied USD must not round below the true value'`) and "a rate that does not
+divide evenly proves ceil rounding, not floor" (the curve produces `2160270019442430176947`
+where it must produce `2160270019442430176948`). 10 passing, 2 failing.
+
+All three reproduce the identical failure signatures (same test names, same numbers)
+recorded when these mutations were first proved in the implementation session, confirming
+the proofs are stable and not an artifact of how or when they were run.
