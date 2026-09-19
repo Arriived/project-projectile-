@@ -8414,3 +8414,138 @@ changes. Final combined sizes, both changes applied together:
 | BXR1 deployed bytes | **20,228** |
 | BXR1 headroom against 24,576 | **4,348** |
 | AssetRegistry deployed bytes | **3,724** |
+
+---
+
+# 30. SESSION OF 19 SEPTEMBER 2026 (continued) — BXR1 deployed to Arc TESTNET
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§29. Nothing above this line was
+deleted. **This is the first live BXR1 deployment, on Arc TESTNET only.** It follows the
+two-phase plan agreed earlier in this session: Phase 1 was a plan-only report (network,
+deployer balance, router compatibility, verification setup — no transactions); Phase 2,
+below, is what actually broadcast once the operator said "deploy".
+
+## 30.1 What is deployed, and where
+
+| contract | address | explorer |
+|---|---|---|
+| `CurveMath` (library) | `0x375b0F9E6Fd3e31F1e76c07bD9234F96f32c5dAc` | `https://explorer.testnet.arc.io/address/0x375b0F9E6Fd3e31F1e76c07bD9234F96f32c5dAc#code` |
+| `AssetRegistry` | `0xA2C27DbC84b602d9496799096a133043B81d5799` | `https://explorer.testnet.arc.io/address/0xA2C27DbC84b602d9496799096a133043B81d5799#code` |
+| `BXR1` | `0x7D041748083A88452AF4eE943E16b6c5Bf07e6C6` | `https://explorer.testnet.arc.io/address/0x7D041748083A88452AF4eE943E16b6c5Bf07e6C6#code` |
+
+**All three verified**, confirmed via Blockscout's `/api/v2/smart-contracts/<address>`
+endpoint reading `is_verified: true` and `creation_status: "success"` for each, not
+merely inferred from `hardhat verify`'s own "Successfully verified" message.
+
+Full machine-readable record: `deployments/arc-testnet-bxr1.json`.
+
+## 30.2 ⚠ `testnet.arcscan.app` now 301-redirects to `explorer.testnet.arc.io` — the config was stale
+
+**Found the moment verification was attempted.** `hardhat.config.js`'s `arcTestnet`
+`customChains` entry pointed `apiURL`/`browserURL` at `testnet.arcscan.app`, which LFX1's
+deployment used successfully (§7). Measured this session: that host now returns a **301**
+to `https://explorer.testnet.arc.io` for both the browser page and the `/api` path.
+hardhat-verify's verification POST does not follow that redirect and got back the
+redirect's HTML body where it expected JSON — `Unexpected token '<', "<html>..."`.
+
+**Fixed in `hardhat.config.js`**: both URLs now point directly at
+`explorer.testnet.arc.io`, with a comment recording why. This is the same domain, not a
+different explorer — confirmed by verifying against it successfully and then reading the
+same three contracts back via the v2 API.
+
+⚠ **The explorer's rate limit on repeated polling is real and sustained** — a burst of
+status checks (this session's own polling while waiting for verification to land)
+triggered `429 Too many requests. Increase limits now at https://dev.blockscout.com` that
+did not clear for over ten minutes even against a single previously-verified contract.
+The v2 REST endpoint (`/api/v2/smart-contracts/<address>`) did not hit the same limit and
+is the more reliable way to check verification status without hammering the legacy
+Etherscan-compatible `/api` path.
+
+## 30.3 The bootstrap allowlist guard fired correctly on the real network
+
+`BXR1_BOOTSTRAP_ROUTER=0xFa6CeBb5e50FaFFD1A3bF611392fE255f9ec0cD3` was accepted because
+the provider's own `getNetwork()` reported chainId `5042002n`, inside the allowlist added
+earlier this session (§ "deploy guard: allowlist testnet/hardhat only"). This is the
+guard's first real-network exercise, not just its own test suite.
+
+## 30.4 The smoke test — create, buy 1 USDC, sell half
+
+**Amounts deliberately small, nowhere near the 8,000 USDC-equivalent graduation
+threshold** — this smoke test does not exercise graduation, and was never intended to.
+
+**`TokenCreated`**, tx `0x199000fa2ce089c0839408d4aecebe714abfdc92d4660c3c1d68d2a822ded755`,
+block 62979313:
+```
+token:      0x2Edc61d11933b32D4524f179a30077d0bFEB41B6
+creator:    0x0162C048740aF730c3a20F18A1B8E7B505198cFE
+quoteAsset: 0x3600000000000000000000000000000000000000   <- Arc testnet USDC, confirmed
+```
+
+**`Trade` (buy)**, tx `0xbf896694668c1d8aeb296b50ca30406903889ad1b91fc89b1c7ea0529e406e3a`,
+block 62979565:
+```
+isBuy:        true
+quoteAmount:  1000000                          (1.0 USDC)
+tokenAmount:  398895797960262219873387
+```
+
+**`Trade` (sell)**, tx `0x999e14a175b20749473c4507102573cd6af3fc34f341c5c83e56ed2d1ed16d2b`,
+block 62979627:
+```
+isBuy:        false
+tokenAmount:  199447898980131109936693          (exactly half of the buy's tokenAmount)
+quoteAmount:  490141                             (0.490141 USDC out)
+```
+
+⚠ **The first `buy()` attempt reverted, and it was an out-of-gas revert, not a contract
+defect.** Sent with ethers' auto-estimated gas limit (198,584) against actual usage of
+198,196 — 0.2% headroom, effectively none. This is exactly CLAUDE.md §5's standing rule:
+*"Arc's `eth_estimateGas` returns no margin — always send with headroom."* Retried with
+`estimateGas() × 3` and succeeded (gasUsed 188,795, comfortably inside a 595,752 limit).
+**No funds were lost on the failed attempt** — a revert unwinds its own state changes;
+only gas was spent, out of the same USDC-denominated balance (Arc's one-balance
+configuration, §2). The standing rule now has a second, independent confirmation on a
+different contract from the one that originally established it.
+
+## 30.5 Deployer USDC balance
+
+| | value |
+|---|---|
+| before deployment (this session, re-checked per the operator's instruction after Circle-faucet funding) | **20.0 USDC** |
+| after the full deployment + smoke test | **18.790189 USDC** |
+
+The difference (~1.21 USDC) is gas for seven transactions (library deploy, registry
+deploy, registerAsset, BXR1 deploy, the failed buy attempt, the successful buy, the
+sell) plus the smoke test's own 0.5 USDC creation fee and the two trades' fees and
+slippage — all paid from the single USDC-denominated balance, since USDC is both gas and
+settlement asset on Arc.
+
+## 30.6 ⚠ The router is LFX1's placeholder MockRouter — graduation on this deployment proves nothing
+
+**Recorded here and in `deployments/arc-testnet-bxr1.json`, per explicit instruction.**
+`initialRouter_` was bootstrapped directly in the constructor as
+`0xFa6CeBb5e50FaFFD1A3bF611392fE255f9ec0cD3` — the same MockRouter LFX1's testnet
+deployment uses (§7), **not a real DEX**. Bootstrapping spent this factory's one
+untimelocked router activation: the router is live at block zero, with no
+`proposeRouter`, no 24h wait, and no public window for anyone to have noticed or
+objected, exactly as the allowlisted `BXR1_BOOTSTRAP_ROUTER` flag is documented to do.
+
+**Consequence: any future "graduation" on this specific BXR1 deployment demonstrates
+only that MockRouter accepts whatever amounts it is offered and reports success.** It
+says nothing about a real Uniswap-shaped router, real LP token minting, real pair
+pricing, or §1.1's strict-mins protection against an adversarial pair — none of that
+mechanism is exercised by a router that unconditionally echoes back what it was handed.
+A future router change on this factory requires the normal path: `proposeRouter()` → a
+full 24h wait → `activateRouter()`.
+
+## 30.7 Deliberately out of scope this session
+
+- **`app/` and `indexer/` are untouched.** Both still point exclusively at LFX1
+  (§28.1); porting either to read BXR1/the registry is separate, later work.
+- **No `.env` value, and no private key, was ever printed.** Only the deployer's
+  derived public address and public balances appear anywhere in this record.
+- **`git status --porcelain` before committing showed only the deployments file and
+  `hardhat.config.js`** (the explorer-host fix) plus this CLAUDE.md section — no `.env`,
+  no stray scratch files. The three throwaway smoke-test scripts
+  (`scripts/_scratch_bxr1_*.js`) were deleted immediately after use and confirmed gone
+  via `git status` before anything was staged.

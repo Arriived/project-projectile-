@@ -1,0 +1,88 @@
+{
+  "network": "arcTestnet",
+  "chainId": 5042002,
+  "deployedAt": "2026-09-19",
+  "deployer": "0x0162C048740aF730c3a20F18A1B8E7B505198cFE",
+  "treasury": "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
+  "contracts": {
+    "CurveMath": {
+      "address": "0x375b0F9E6Fd3e31F1e76c07bD9234F96f32c5dAc",
+      "deployTx": "0x960e9489da6cdfb2db2f812207f6dd65a02f0c18c8ef451242d84b0072105a74",
+      "block": 62967529,
+      "verified": true,
+      "explorer": "https://explorer.testnet.arc.io/address/0x375b0F9E6Fd3e31F1e76c07bD9234F96f32c5dAc#code"
+    },
+    "AssetRegistry": {
+      "address": "0xA2C27DbC84b602d9496799096a133043B81d5799",
+      "deployTx": "0xeb3f661c5ed4e2b2d4d8e833745eeda1163aa219bd1a03bb2d2eacc06b13e0b3",
+      "block": 62967532,
+      "verified": true,
+      "explorer": "https://explorer.testnet.arc.io/address/0xA2C27DbC84b602d9496799096a133043B81d5799#code",
+      "registerAssetTx": "0x5fb8ee7becd630f6ef30e5e278bb77cd7c3a333ddaf8dd1d5178158df301ba83",
+      "registerAssetBlock": 62967536,
+      "firstAsset": {
+        "asset": "0x3600000000000000000000000000000000000000",
+        "label": "Arc testnet USDC",
+        "kind": "STANDARD",
+        "decimals": 6,
+        "initialVirtualReserve": "2667000000",
+        "defaultGraduationThreshold": "8000000000",
+        "creationFee": "500000",
+        "enabled": true,
+        "rebasing": false,
+        "transferRestricted": false,
+        "transferFee": false
+      }
+    },
+    "BXR1": {
+      "address": "0x7D041748083A88452AF4eE943E16b6c5Bf07e6C6",
+      "deployTx": "0x0d3203342479cd36cb39d3800cbc0ced11af4f549c31f2ca439bb1a378cc51ed",
+      "block": 62967539,
+      "verified": true,
+      "explorer": "https://explorer.testnet.arc.io/address/0x7D041748083A88452AF4eE943E16b6c5Bf07e6C6#code",
+      "linkedLibraries": {
+        "CurveMath": "0x375b0F9E6Fd3e31F1e76c07bD9234F96f32c5dAc"
+      },
+      "constructorArgs": {
+        "assetRegistry_": "0xA2C27DbC84b602d9496799096a133043B81d5799",
+        "treasury_": "0x64140EAa0a3B6E4682C98e440837bd3d5482B4cb",
+        "initialRouter_": "0xFa6CeBb5e50FaFFD1A3bF611392fE255f9ec0cD3"
+      },
+      "router": {
+        "address": "0xFa6CeBb5e50FaFFD1A3bF611392fE255f9ec0cD3",
+        "note": "⚠ THIS IS LFX1's PLACEHOLDER MockRouter, NOT A REAL DEX. It was bootstrapped directly into the constructor via BXR1_BOOTSTRAP_ROUTER, spending BXR1's one untimelocked router activation -- live at block zero, no proposeRouter, no 24h timelock, no public window for anyone to notice or object. Any 'graduation' this deployment ever produces is a MockRouter accepting whatever amounts it is offered and returning success; it proves NOTHING about a real DEX integration, real LP minting, real pair pricing, or the strict-mins protection described in CLAUDE.md section 1.1 for an actual Uniswap-shaped router. A future router change on this factory requires proposeRouter() + a full 24h wait + activateRouter(), same as any other BXR1/LFX1 deployment from here on."
+      }
+    }
+  },
+  "smokeTest": {
+    "note": "Small amounts only, deliberately far below the 8,000 USDC-equivalent graduation threshold -- this smoke test does not and is not intended to exercise graduation.",
+    "createToken": {
+      "tx": "0x199000fa2ce089c0839408d4aecebe714abfdc92d4660c3c1d68d2a822ded755",
+      "block": 62979313,
+      "tokenAddress": "0x2Edc61d11933b32D4524f179a30077d0bFEB41B6",
+      "name": "BXR1 Smoke Test",
+      "symbol": "SMOKE",
+      "creator": "0x0162C048740aF730c3a20F18A1B8E7B505198cFE",
+      "quoteAssetFromEvent": "0x3600000000000000000000000000000000000000",
+      "quoteAssetMatchesUsdc": true
+    },
+    "buy": {
+      "tx": "0xbf896694668c1d8aeb296b50ca30406903889ad1b91fc89b1c7ea0529e406e3a",
+      "block": 62979565,
+      "isBuy": true,
+      "quoteAmountIn": "1000000",
+      "tokenAmountOut": "398895797960262219873387"
+    },
+    "sell": {
+      "tx": "0x999e14a175b20749473c4507102573cd6af3fc34f341c5c83e56ed2d1ed16d2b",
+      "block": 62979627,
+      "isBuy": false,
+      "tokenAmountIn": "199447898980131109936693",
+      "quoteAmountOut": "490141"
+    }
+  },
+  "deployerUsdcBalance": {
+    "beforeDeploy": "20.0",
+    "afterSmokeTest": "18.790189"
+  }
+}

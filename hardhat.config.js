@@ -149,8 +149,11 @@ module.exports = {
         network: "arcTestnet",
         chainId: 5042002,
         urls: {
-          apiURL: "https://testnet.arcscan.app/api",
-          browserURL: "https://testnet.arcscan.app",
+          // ⚠ testnet.arcscan.app now 301-redirects here (confirmed 19 September 2026);
+          // hardhat-verify's POST doesn't follow that redirect and gets back an HTML
+          // redirect page instead of JSON, so this points directly at the real host.
+          apiURL: "https://explorer.testnet.arc.io/api",
+          browserURL: "https://explorer.testnet.arc.io",
         },
       },
       // ⚠ ARC MAINNET VERIFICATION — SHAPE UNCONFIRMED, VALUES BLANK.
