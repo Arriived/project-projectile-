@@ -8275,3 +8275,90 @@ returned" rule, and multiple sections above scarred by exactly this class of mis
 is built around never letting a record claim more than what was actually done. The
 commit that carries this section uses a message describing what it actually contains
 instead.
+
+---
+
+# 29. SESSION OF 19 SEPTEMBER 2026 — TokenCreated carries quoteAsset; registry rejects a decimals mismatch
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§28. Nothing above this line was
+deleted. Two small pre-deployment fixes, each with its own commit.
+
+## 29.1 Every BXR1 event signature, and whether any field is still USDC-named
+
+Read directly from `contracts/bxr1/BXR1.sol` before either change (`grep -n "^\s*event\s"`),
+plus `contracts/bxr1/AssetRegistry.sol`'s own two events for completeness:
+
+| event | signature (pre-change) |
+|---|---|
+| `TokenCreated` (`:142`) | `(address indexed token, address indexed creator, string name, string symbol, string metadataURI)` |
+| `Trade` (`:143`) | `(address indexed token, address indexed trader, bool isBuy, uint256 quoteAmount, uint256 tokenAmount)` |
+| `Graduated` (`:144`) | `(address indexed token, uint256 tokenLiquidity, uint256 quoteLiquidity, uint256 lpTokensBurned)` |
+| `GraduationReady` (`:145`) | `(address indexed token)` |
+| `GraduationAttemptFailed` (`:146`) | `(address indexed token)` |
+| `RouterProposed` (`:148`) | `(address indexed router, uint256 activatableAt)` |
+| `RouterActivated` (`:150`) | `(address indexed router)` |
+| `RouterRevoked` (`:151`) | `(address indexed router, bool wasLive)` |
+| `CreatorFeeAccrued` (`:152`) | `(address indexed token, address indexed creator, uint256 amount)` |
+| `CreatorFeesClaimed` (`:153`) | `(address indexed creator, uint256 amount)` |
+| `TreasuryFeesClaimed` (`:154`) | `(address indexed treasury, uint256 amount)` |
+| `LpRecipientSet` (`:155`) | `(address indexed oldRecipient, address indexed newRecipient)` |
+| `DefaultFeesSet` (`:156`) | `(uint16 oldBuyFeeBps, uint16 newBuyFeeBps, uint16 oldSellFeeBps, uint16 newSellFeeBps)` |
+| `DefaultCreatorFeesSet` (`:157`) | `(uint16 creatorBuyFeeBps, uint16 creatorSellFeeBps)` |
+| `SnipeTaxTablePublished` (`:158`) | `(uint32 indexed version, uint16[] table, uint16 maxBps)` |
+| `DefaultSnipeTaxTreasuryBpsSet` (`:159`) | `(uint16 treasuryBps)` |
+| `SnipeTaxCollected` (`:160`) | `(address indexed token, address indexed buyer, uint256 toTreasury, uint256 toCurve)` |
+| `AssetRegistry.AssetRegistered` (`AssetRegistry.sol:86`) | `(address indexed asset, uint8 decimals, bool rebasing, bool transferRestricted, bool transferFee, uint256 initialVirtualReserve, uint256 defaultGraduationThreshold, uint256 creationFee, AssetKind kind)` |
+| `AssetRegistry.AssetEnabledSet` (`AssetRegistry.sol:97`) | `(address indexed asset, bool enabled)` |
+
+**Flagged fields still named for USDC: none.** `grep -in "usdc"` over the full text of
+every event declaration in both files returned zero hits. `Trade.quoteAmount`,
+`Graduated.quoteLiquidity`, and `SnipeTaxCollected.toTreasury`/`toCurve` are already
+generically named — this pivot's earlier renaming pass already covered every event
+field, and only `TokenCreated` was missing the one thing it never carried in the first
+place: which asset the curve is quoted in.
+
+## 29.2 TokenCreated carries quoteAsset
+
+Added as a **third indexed topic** (`token`, `creator`, `quoteAsset` — the maximum of
+three a non-anonymous event allows), inserted after `creator`:
+
+```solidity
+event TokenCreated(address indexed token, address indexed creator, address indexed quoteAsset, string name, string symbol, string metadataURI);
+```
+
+`createToken`'s single emit site updated to pass `quoteAsset` (already in scope as a
+parameter) in the new position.
+
+**Every existing test needed zero changes.** Grepped for positional access
+(`.args[2]`/`[3]`/`[4]`, array destructuring, `.withArgs` on `TokenCreated`) across all
+18 files in `test/bxr1/` referencing `TokenCreated` — none exists; every site reads
+`.args.token` / `.args.name` etc. by name via `interface.parseLog`, which is unaffected
+by a new field's position. Confirmed empirically, not just by the grep: the full suite
+ran unmodified and green (see §29.4) before any test file was touched.
+
+**New test**, `test/bxr1/LeveragedLaunch.test.js`, "TokenCreated carries the LT's
+address for a LEVERAGED launch and USDC's for a STANDARD one": registers a second,
+STANDARD USDC asset into the same registry a LEVERAGED fixture already uses, launches
+one token against each, and asserts `TokenCreated.args.quoteAsset` equals the LT address
+for the first and the USDC address for the second, from the same factory instance.
+
+**Mutation proof.** Emitted `address(0)` in place of `quoteAsset`:
+
+```
+1) TokenCreated carries the LT's address for a LEVERAGED launch and USDC's for a STANDARD one:
+   LEVERAGED launch must carry the LT address
+   -0x0000000000000000000000000000000000000000
+   +0x5bf5b11053e734690269C6B9D438F8C9d48F528A
+12 passing, 1 failing
+```
+
+Reverted; `git diff -- contracts/bxr1/BXR1.sol` afterward showed exactly the two intended
+lines (the event signature and the emit site), nothing else.
+
+**Sizes**, `node -e` reading `deployedBytecode.length` off the freshly compiled artifact,
+before/after via `git stash push -- contracts/bxr1/BXR1.sol`:
+
+| | before | after |
+|---|---|---|
+| BXR1 deployed bytes | 20,159 | **20,228** (+69) |
+| BXR1 headroom against 24,576 | 4,417 | **4,348** |

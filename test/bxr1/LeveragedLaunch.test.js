@@ -274,4 +274,34 @@ describe('BXR1 — LEVERAGED launches: USD-denominated registry terms converted 
     const traderLtAfter = await lt.balanceOf(trader.address);
     expect(traderLtAfter, 'sell() must pay out in the LT').to.be.greaterThan(traderLtBefore);
   });
+
+  // TokenCreated carries quoteAsset (3rd indexed topic, added alongside this test --
+  // see CLAUDE.md's TokenCreated section). This is the one place an off-chain indexer
+  // can learn a curve's quote asset without a separate curves(token) call; it must
+  // read out the LT for a LEVERAGED launch and USDC for a STANDARD one, from the SAME
+  // factory instance, so nothing about the emit site special-cases either kind.
+  it("TokenCreated carries the LT's address for a LEVERAGED launch and USDC's for a STANDARD one", async function () {
+    const { ballista, lt, registry, creator } = await env(WAD);
+    const ltAddress = await lt.getAddress();
+
+    const usdc = await (await ethers.getContractFactory('MockUSDC')).deploy();
+    const usdcAddress = await usdc.getAddress();
+    await registry.registerAsset(
+      usdcAddress, 6, true, false, false, false,
+      2_667_000_000n, 8_000_000_000n, 500_000n, ASSET_KIND.STANDARD
+    );
+    await usdc.mint(creator.address, 10_000_000n * 1_000_000n);
+    await usdc.connect(creator).approve(await ballista.getAddress(), ethers.MaxUint256);
+
+    async function tokenCreatedQuoteAsset(quoteAssetAddress, symbol) {
+      const hash = await ballista.currentEconomicsHash(quoteAssetAddress);
+      const rc = await (await ballista.connect(creator)
+        .createToken('QA', symbol, 'ipfs://a', quoteAssetAddress, hash)).wait();
+      return rc.logs.map((l) => { try { return ballista.interface.parseLog(l); } catch { return null; } })
+        .find((l) => l && l.name === 'TokenCreated').args.quoteAsset;
+    }
+
+    expect(await tokenCreatedQuoteAsset(ltAddress, 'LTQA'), 'LEVERAGED launch must carry the LT address').to.equal(ltAddress);
+    expect(await tokenCreatedQuoteAsset(usdcAddress, 'USQA'), 'STANDARD launch must carry the USDC address').to.equal(usdcAddress);
+  });
 });

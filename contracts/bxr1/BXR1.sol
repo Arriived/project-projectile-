@@ -139,7 +139,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         uint256 snipeToTreasury;
     }
 
-    event TokenCreated(address indexed token, address indexed creator, string name, string symbol, string metadataURI);
+    event TokenCreated(address indexed token, address indexed creator, address indexed quoteAsset, string name, string symbol, string metadataURI);
     event Trade(address indexed token, address indexed trader, bool isBuy, uint256 quoteAmount, uint256 tokenAmount);
     event Graduated(address indexed token, uint256 tokenLiquidity, uint256 quoteLiquidity, uint256 lpTokensBurned);
     event GraduationReady(address indexed token);
@@ -341,7 +341,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
 
         _curves[token] = _buildCurve(token, quoteAsset);
 
-        emit TokenCreated(token, msg.sender, name, symbol, metadataURI);
+        emit TokenCreated(token, msg.sender, quoteAsset, name, symbol, metadataURI);
     }
 
     // The gate alone, as a void check: createToken calls this early and holds no return
