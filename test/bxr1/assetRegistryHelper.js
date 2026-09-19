@@ -63,6 +63,23 @@ async function setGraduationThreshold(registry, asset, newThreshold) {
   );
 }
 
+/// The mirror of setGraduationThreshold above, for the other field
+/// currentEconomicsHash pins: initialVirtualReserve. Same re-registration shape,
+/// same "returns the call itself" reasoning.
+async function setInitialVirtualReserve(registry, asset, newInitialVirtualReserve) {
+  const current = await registry.getAsset(asset);
+  return registry.registerAsset(
+    asset,
+    current.decimals,
+    current.enabled,
+    current.rebasing,
+    current.transferRestricted,
+    current.transferFee,
+    newInitialVirtualReserve,
+    current.defaultGraduationThreshold
+  );
+}
+
 /// _quoteBuy, _quoteSell and _ceilDiv were extracted out of BXR1.sol into an external
 /// CurveMath library (see contracts/bxr1/CurveMath.sol -- measured 345 bytes freed).
 /// BXR1's own deployed bytecode now carries two unresolved link placeholders, so
@@ -89,6 +106,7 @@ async function getBXR1Factory() {
 module.exports = {
   deployRegistryWithAsset,
   setGraduationThreshold,
+  setInitialVirtualReserve,
   getBXR1Factory,
   USDC_EQUIVALENT_INITIAL_VIRTUAL_RESERVE: 2_667_000_000n,
   USDC_EQUIVALENT_DEFAULT_GRADUATION_THRESHOLD: 8_000_000_000n,

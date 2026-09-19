@@ -256,16 +256,21 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         emit DefaultSnipeTaxTreasuryBpsSet(treasuryBps_);
     }
 
-    // Asset-scoped: defaultGraduationThreshold is no longer a single BXR1-wide value,
-    // so the hash a creator pins against has to be computed for the SPECIFIC asset
-    // they intend to quote in -- one more external view call (assetRegistry.getAsset)
-    // inside createToken's guard, beyond the one _buildCurve already makes for
-    // initialVirtualReserve.
+    // Asset-scoped: defaultGraduationThreshold and initialVirtualReserve are no
+    // longer single BXR1-wide values, so the hash a creator pins against has to be
+    // computed for the SPECIFIC asset they intend to quote in -- one external view
+    // call (assetRegistry.getAsset), read once here for both fields _buildCurve
+    // also snapshots from the same call. initialVirtualReserve was previously
+    // snapshotted but NOT hashed: an owner could re-register the asset with a
+    // different opening reserve between a creator fetching the hash and their
+    // createToken landing, and the pin would not catch it. Now it does.
     function currentEconomicsHash(address quoteAsset) public view returns (bytes32) {
+        AssetRegistry.AssetConfig memory cfg = assetRegistry.getAsset(quoteAsset);
         return keccak256(abi.encode(
             defaultBuyFeeBps,
             defaultSellFeeBps,
-            assetRegistry.getAsset(quoteAsset).defaultGraduationThreshold,
+            cfg.defaultGraduationThreshold,
+            cfg.initialVirtualReserve,
             defaultCreatorBuyFeeBps,
             defaultCreatorSellFeeBps,
             lpRecipient,
@@ -627,13 +632,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         return _quoteSell(tokensIn, c.sellFeeBps, c.virtualQuoteReserves, c.virtualTokenReserves, c.realQuoteReserves);
     }
 
-    // ⚠ KNOWN RESIDUAL: the `1e18` scaling here is a WAD convention calibrated for a
-    // 6dp-quote/18dp-token pair (see the historical USDC-only build). It is left exactly
-    // as it was rather than adding a normalisation layer -- curve math is not supposed
-    // to know about decimals, and this function already carried a fixed, uncalibrated
-    // scale factor before this change. For a quote asset whose decimals differ from 6,
-    // this still returns a valid raw ratio, just at a different magnitude than a caller
-    // calibrated to USDC would expect. Not fixed here; flagged for whoever consumes it.
     // currentPrice(), graduationProgressBps() and isSymbolAvailable() were removed
     // 2026-09-18: each was a pure derivation of fields already readable off curves()
     // (virtualQuoteReserves/virtualTokenReserves for price; realQuoteReserves,

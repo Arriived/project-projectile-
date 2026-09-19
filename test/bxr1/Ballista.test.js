@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset, setGraduationThreshold, getBXR1Factory } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, setGraduationThreshold, setInitialVirtualReserve, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE_USDC = 1_000_000n;
 
@@ -103,6 +103,16 @@ describe('Ballista — changes since the original build', function () {
 
       await expect(
         ballista.connect(creator).createToken('Stale Threshold Coin', 'STH', 'ipfs://a', await usdc.getAddress(), staleHash),
+      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
+    });
+
+    it('reverts if the opening virtual reserve changes underneath a pinned hash', async function () {
+      const { ballista, creator, usdc, registry } = await deployFixture();
+      const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
+      await setInitialVirtualReserve(registry, await usdc.getAddress(), 5_334_000_000n);
+
+      await expect(
+        ballista.connect(creator).createToken('Stale Reserve Coin', 'STR', 'ipfs://a', await usdc.getAddress(), staleHash),
       ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
     });
 
