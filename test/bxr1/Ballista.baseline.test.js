@@ -229,6 +229,43 @@ describe("Ballista — the original pre-rename suite", function () {
       await factory.connect(owner).unpause();
       await expect(factory.connect(bob).buy(tokenAddr, USDC(100), 0)).to.not.be.reverted;
     });
+
+    // graduate() carries no whenNotPaused, deliberately (CLAUDE.md section 1.5 /
+    // R7: graduate() is nonReentrant only, so pausing can never be used to censor a
+    // token's route to the DEX while we custody its USDC). Reuses the exact
+    // "router that burns all gas -> graduation fails, trade survives, retryable"
+    // path from Exploit.adversarial.test.js: GasGuzzlerRouter's addLiquidity call
+    // runs out of gas and REVERTS (no transfers happen, nothing is pulled out of
+    // the factory), which _performGraduation's try/catch parks at GRADUATION_READY
+    // with reserves fully intact -- unlike MockBrokenRouter's zero-liquidity path,
+    // which pulls the funds via safeTransferFrom before reporting failure and so
+    // cannot be genuinely retried afterward with a working router.
+    it("graduate() works while the factory is paused", async function () {
+      const { factory, owner, alice, bob, router, usdc } = await deployFixture();
+      const guz = await (await ethers.getContractFactory("GasGuzzlerRouter")).deploy();
+      await activateRouter(factory.connect(owner), await guz.getAddress());
+      await createToken(factory, usdc, alice, "First", "CAT");
+      const tokenAddr = await getLastToken(factory, alice);
+
+      // Generous gas so the OUTER call survives while the inner router call starves.
+      await factory.connect(bob).buy(tokenAddr, USDC(9_000), 0, { gasLimit: 16_000_000 });
+      expect((await factory.curves(tokenAddr)).state).to.equal(GRADUATION_READY);
+      expect((await factory.curves(tokenAddr)).realQuoteReserves).to.be.greaterThan(0n);
+
+      await factory.connect(owner).pause();
+
+      // Swapping to a working router is itself unguarded by pause (proposeRouter /
+      // activateRouter carry no whenNotPaused either), and is what a real recovery
+      // from a stuck router would do.
+      await activateRouter(factory.connect(owner), await router.getAddress());
+
+      const receipt = await (await factory.graduate(tokenAddr)).wait();
+      const graduated = receipt.logs
+        .map((l) => { try { return factory.interface.parseLog(l); } catch { return null; } })
+        .find((l) => l && l.name === "Graduated");
+      expect(graduated, "Graduated event must be emitted").to.not.be.undefined;
+      expect((await factory.curves(tokenAddr)).state).to.equal(GRADUATED);
+    });
   });
 
   describe("graduation", function () {
