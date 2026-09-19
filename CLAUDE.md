@@ -7885,18 +7885,73 @@ new check at all.
 
 ### Verification
 
+⚠ **CORRECTED 2026-09-19.** This table originally described the "before" `test/bxr1`
+figure as "205 passing / 1 failing (pre-fix, the two updated tests still asserting old
+behavior)". **That was never measured — no pre-fix full-suite run was performed before
+this section was first written**, and the sentence was a plausible-sounding
+reconstruction, not a paste of real output. Re-measured properly in a scratch worktree
+(`676fc02`, the commit immediately before this fix, with `CrossCurveDrain.test.js` and
+`QuoteOnlyDrainRouter.sol` copied in — `node_modules` symlinked from the main repo,
+never reinstalled):
+
+```
+205 passing (35s)
+1 failing
+
+1) BXR1 — cross-curve drain via a quote-only-draining router
+     a quote-only drain on curve A lets graduate(A) siphon curve B's separate, untouched funds:
+
+    AssertionError: immediately after the drain, before graduate(A): BXR1's quote balance must cover every curve's recorded reserves plus accrued fees: expected 8081119742 to be at least 16111974221.
+```
+
+The single failure is the regression test itself, with the identical numbers the "The
+finding" section above already quotes — none of the other 205 tests are affected, which
+is consistent with the fix touching only the zero-liquidity branch inside
+`_performGraduation`. Running `CrossCurveDrain.test.js` alone against that same commit
+reproduces the identical assertion.
+
 | | before | after |
 |---|---|---|
 | BXR1 deployed bytes | 19,569 | **20,058** (+489) |
-| `test/bxr1/*.test.js` | 205 passing / 1 failing (pre-fix, the two updated tests still asserting old behavior) | **206 passing, 0 failing** |
+| `test/bxr1/*.test.js` | **205 passing, 1 failing** (measured, scratch worktree at `676fc02` plus the new test file) | **206 passing, 0 failing** |
 | LFX1 control (`test/*.test.js`) | — | **303 passing + 48 pending, 0 failing**, unchanged |
 | `git diff --stat -- contracts/LFX1.sol contracts/LFX1Token.sol` | — | empty |
 
 `scripts/deploy-bxr1.js:119`'s `registry.registerAsset(...)` call was also missing the
-9th argument (`creationFee`), added when `creationFee` moved into `AssetRegistry` in an
-earlier turn (section 25.6) — this was a stale caller, not a new finding, flagged in the
-same audit. Fixed alongside: a `BXR1_FIRST_ASSET_CREATION_FEE` env-overridable constant
-(default `500000`, matching the historic 0.5-USDC-equivalent figure), passed as the 9th
-argument and logged in the deploy summary. Run end-to-end against the local Hardhat
-network (`BXR1_FIRST_ASSET=0x...dEaD npx hardhat run scripts/deploy-bxr1.js --network
-hardhat`) to confirm it deploys cleanly with the corrected call, not merely compiles.
+9th argument (`creationFee`), added when `creationFee` moved into `AssetRegistry` in
+commit `34b2203` (see section 26.7) — this was a stale caller, not a new finding, flagged
+in the same audit. Fixed alongside: a `BXR1_FIRST_ASSET_CREATION_FEE` env-overridable
+constant (default `500000`, matching the historic 0.5-USDC-equivalent figure), passed as
+the 9th argument and logged in the deploy summary. Run end-to-end against the local
+Hardhat network (`BXR1_FIRST_ASSET=0x...dEaD npx hardhat run scripts/deploy-bxr1.js
+--network hardhat`) to confirm it deploys cleanly with the corrected call, not merely
+compiles.
+
+## 26.7 The four commits between the trim and the drain fix — sizes measured fresh
+
+⚠ **APPENDED, NOT A REWRITE.** Four commits landed between the section 26 trim and the
+cross-curve drain fix (section 26.6), found via `git log --oneline` rather than recalled.
+Each was checked out into its own moment in a scratch worktree (`node_modules` symlinked
+in from the main repo, never reinstalled) and compiled fresh; every size below is read
+directly from that compile's own artifact, not carried over from any earlier measurement
+in this file or from chat.
+
+| commit | what, and why | BXR1 deployed bytes |
+|---|---|---|
+| `4b97fe9` "test: graduate() must work while paused" | Closed a real gap the `02e0d1a` audit found: no test in `test/bxr1/` exercised `graduate()` while the factory is paused, and the full suite stayed green even with `whenNotPaused` added to `graduate()` as a mutation. Test-only, no contract change. | 19,484 |
+| `9ce7375` "pin initialVirtualReserve in the economics hash" | `currentEconomicsHash` hashed the registry's `defaultGraduationThreshold` but not `initialVirtualReserve`, even though `_buildCurve` snapshots both from the same `AssetRegistry.getAsset()` call — an owner could move the opening reserve underneath a pinned creator between their reading the hash and their `createToken` landing. | 19,503 |
+| `34b2203` "creation fee per asset" | `createToken` charges the creation fee in the curve's own `quoteAsset`, not USDC (`IERC20(quoteAsset).safeTransferFrom(...)`), so a single BXR1-wide `creationFee` was only ever correctly calibrated for whichever one asset it was chosen against. Moved into `AssetRegistry.AssetConfig`, per asset. | 19,557 |
+| `676fc02` "pin creationFee in the economics hash" | The same pinning gap `9ce7375` closed for `initialVirtualReserve`, now for the field `34b2203` had just moved into the registry: `creationFee` was readable from the same `getAsset()` call but still absent from the hash. | 19,569 |
+
+Real command output for each, `node -e` reading `deployedBytecode.length` off the
+freshly compiled artifact at that commit:
+
+```
+4b97fe9 BXR1 deployed bytes: 19484
+9ce7375 BXR1 deployed bytes: 19503
+34b2203 BXR1 deployed bytes: 19557
+676fc02 BXR1 deployed bytes: 19569
+```
+
+The last of these, `676fc02`, is the exact "before" figure section 26.6's table cites
+(19,569); its "after" figure (20,058) is the cross-curve drain fix on top of it.
