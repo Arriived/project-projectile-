@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset, setGraduationThreshold, setInitialVirtualReserve, getBXR1Factory } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, setGraduationThreshold, setInitialVirtualReserve, setCreationFee, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE_USDC = 1_000_000n;
 
@@ -124,9 +124,9 @@ describe('Ballista — changes since the original build', function () {
     });
 
     it('does NOT pin creationFee -- that gates eligibility to launch, not token economics', async function () {
-      const { ballista, creator, usdc } = await deployFixture();
+      const { ballista, creator, usdc, registry } = await deployFixture();
       const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
-      await ballista.setCreationFee(50n * ONE_USDC);
+      await setCreationFee(registry, await usdc.getAddress(), 50n * ONE_USDC);
 
       // creationFee is not part of the pinned hash, so this should still
       // succeed on the stale hash -- confirms the pin is scoped to what was

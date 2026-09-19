@@ -54,6 +54,19 @@ contract AssetRegistry is Ownable {
         // that same degenerate-but-not-blocked behaviour, matching initialVirtualReserve
         // in every way except this one check.
         uint256 defaultGraduationThreshold;
+        // The creation fee, in THIS ASSET'S OWN NATIVE DECIMALS -- moved here from a
+        // single BXR1-wide uint256 (5e5, i.e. 0.5 USDC at 6dp) for the same reason
+        // initialVirtualReserve and defaultGraduationThreshold already live here: BXR1
+        // charges createToken's creation fee in the curve's own quoteAsset
+        // (BXR1.sol's createToken, IERC20(quoteAsset).safeTransferFrom(...)), so a
+        // single global raw-unit default is calibrated for whichever asset it was
+        // chosen against and wrong by orders of magnitude for any other decimals --
+        // 5e5 raw units of an 18-decimal asset is economically negligible.
+        // Deliberately NOT in BXR1.currentEconomicsHash(): see the existing test
+        // "does NOT pin creationFee -- that gates eligibility to launch, not token
+        // economics" in Ballista.test.js, an existing decision this change does not
+        // revisit.
+        uint256 creationFee;
     }
 
     mapping(address => AssetConfig) private _assets;
@@ -65,7 +78,8 @@ contract AssetRegistry is Ownable {
         bool transferRestricted,
         bool transferFee,
         uint256 initialVirtualReserve,
-        uint256 defaultGraduationThreshold
+        uint256 defaultGraduationThreshold,
+        uint256 creationFee
     );
     event AssetEnabledSet(address indexed asset, bool enabled);
 
@@ -87,7 +101,8 @@ contract AssetRegistry is Ownable {
         bool transferRestricted,
         bool transferFee,
         uint256 initialVirtualReserve,
-        uint256 defaultGraduationThreshold
+        uint256 defaultGraduationThreshold,
+        uint256 creationFee
     ) external onlyOwner {
         if (asset == address(0)) revert ZeroAddress();
         if (decimals == 0) revert ZeroDecimals();
@@ -101,10 +116,11 @@ contract AssetRegistry is Ownable {
             transferRestricted: transferRestricted,
             transferFee: transferFee,
             initialVirtualReserve: initialVirtualReserve,
-            defaultGraduationThreshold: defaultGraduationThreshold
+            defaultGraduationThreshold: defaultGraduationThreshold,
+            creationFee: creationFee
         });
 
-        emit AssetRegistered(asset, decimals, rebasing, transferRestricted, transferFee, initialVirtualReserve, defaultGraduationThreshold);
+        emit AssetRegistered(asset, decimals, rebasing, transferRestricted, transferFee, initialVirtualReserve, defaultGraduationThreshold, creationFee);
         emit AssetEnabledSet(asset, enabled);
     }
 

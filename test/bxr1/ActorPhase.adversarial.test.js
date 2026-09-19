@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { time } = require('@nomicfoundation/hardhat-network-helpers');
-const { deployRegistryWithAsset, setGraduationThreshold, getBXR1Factory } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, setGraduationThreshold, setCreationFee, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE = 1_000_000n;
 const DAY = 24 * 3600;
@@ -131,17 +131,22 @@ describe('Ballista — actor/phase pass: compromised owner', function () {
   });
 
   // FINDING R13. creationFee is absent from currentEconomicsHash(), so the one fee
-  // the creator pays directly is the one the pinning does not cover.
+  // the creator pays directly is the one the pinning does not cover. creationFee
+  // moved from a BXR1-wide state var into AssetRegistry.AssetConfig (per-asset,
+  // since BXR1 charges it in the curve's own quoteAsset), with no BXR1-side
+  // setter any more -- setCreationFee(registry, asset, x) re-registers the asset,
+  // mirroring setGraduationThreshold/setInitialVirtualReserve. The finding itself
+  // is unchanged: still not hashed, deliberately (see BXR1.sol's own comment).
   it('creationFee is NOT pinned by the economics hash -- it can change under a pinned launch', async function () {
-    const { ballista, creator, usdc, treasury } = await deploy();
+    const { ballista, creator, usdc, treasury, registry } = await deploy();
     const usdcAddress = await usdc.getAddress();
 
     // What the creator sees, and signs up to.
     const hash = await ballista.currentEconomicsHash(usdcAddress);
-    expect(await ballista.creationFee()).to.equal(5n * 10n ** 5n); // 0.5 USDC
+    expect((await registry.getAsset(usdcAddress)).creationFee).to.equal(5n * 10n ** 5n); // 0.5 USDC
 
     // Owner raises it 1000x between quote and execution.
-    await ballista.setCreationFee(500n * ONE);
+    await setCreationFee(registry, usdcAddress, 500n * ONE);
 
     // The hash the creator pinned is UNCHANGED, so the guard cannot fire.
     expect(await ballista.currentEconomicsHash(usdcAddress)).to.equal(hash);

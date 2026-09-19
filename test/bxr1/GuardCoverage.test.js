@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { ethers } = require('hardhat');
 const { activateRouter } = require('../routerHelper');
-const { deployRegistryWithAsset, setGraduationThreshold, getBXR1Factory } = require('./assetRegistryHelper');
+const { deployRegistryWithAsset, setGraduationThreshold, setCreationFee, getBXR1Factory } = require('./assetRegistryHelper');
 
 const ONE = 1_000_000n;
 
@@ -78,26 +78,28 @@ describe('BXR1 — guards the coverage sweep found untested', function () {
   // unmonitorable admin actions. Old AND new values, so a watcher sees the delta.
   describe('admin changes are observable', function () {
     // launchCooldown and the symbol lock (and their setters/events) were removed
-    // 2026-09-18 -- see CLAUDE.md section 26. Only the two remaining economics
-    // setters are asserted here now.
+    // 2026-09-18 -- see CLAUDE.md section 26. creationFee moved to
+    // AssetRegistry.AssetConfig in the same session (per-asset, since BXR1 charges
+    // it in the curve's own quoteAsset) and lost its BXR1-side setter/event along
+    // with it -- see the registry-side tests below. setDefaultFees is the one
+    // remaining BXR1-side economics setter with an old/new delta event.
     it('every economics setter emits old and new values', async function () {
       const { ballista } = await env();
 
-      await expect(ballista.setCreationFee(7_000_000n))
-        .to.emit(ballista, 'CreationFeeSet').withArgs(500_000n, 7_000_000n);
       await expect(ballista.setDefaultFees(250, 300))
         .to.emit(ballista, 'DefaultFeesSet').withArgs(100n, 250n, 100n, 300n);
     });
 
     // setDefaultGraduationThreshold no longer exists on BXR1 -- the threshold moved to
-    // AssetRegistry.AssetConfig, and (like initialVirtualReserve) has no setter of its
-    // own, only re-registration via registerAsset. That is a DIFFERENT observability
-    // shape than the five setters above, not a smaller one: registerAsset always emits
-    // AssetRegistered with the FULL new config, on every call, whether or not the
-    // threshold specifically changed -- there is no old-vs-new delta to assert on a
-    // single field, because re-registration does not distinguish "changed" fields from
-    // unchanged ones. What still holds is Slither's actual finding: no economics change
-    // is silent. This asserts that property on the new path.
+    // AssetRegistry.AssetConfig, and (like initialVirtualReserve and, as of this
+    // session, creationFee) has no setter of its own, only re-registration via
+    // registerAsset. That is a DIFFERENT observability shape than the setters above,
+    // not a smaller one: registerAsset always emits AssetRegistered with the FULL new
+    // config, on every call, whether or not the threshold specifically changed --
+    // there is no old-vs-new delta to assert on a single field, because
+    // re-registration does not distinguish "changed" fields from unchanged ones. What
+    // still holds is Slither's actual finding: no economics change is silent. This
+    // asserts that property on the new path.
     it('re-registering an asset to change its graduation threshold is still observable', async function () {
       const { usdc, registry } = await env();
       const cfg = await registry.getAsset(await usdc.getAddress());
@@ -105,16 +107,28 @@ describe('BXR1 — guards the coverage sweep found untested', function () {
         .to.emit(registry, 'AssetRegistered')
         .withArgs(
           await usdc.getAddress(), cfg.decimals, cfg.rebasing, cfg.transferRestricted,
-          cfg.transferFee, cfg.initialVirtualReserve, 9_000_000_000n
+          cfg.transferFee, cfg.initialVirtualReserve, 9_000_000_000n, cfg.creationFee
+        );
+    });
+
+    // The same observability property, on the field this session moved: creationFee.
+    it('re-registering an asset to change its creation fee is still observable', async function () {
+      const { usdc, registry } = await env();
+      const cfg = await registry.getAsset(await usdc.getAddress());
+      await expect(setCreationFee(registry, await usdc.getAddress(), 7_000_000n))
+        .to.emit(registry, 'AssetRegistered')
+        .withArgs(
+          await usdc.getAddress(), cfg.decimals, cfg.rebasing, cfg.transferRestricted,
+          cfg.transferFee, cfg.initialVirtualReserve, cfg.defaultGraduationThreshold, 7_000_000n
         );
     });
 
     it('the emitted OLD value is the pre-change value, not the new one', async function () {
       const { ballista } = await env();
       // Emitting (new, new) would satisfy a test that only checked the event fired.
-      await ballista.setCreationFee(1_000_000n);
-      await expect(ballista.setCreationFee(2_000_000n))
-        .to.emit(ballista, 'CreationFeeSet').withArgs(1_000_000n, 2_000_000n);
+      await ballista.setDefaultFees(150, 150);
+      await expect(ballista.setDefaultFees(250, 250))
+        .to.emit(ballista, 'DefaultFeesSet').withArgs(150n, 250n, 150n, 250n);
     });
   });
 

@@ -71,7 +71,10 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
 
     uint16 public defaultSnipeTaxTreasuryBps = 7000;
 
-    uint256 public creationFee = 5e5;
+    // creationFee moved into AssetRegistry.AssetConfig -- BXR1 charges it in the
+    // curve's own quoteAsset, so a single global raw-unit default was calibrated
+    // for whichever asset it was chosen against and wrong by orders of magnitude
+    // for any other decimals. See AssetRegistry.sol's own comment.
     address public treasury;
 
     // launchCooldown, symbolLockDuration/symbolUnlocksAt and caseSensitiveSymbols were
@@ -150,7 +153,6 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
     event CreatorFeesClaimed(address indexed creator, uint256 amount);
     event TreasuryFeesClaimed(address indexed treasury, uint256 amount);
     event LpRecipientSet(address indexed oldRecipient, address indexed newRecipient);
-    event CreationFeeSet(uint256 oldValue, uint256 newValue);
     event DefaultFeesSet(uint16 oldBuyFeeBps, uint16 newBuyFeeBps, uint16 oldSellFeeBps, uint16 newSellFeeBps);
     event DefaultCreatorFeesSet(uint16 creatorBuyFeeBps, uint16 creatorSellFeeBps);
     event SnipeTaxTablePublished(uint32 indexed version, uint16[] table, uint16 maxBps);
@@ -300,9 +302,15 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         // registry read for the one field it actually needs, in its own stack frame.
         _requireAssetUsable(quoteAsset);
 
-        if (creationFee > 0) {
-            IERC20(quoteAsset).safeTransferFrom(msg.sender, address(this), creationFee);
-            treasuryFeesAccrued[quoteAsset] += creationFee;
+        // The creation fee is per-asset (AssetRegistry.AssetConfig.creationFee), in
+        // that asset's own native units -- read via its own helper, in its own
+        // stack frame, for the same stack-too-deep reason _requireAssetUsable and
+        // _buildCurve are each separate functions rather than one that returns
+        // everything createToken needs.
+        uint256 fee = _creationFeeOf(quoteAsset);
+        if (fee > 0) {
+            IERC20(quoteAsset).safeTransferFrom(msg.sender, address(this), fee);
+            treasuryFeesAccrued[quoteAsset] += fee;
         }
 
         BXR1Token newToken = new BXR1Token(
@@ -328,6 +336,14 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         if (cfg.rebasing || cfg.transferRestricted || cfg.transferFee) {
             revert AssetMisbehaves(quoteAsset, cfg.rebasing, cfg.transferRestricted, cfg.transferFee);
         }
+    }
+
+    // Reads just the one field this call site needs, in its own stack frame --
+    // same reasoning as _requireAssetUsable above. Deliberately NOT hashed by
+    // currentEconomicsHash (creationFee gates eligibility to launch, not token
+    // economics -- see the existing "does NOT pin creationFee" test).
+    function _creationFeeOf(address quoteAsset) internal view returns (uint256) {
+        return assetRegistry.getAsset(quoteAsset).creationFee;
     }
 
     // Everything the new Curve needs that ISN'T one of createToken's own parameters.
@@ -684,11 +700,9 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         emit DefaultCreatorFeesSet(creatorBuyFeeBps_, creatorSellFeeBps_);
     }
 
-    function setCreationFee(uint256 creationFee_) external onlyOwner {
-        emit CreationFeeSet(creationFee, creationFee_);
-        creationFee = creationFee_;
-    }
-
+    // setCreationFee removed. Matches initialVirtualReserve and
+    // defaultGraduationThreshold exactly: no BXR1-side setter, updated only by
+    // calling AssetRegistry.registerAsset(...) again for that asset.
     function setLpRecipient(address lpRecipient_) external onlyOwner {
         if (!(lpRecipient_ != address(0) && lpRecipient_ != address(this))) revert ZeroAddress();
         emit LpRecipientSet(lpRecipient, lpRecipient_);

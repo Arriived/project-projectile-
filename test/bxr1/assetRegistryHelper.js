@@ -28,7 +28,10 @@ async function deployRegistryWithAsset(asset, overrides = {}) {
     overrides.transferRestricted ?? false,
     overrides.transferFee ?? false,
     overrides.initialVirtualReserve ?? 2_667_000_000n,
-    overrides.defaultGraduationThreshold ?? 8_000_000_000n
+    overrides.defaultGraduationThreshold ?? 8_000_000_000n,
+    // 5e5 -- EXACTLY BXR1's former GLOBAL creationFee default (0.5 USDC at 6dp),
+    // now per-asset. Matches every existing test's expectation of that figure.
+    overrides.creationFee ?? 500_000n
   );
   return registry;
 }
@@ -59,7 +62,8 @@ async function setGraduationThreshold(registry, asset, newThreshold) {
     current.transferRestricted,
     current.transferFee,
     current.initialVirtualReserve,
-    newThreshold
+    newThreshold,
+    current.creationFee
   );
 }
 
@@ -76,7 +80,27 @@ async function setInitialVirtualReserve(registry, asset, newInitialVirtualReserv
     current.transferRestricted,
     current.transferFee,
     newInitialVirtualReserve,
-    current.defaultGraduationThreshold
+    current.defaultGraduationThreshold,
+    current.creationFee
+  );
+}
+
+/// The mirror again, for creationFee itself -- the test-suite equivalent of the
+/// old `ballista.setCreationFee(x)`, removed from BXR1 along with the rest of
+/// the global state var now that the fee is per-asset with no BXR1-side setter,
+/// only re-registration.
+async function setCreationFee(registry, asset, newCreationFee) {
+  const current = await registry.getAsset(asset);
+  return registry.registerAsset(
+    asset,
+    current.decimals,
+    current.enabled,
+    current.rebasing,
+    current.transferRestricted,
+    current.transferFee,
+    current.initialVirtualReserve,
+    current.defaultGraduationThreshold,
+    newCreationFee
   );
 }
 
@@ -107,6 +131,7 @@ module.exports = {
   deployRegistryWithAsset,
   setGraduationThreshold,
   setInitialVirtualReserve,
+  setCreationFee,
   getBXR1Factory,
   USDC_EQUIVALENT_INITIAL_VIRTUAL_RESERVE: 2_667_000_000n,
   USDC_EQUIVALENT_DEFAULT_GRADUATION_THRESHOLD: 8_000_000_000n,
