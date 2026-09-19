@@ -7790,8 +7790,9 @@ was in the mock, not the test.
 because that figure removed the snipe tax too (candidate (b), 2,577 of its own measured
 bytes) and this trim explicitly keeps it. **5,092 bytes of headroom is still comfortably
 more than `docs/BYTE_BUDGET_REPORT.md`'s measured 441-byte cost for LaunchType**, before
-the vault binding or fee split are even drafted — see §26.6's fresh LaunchType measurement
-against this trimmed baseline for a real number rather than the carried-forward one.
+the vault binding or fee split are even drafted — see
+`docs/SNIPE_TAX_SPLIT_AND_LAUNCHTYPE_REPORT.md` for a fresh LaunchType measurement against
+this trimmed baseline rather than the carried-forward one.
 
 ## 26.5 The two report-only measurements
 
