@@ -48,6 +48,23 @@ const FIRST_ASSET_CREATION_FEE = BigInt(
   process.env.BXR1_FIRST_ASSET_CREATION_FEE ?? "500000"
 );
 
+// ⚠ initialRouter_ IS BEHIND A DELIBERATE FLAG, same discipline as
+// scripts/deploy-v4-stack.js's --bootstrap-router: unset by default, and BXR1 deploys
+// with router == address(0) (createToken() gated behind proposeRouter -> 24h ->
+// activateRouter) unless this is explicitly set. Setting it SPENDS the constructor's
+// one untimelocked router activation (BXR1.sol:193-198) -- the router goes live at
+// block zero, with no public RouterProposed event and no 24h window for anyone to
+// notice or object.
+//
+// ⚠ HARD-GATED AGAINST ARC MAINNET (chainId 5042), checked in main() before any
+// transaction. Bootstrapping is a testnet-convenience shortcut around the very
+// protection (§1.5's 24h timelock, watched via RouterProposed) that exists specifically
+// to catch a malicious or wrong router before it can touch real funds. On mainnet that
+// protection must never be skipped, so this refuses outright rather than warning --
+// see CLAUDE.md's BXR1 testnet deployment section for the reasoning and
+// test/DeployBxr1Guards.test.js for the guard proof.
+const BOOTSTRAP_ROUTER = process.env.BXR1_BOOTSTRAP_ROUTER;
+
 const receipts = [];
 
 async function record(label, txPromise) {
@@ -78,6 +95,22 @@ async function main() {
       "any asset that is not registered and enabled -- set the quote asset to register " +
       "first (e.g. Arc USDC 0x3600000000000000000000000000000000000000 on testnet)."
     );
+  }
+
+  // HARD STOP, before any transaction: BXR1_BOOTSTRAP_ROUTER must never reach Arc
+  // mainnet (chainId 5042). This is deliberately unconditional on network NAME --
+  // it checks what the provider itself reports, not hre.network.name, so a
+  // misconfigured --network flag pointing arcTestnet's name at a mainnet RPC (or any
+  // other mismatch) is still caught.
+  if (BOOTSTRAP_ROUTER && net.chainId === 5042n) {
+    throw new Error(
+      "BXR1_BOOTSTRAP_ROUTER is set and this network's chainId is 5042 (Arc MAINNET). " +
+      "Refusing to bootstrap a live, untimelocked router on mainnet -- this is a hard " +
+      "stop, not a warning. Unset BXR1_BOOTSTRAP_ROUTER, or deploy to arcTestnet."
+    );
+  }
+  if (BOOTSTRAP_ROUTER && !ethers.isAddress(BOOTSTRAP_ROUTER)) {
+    throw new Error("BXR1_BOOTSTRAP_ROUTER is set but is not a valid address.");
   }
 
   console.log(`network    ${hre.network.name} (chainId ${net.chainId})`);
@@ -150,17 +183,24 @@ async function main() {
   if (bxr1Address) {
     console.log(`  reusing existing BXR1 ${bxr1Address} (BXR1_ADDRESS was set)`);
   } else {
-    // The router is NEVER auto-bootstrapped by this script. Passing a live router
-    // here would skip this factory's one untimelocked router activation for free;
-    // that bypass is available (BXR1's constructor accepts it) but this script
-    // never exercises it, matching the "untimelocked path is never a default"
-    // discipline scripts/deploy-v4-stack.js already applies to LFX1's v4 stack --
-    // proposeRouter() / activateRouter() after the 24h timelock is the only path
-    // this script leaves open.
+    // The router is NEVER auto-bootstrapped by DEFAULT. Passing a live router here
+    // skips this factory's one untimelocked router activation for free -- that bypass
+    // is available (BXR1's constructor accepts it) and is now reachable ONLY via the
+    // explicit BXR1_BOOTSTRAP_ROUTER env var, hard-refused above on Arc mainnet.
+    // Unset, this matches the "untimelocked path is never a default" discipline
+    // scripts/deploy-v4-stack.js already applies to LFX1's v4 stack -- proposeRouter()
+    // / activateRouter() after the 24h timelock is the only path left open.
+    const initialRouter = BOOTSTRAP_ROUTER || ethers.ZeroAddress;
+    if (BOOTSTRAP_ROUTER) {
+      console.log(`  ⚠ BXR1_BOOTSTRAP_ROUTER set -- SPENDS THE CONSTRUCTOR'S ONE`);
+      console.log(`    UNTIMELOCKED ROUTER ACTIVATION. router will be LIVE AT BLOCK`);
+      console.log(`    ZERO, no proposeRouter, no 24h wait, no public window to notice`);
+      console.log(`    or object: ${BOOTSTRAP_ROUTER}`);
+    }
     const BXR1 = await ethers.getContractFactory("BXR1", {
       libraries: { CurveMath: curveMathAddress },
     });
-    const bxr1 = await BXR1.deploy(registryAddress, treasury, ethers.ZeroAddress);
+    const bxr1 = await BXR1.deploy(registryAddress, treasury, initialRouter);
     const r = await record("BXR1 deploy", Promise.resolve(bxr1.deploymentTransaction()));
     await bxr1.waitForDeployment();
     bxr1Address = await bxr1.getAddress();
@@ -170,10 +210,14 @@ async function main() {
   // ── 4. Post-deploy state ─────────────────────────────────────────────
   console.log(`\n================================================================\n  DEPLOYED STATE\n================================================================`);
   const bxr1 = await ethers.getContractAt("BXR1", bxr1Address);
+  const liveRouter = await bxr1.router();
   console.log(`  assetRegistry   ${await bxr1.assetRegistry()}`);
   console.log(`  treasury        ${await bxr1.treasury()}`);
   console.log(`  owner           ${await bxr1.owner()}`);
-  console.log(`  router          ${await bxr1.router()}  (address(0) until proposeRouter/activateRouter)`);
+  console.log(`  router          ${liveRouter}` +
+    (liveRouter === ethers.ZeroAddress
+      ? `  (address(0) until proposeRouter/activateRouter)`
+      : `  (BOOTSTRAPPED -- live at block zero, no timelock)`));
 
   if (ethers.getAddress(await bxr1.assetRegistry()) !== ethers.getAddress(registryAddress)) {
     throw new Error("deployed BXR1's assetRegistry does not match the registry this script deployed");
@@ -187,9 +231,14 @@ async function main() {
   console.log(`  cannot resolve the link):`);
   console.log(`    npx hardhat verify --contract contracts/bxr1/CurveMath.sol:CurveMath --network ${hre.network.name} ${curveMathAddress}`);
   console.log(`    npx hardhat verify --contract contracts/bxr1/AssetRegistry.sol:AssetRegistry --network ${hre.network.name} ${registryAddress}`);
-  console.log(`    npx hardhat verify --contract contracts/bxr1/BXR1.sol:BXR1 --network ${hre.network.name} --libraries '{"CurveMath":"${curveMathAddress}"}' ${bxr1Address} ${registryAddress} ${treasury} ${ethers.ZeroAddress}`);
-  console.log(`\n  router() is address(0). Nothing can createToken() until proposeRouter()`);
-  console.log(`  + a 24h wait + activateRouter() -- there is no bootstrap path in this script.`);
+  console.log(`    npx hardhat verify --contract contracts/bxr1/BXR1.sol:BXR1 --network ${hre.network.name} --libraries '{"CurveMath":"${curveMathAddress}"}' ${bxr1Address} ${registryAddress} ${treasury} ${liveRouter}`);
+  if (liveRouter === ethers.ZeroAddress) {
+    console.log(`\n  router() is address(0). Nothing can createToken() until proposeRouter()`);
+    console.log(`  + a 24h wait + activateRouter().`);
+  } else {
+    console.log(`\n  ⚠ router() is LIVE (${liveRouter}), bootstrapped via BXR1_BOOTSTRAP_ROUTER --`);
+    console.log(`  no timelock was observed. createToken() works immediately.`);
+  }
 }
 
 main().catch((err) => {
