@@ -279,6 +279,16 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
             cfg.defaultGraduationThreshold,
             cfg.initialVirtualReserve,
             cfg.creationFee,
+            // The RAW registry figures, not launchTerms()'s converted reading -- for
+            // a LEVERAGED asset these are the USD-at-6dp values, which change only
+            // when the registry entry is re-registered, never when the LT's NAV
+            // moves. Hashing the converted amounts would make the pin worthless: they
+            // change every block a keeper posts a new rate, so no creator's hash
+            // could ever stay valid long enough to submit a transaction against it.
+            // cfg.kind is included so flipping STANDARD<->LEVERAGED on an asset also
+            // invalidates a pin -- the conversion path itself is part of the terms a
+            // creator is agreeing to, not just the numbers.
+            cfg.kind,
             defaultCreatorBuyFeeBps,
             defaultCreatorSellFeeBps,
             lpRecipient,
@@ -344,12 +354,13 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         }
     }
 
-    // Reads just the one field this call site needs, in its own stack frame --
-    // same reasoning as _requireAssetUsable above. Deliberately NOT hashed by
-    // currentEconomicsHash (creationFee gates eligibility to launch, not token
-    // economics -- see the existing "does NOT pin creationFee" test).
-    function _creationFeeOf(address quoteAsset) internal view returns (uint256) {
-        return assetRegistry.getAsset(quoteAsset).creationFee;
+    // Reads just the one field this call site needs, in its own stack frame -- same
+    // reasoning as _requireAssetUsable above. Via launchTerms(), not getAsset(), so a
+    // LEVERAGED asset's USD-denominated creationFee is converted to the asset's own
+    // native units at the moment of this call -- the registry figure itself is what
+    // currentEconomicsHash pins (see its own comment), not this converted reading.
+    function _creationFeeOf(address quoteAsset) internal view returns (uint256 fee) {
+        (, , fee) = assetRegistry.launchTerms(quoteAsset);
     }
 
     // Everything the new Curve needs that ISN'T one of createToken's own parameters.
@@ -371,17 +382,21 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         c.quoteAsset = quoteAsset;
         c.creator = msg.sender;
         c.virtualTokenReserves = INITIAL_VIRTUAL_TOKEN_RESERVES;
-        // In quoteAsset's own native decimals -- see AssetRegistry.AssetConfig. One
-        // registry read covers both fields that live there, rather than two.
-        AssetRegistry.AssetConfig memory quoteCfg = assetRegistry.getAsset(quoteAsset);
-        c.virtualQuoteReserves = quoteCfg.initialVirtualReserve;
+        // In quoteAsset's own NATIVE units -- via launchTerms(), not getAsset(). One
+        // registry read covers both fields this function needs. For a LEVERAGED
+        // asset this is where the USD-denominated registry figures get converted,
+        // ONCE, using the LT's exchangeRate() as it stands at this exact block --
+        // never re-read for this curve again (CLAUDE.md section 27).
+        (uint256 initialVirtualReserveNative, uint256 graduationThresholdNative, ) =
+            assetRegistry.launchTerms(quoteAsset);
+        c.virtualQuoteReserves = initialVirtualReserveNative;
         c.tokenReserves = CURVE_TOKEN_SUPPLY;
         c.state = CurveState.ACTIVE;
         c.buyFeeBps = defaultBuyFeeBps;
         c.sellFeeBps = defaultSellFeeBps;
         c.creatorBuyFeeBps = defaultCreatorBuyFeeBps;
         c.creatorSellFeeBps = defaultCreatorSellFeeBps;
-        c.graduationThreshold = quoteCfg.defaultGraduationThreshold;
+        c.graduationThreshold = graduationThresholdNative;
         c.creationBlock = block.number;
         c.creationTimestamp = block.timestamp;
         c.snipeTaxTableVersion = activeSnipeTaxTableVersion;

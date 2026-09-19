@@ -1,5 +1,10 @@
 const { ethers } = require('hardhat');
 
+// Mirrors AssetRegistry.AssetKind. Solidity enums cross the ABI boundary as plain
+// uint8s, so these are just the two values ethers hands back / accepts -- not a real
+// enum, and there is nothing to keep "in sync" beyond the two integers themselves.
+const ASSET_KIND = { STANDARD: 0, LEVERAGED: 1 };
+
 /// Deploys an AssetRegistry and registers `asset` with USDC-equivalent defaults: 6
 /// decimals, enabled, none of the three misbehaviour flags set,
 /// initialVirtualReserve = 2_667e6 -- EXACTLY BXR1's historic
@@ -31,7 +36,11 @@ async function deployRegistryWithAsset(asset, overrides = {}) {
     overrides.defaultGraduationThreshold ?? 8_000_000_000n,
     // 5e5 -- EXACTLY BXR1's former GLOBAL creationFee default (0.5 USDC at 6dp),
     // now per-asset. Matches every existing test's expectation of that figure.
-    overrides.creationFee ?? 500_000n
+    overrides.creationFee ?? 500_000n,
+    // AssetRegistry.AssetKind.STANDARD by default -- see CLAUDE.md section 27 and
+    // test/bxr1/LeveragedLaunch.test.js for LEVERAGED registrations, which pass
+    // overrides.kind explicitly.
+    overrides.kind ?? ASSET_KIND.STANDARD
   );
   return registry;
 }
@@ -63,7 +72,8 @@ async function setGraduationThreshold(registry, asset, newThreshold) {
     current.transferFee,
     current.initialVirtualReserve,
     newThreshold,
-    current.creationFee
+    current.creationFee,
+    current.kind
   );
 }
 
@@ -81,7 +91,8 @@ async function setInitialVirtualReserve(registry, asset, newInitialVirtualReserv
     current.transferFee,
     newInitialVirtualReserve,
     current.defaultGraduationThreshold,
-    current.creationFee
+    current.creationFee,
+    current.kind
   );
 }
 
@@ -100,7 +111,28 @@ async function setCreationFee(registry, asset, newCreationFee) {
     current.transferFee,
     current.initialVirtualReserve,
     current.defaultGraduationThreshold,
-    newCreationFee
+    newCreationFee,
+    current.kind
+  );
+}
+
+/// The mirror again, for kind itself -- e.g. flipping a registered asset from
+/// STANDARD to LEVERAGED or back. Same re-registration shape. The caller is
+/// responsible for the new kind's own invariant (a LEVERAGED asset's exchangeRate()
+/// must not revert or answer 0), exactly as registerAsset itself enforces.
+async function setAssetKind(registry, asset, newKind) {
+  const current = await registry.getAsset(asset);
+  return registry.registerAsset(
+    asset,
+    current.decimals,
+    current.enabled,
+    current.rebasing,
+    current.transferRestricted,
+    current.transferFee,
+    current.initialVirtualReserve,
+    current.defaultGraduationThreshold,
+    current.creationFee,
+    newKind
   );
 }
 
@@ -132,7 +164,9 @@ module.exports = {
   setGraduationThreshold,
   setInitialVirtualReserve,
   setCreationFee,
+  setAssetKind,
   getBXR1Factory,
+  ASSET_KIND,
   USDC_EQUIVALENT_INITIAL_VIRTUAL_RESERVE: 2_667_000_000n,
   USDC_EQUIVALENT_DEFAULT_GRADUATION_THRESHOLD: 8_000_000_000n,
 };

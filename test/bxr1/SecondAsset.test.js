@@ -34,7 +34,8 @@ describe('BXR1 — a second registered asset with different decimals', function 
       await usdc.getAddress(), 6, true, false, false, false,
       2_667_000_000n,  // 2,667 USDC
       8_000_000_000n,  // 8,000 USDC
-      500_000n         // 0.5 USDC creation fee
+      500_000n,        // 0.5 USDC creation fee
+      0                // AssetRegistry.AssetKind.STANDARD
     );
     // DAI: the SAME real-world opening price (2,667 whole units of a ~$1 stablecoin) AND
     // the SAME real-world graduation threshold (8,000 whole units), both expressed in
@@ -47,9 +48,10 @@ describe('BXR1 — a second registered asset with different decimals', function 
     // the "graduates" test below used to have to work around.
     await registry.registerAsset(
       await dai.getAddress(), 18, true, false, false, false,
-      2_667n * 10n ** 18n,  // 2,667 DAI
-      8_000n * 10n ** 18n,  // 8,000 DAI
-      500_000n * 10n ** 12n // 0.5 DAI creation fee, same real-world value as USDC's
+      2_667n * 10n ** 18n,   // 2,667 DAI
+      8_000n * 10n ** 18n,   // 8,000 DAI
+      500_000n * 10n ** 12n, // 0.5 DAI creation fee, same real-world value as USDC's
+      0                      // AssetRegistry.AssetKind.STANDARD
     );
 
     const ballista = await (await getBXR1Factory())
@@ -263,7 +265,7 @@ describe('BXR1 — a second registered asset with different decimals', function 
     const fee = await (await ethers.getContractFactory('MockFeeOnTransferUSDC')).deploy();
     await registry.registerAsset(
       await fee.getAddress(), 6, true, /* rebasing */ false, /* transferRestricted */ false,
-      /* transferFee */ true, 2_667_000_000n, 8_000_000_000n, 500_000n
+      /* transferFee */ true, 2_667_000_000n, 8_000_000_000n, 500_000n, 0
     );
     const hash = await ballista.currentEconomicsHash(await fee.getAddress());
     await expect(

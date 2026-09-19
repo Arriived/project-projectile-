@@ -132,7 +132,10 @@ async function main() {
         false, // transferFee
         FIRST_ASSET_INITIAL_VIRTUAL_RESERVE,
         FIRST_ASSET_DEFAULT_GRADUATION_THRESHOLD,
-        FIRST_ASSET_CREATION_FEE
+        FIRST_ASSET_CREATION_FEE,
+        0 // AssetRegistry.AssetKind.STANDARD -- this script always bootstraps a
+          // plain quote asset (Arc USDC on testnet); a LEVERAGED asset is a
+          // separate, deliberate registerAsset() call, not this one.
       )
     );
     console.log(`  registered ${FIRST_ASSET} as the first quote asset`);

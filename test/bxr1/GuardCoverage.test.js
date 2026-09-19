@@ -107,7 +107,7 @@ describe('BXR1 — guards the coverage sweep found untested', function () {
         .to.emit(registry, 'AssetRegistered')
         .withArgs(
           await usdc.getAddress(), cfg.decimals, cfg.rebasing, cfg.transferRestricted,
-          cfg.transferFee, cfg.initialVirtualReserve, 9_000_000_000n, cfg.creationFee
+          cfg.transferFee, cfg.initialVirtualReserve, 9_000_000_000n, cfg.creationFee, cfg.kind
         );
     });
 
@@ -119,7 +119,7 @@ describe('BXR1 — guards the coverage sweep found untested', function () {
         .to.emit(registry, 'AssetRegistered')
         .withArgs(
           await usdc.getAddress(), cfg.decimals, cfg.rebasing, cfg.transferRestricted,
-          cfg.transferFee, cfg.initialVirtualReserve, cfg.defaultGraduationThreshold, 7_000_000n
+          cfg.transferFee, cfg.initialVirtualReserve, cfg.defaultGraduationThreshold, 7_000_000n, cfg.kind
         );
     });
 
