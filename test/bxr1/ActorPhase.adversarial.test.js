@@ -130,15 +130,16 @@ describe('Ballista — actor/phase pass: compromised owner', function () {
     await expect(ballista.activateRouter(a)).to.be.revertedWithCustomError(ballista, 'RouterNotProposed');
   });
 
-  // FINDING R13. creationFee is absent from currentEconomicsHash(), so the one fee
-  // the creator pays directly is the one the pinning does not cover. creationFee
-  // moved from a BXR1-wide state var into AssetRegistry.AssetConfig (per-asset,
-  // since BXR1 charges it in the curve's own quoteAsset), with no BXR1-side
-  // setter any more -- setCreationFee(registry, asset, x) re-registers the asset,
-  // mirroring setGraduationThreshold/setInitialVirtualReserve. The finding itself
-  // is unchanged: still not hashed, deliberately (see BXR1.sol's own comment).
-  it('creationFee is NOT pinned by the economics hash -- it can change under a pinned launch', async function () {
-    const { ballista, creator, usdc, treasury, registry } = await deploy();
+  // FORMERLY FINDING R13: creationFee was absent from currentEconomicsHash(), so
+  // the one fee the creator pays directly was the one the pinning did not cover.
+  // CLOSED: creationFee is now hashed, read from the same AssetRegistry.getAsset
+  // call as initialVirtualReserve/defaultGraduationThreshold. creationFee moved
+  // from a BXR1-wide state var into AssetRegistry.AssetConfig (per-asset, since
+  // BXR1 charges it in the curve's own quoteAsset), with no BXR1-side setter any
+  // more -- setCreationFee(registry, asset, x) re-registers the asset, mirroring
+  // setGraduationThreshold/setInitialVirtualReserve.
+  it('creationFee IS pinned by the economics hash -- a raise underneath a pinned launch reverts', async function () {
+    const { ballista, creator, usdc, registry } = await deploy();
     const usdcAddress = await usdc.getAddress();
 
     // What the creator sees, and signs up to.
@@ -148,15 +149,12 @@ describe('Ballista — actor/phase pass: compromised owner', function () {
     // Owner raises it 1000x between quote and execution.
     await setCreationFee(registry, usdcAddress, 500n * ONE);
 
-    // The hash the creator pinned is UNCHANGED, so the guard cannot fire.
-    expect(await ballista.currentEconomicsHash(usdcAddress)).to.equal(hash);
+    // The hash the creator pinned is now STALE, so the guard fires.
+    expect(await ballista.currentEconomicsHash(usdcAddress)).to.not.equal(hash);
 
-    const before = await usdc.balanceOf(creator.address);
-    await ballista.connect(creator).createToken('Pinned', 'PIN', '', usdcAddress, hash);
-    const paid = before - (await usdc.balanceOf(creator.address));
-
-    expect(paid, 'creator paid the NEW fee despite pinning the OLD terms').to.equal(500n * ONE);
-    expect(await ballista.treasuryFeesAccrued(usdcAddress)).to.equal(500n * ONE);
+    await expect(
+      ballista.connect(creator).createToken('Pinned', 'PIN', '', usdcAddress, hash)
+    ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
   });
 
   // Bounds the finding: every OTHER economic term the creator is exposed to IS pinned.

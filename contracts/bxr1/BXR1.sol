@@ -258,14 +258,19 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
         emit DefaultSnipeTaxTreasuryBpsSet(treasuryBps_);
     }
 
-    // Asset-scoped: defaultGraduationThreshold and initialVirtualReserve are no
-    // longer single BXR1-wide values, so the hash a creator pins against has to be
-    // computed for the SPECIFIC asset they intend to quote in -- one external view
-    // call (assetRegistry.getAsset), read once here for both fields _buildCurve
-    // also snapshots from the same call. initialVirtualReserve was previously
-    // snapshotted but NOT hashed: an owner could re-register the asset with a
-    // different opening reserve between a creator fetching the hash and their
-    // createToken landing, and the pin would not catch it. Now it does.
+    // Asset-scoped: defaultGraduationThreshold, initialVirtualReserve and
+    // creationFee are no longer single BXR1-wide values, so the hash a creator
+    // pins against has to be computed for the SPECIFIC asset they intend to
+    // quote in -- one external view call (assetRegistry.getAsset), read once
+    // here for all three fields _buildCurve/_creationFeeOf also read from the
+    // same registry entry. creationFee is now pinned: previously an owner could
+    // raise it (AssetRegistry.registerAsset, no timelock) between a creator
+    // fetching the hash and their createToken landing, and the pin would not
+    // catch it -- exactly R13's shape, closed the same way
+    // initialVirtualReserve already was. This REVERSES the earlier deliberate
+    // decision to keep creationFee out of the hash (see the two tests this
+    // change flips, formerly named "does NOT pin creationFee" /
+    // "creationFee is NOT pinned").
     function currentEconomicsHash(address quoteAsset) public view returns (bytes32) {
         AssetRegistry.AssetConfig memory cfg = assetRegistry.getAsset(quoteAsset);
         return keccak256(abi.encode(
@@ -273,6 +278,7 @@ contract BXR1 is Ownable, ReentrancyGuard, Pausable {
             defaultSellFeeBps,
             cfg.defaultGraduationThreshold,
             cfg.initialVirtualReserve,
+            cfg.creationFee,
             defaultCreatorBuyFeeBps,
             defaultCreatorSellFeeBps,
             lpRecipient,

@@ -123,18 +123,18 @@ describe('Ballista — changes since the original build', function () {
       await expect(create(ballista, usdc, creator, 'Reconfirmed Coin', 'RCC', 'ipfs://a')).to.not.be.reverted;
     });
 
-    it('does NOT pin creationFee -- that gates eligibility to launch, not token economics', async function () {
+    it('DOES pin creationFee -- a raise underneath a pinned hash reverts', async function () {
       const { ballista, creator, usdc, registry } = await deployFixture();
       const staleHash = await ballista.currentEconomicsHash(await usdc.getAddress());
       await setCreationFee(registry, await usdc.getAddress(), 50n * ONE_USDC);
 
-      // creationFee is not part of the pinned hash, so this should still
-      // succeed on the stale hash -- confirms the pin is scoped to what was
-      // actually documented (fees, threshold, snipe tax table/split), not
-      // everything adjustable in the contract.
+      // creationFee is now part of the pinned hash (closed alongside
+      // initialVirtualReserve, same reasoning), so the stale hash no longer
+      // matches and the guard fires -- the same shape as the threshold and
+      // reserve tests above.
       await expect(
         ballista.connect(creator).createToken('Unpinned Coin', 'UPC', 'ipfs://a', await usdc.getAddress(), staleHash),
-      ).to.not.be.reverted;
+      ).to.be.revertedWithCustomError(ballista, 'EconomicsChanged');
     });
   });
 
