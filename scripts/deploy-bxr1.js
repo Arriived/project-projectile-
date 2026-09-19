@@ -41,6 +41,12 @@ const FIRST_ASSET_INITIAL_VIRTUAL_RESERVE = BigInt(
 const FIRST_ASSET_DEFAULT_GRADUATION_THRESHOLD = BigInt(
   process.env.BXR1_FIRST_ASSET_DEFAULT_GRADUATION_THRESHOLD ?? "8000000000"
 );
+// creationFee moved into AssetConfig too, per asset, with no BXR1-side setter any
+// more -- see AssetRegistry.sol and CLAUDE.md section 25.3/25.6. Default here matches
+// the historic BXR1-wide value (0.5 USDC-equivalent raw units).
+const FIRST_ASSET_CREATION_FEE = BigInt(
+  process.env.BXR1_FIRST_ASSET_CREATION_FEE ?? "500000"
+);
 
 const receipts = [];
 
@@ -79,7 +85,8 @@ async function main() {
   console.log(`treasury   ${treasury}`);
   console.log(`firstAsset ${FIRST_ASSET} (${FIRST_ASSET_DECIMALS}dp, ` +
     `initialVirtualReserve=${FIRST_ASSET_INITIAL_VIRTUAL_RESERVE}, ` +
-    `defaultGraduationThreshold=${FIRST_ASSET_DEFAULT_GRADUATION_THRESHOLD})`);
+    `defaultGraduationThreshold=${FIRST_ASSET_DEFAULT_GRADUATION_THRESHOLD}, ` +
+    `creationFee=${FIRST_ASSET_CREATION_FEE})`);
 
   // ── 1. CurveMath ─────────────────────────────────────────────────────
   console.log(`\n================================================================\n  STEP 1 -- CurveMath (external library)\n================================================================`);
@@ -124,7 +131,8 @@ async function main() {
         false, // transferRestricted
         false, // transferFee
         FIRST_ASSET_INITIAL_VIRTUAL_RESERVE,
-        FIRST_ASSET_DEFAULT_GRADUATION_THRESHOLD
+        FIRST_ASSET_DEFAULT_GRADUATION_THRESHOLD,
+        FIRST_ASSET_CREATION_FEE
       )
     );
     console.log(`  registered ${FIRST_ASSET} as the first quote asset`);
