@@ -8362,3 +8362,55 @@ before/after via `git stash push -- contracts/bxr1/BXR1.sol`:
 |---|---|---|
 | BXR1 deployed bytes | 20,159 | **20,228** (+69) |
 | BXR1 headroom against 24,576 | 4,417 | **4,348** |
+
+## 29.3 AssetRegistry rejects a decimals mismatch
+
+`registerAsset`'s `decimals` parameter was caller-typed with nothing checking it against
+the asset's own `decimals()` — every downstream figure (`launchTerms()`'s conversion
+scale, every USDC-equivalent test fixture assuming 6dp) is computed from this parameter,
+never from a live read, so a mistyped value would silently misprice every curve quoted in
+that asset. Added `IERC20Metadata` import and, at the top of `registerAsset`, immediately
+after the existing zero-checks:
+
+```solidity
+uint8 actualDecimals = IERC20Metadata(asset).decimals();
+if (decimals != actualDecimals) revert DecimalsMismatch(asset, decimals, actualDecimals);
+```
+
+`decimals` itself is unchanged — no arity change, per instruction; the check reads the
+asset a second way rather than replacing the parameter.
+
+**New test**, `test/bxr1/AssetRegistryValidation.test.js`, "registering MockUSDC with 18
+reverts; with 6 succeeds": confirms `MockUSDC.decimals() == 6` first (so the test means
+what it claims), then asserts `registerAsset(..., 18, ...)` reverts
+`DecimalsMismatch(usdcAddress, 18, 6)` and `registerAsset(..., 6, ...)` succeeds.
+
+**Mutation proof.** Removed the two added lines entirely:
+
+```
+1) registering MockUSDC with 18 reverts; with 6 succeeds:
+   AssertionError: Expected transaction to be reverted with custom error 'DecimalsMismatch', but it didn't revert
+0 passing, 1 failing
+```
+
+Reverted; `git diff -- contracts/bxr1/AssetRegistry.sol` afterward showed exactly the
+import, the error declaration, and the two-line check — nothing else.
+
+**Sizes**, same method, before/after via `git stash push -- contracts/bxr1/AssetRegistry.sol`:
+
+| | before | after |
+|---|---|---|
+| AssetRegistry deployed bytes | 3,510 | **3,724** (+214) |
+
+## 29.4 Verification
+
+`test/bxr1/*.test.js`: **220 passing, 0 failing** (218 before this session's two new
+tests). LFX1 control (`test/*.test.js`): **303 passing + 48 pending, 0 failing**,
+`git diff --stat -- contracts/LFX1.sol contracts/LFX1Token.sol` empty throughout both
+changes. Final combined sizes, both changes applied together:
+
+| | value |
+|---|---|
+| BXR1 deployed bytes | **20,228** |
+| BXR1 headroom against 24,576 | **4,348** |
+| AssetRegistry deployed bytes | **3,724** |

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "./interfaces/ILeveragedToken.sol";
 
 // Approved quote assets for BXR1, keyed by address. Adding an asset is a registry write,
@@ -106,6 +107,15 @@ contract AssetRegistry is Ownable {
     // A reverting exchangeRate() call needs no error of its own -- it is never caught,
     // so its own revert reason propagates unchanged.
     error ZeroExchangeRate(address asset);
+    // `decimals` is a caller-typed number, not read from the asset itself elsewhere in
+    // this file -- every downstream figure (initialVirtualReserve, launchTerms()'s
+    // conversion scale) is computed FROM this parameter, never from a live decimals()
+    // read, so a mistyped value here would silently misprice every curve against this
+    // asset rather than reverting anywhere near the mistake. Checked once, at
+    // registration, against the asset's own IERC20Metadata.decimals() -- which cannot
+    // be re-registered out from under a live curve the way this parameter's caller-typed
+    // value could be.
+    error DecimalsMismatch(address asset, uint8 given, uint8 actual);
 
     constructor() Ownable(msg.sender) {}
 
@@ -135,6 +145,8 @@ contract AssetRegistry is Ownable {
         if (asset == address(0)) revert ZeroAddress();
         if (decimals == 0) revert ZeroDecimals();
         if (initialVirtualReserve == 0) revert ZeroInitialVirtualReserve();
+        uint8 actualDecimals = IERC20Metadata(asset).decimals();
+        if (decimals != actualDecimals) revert DecimalsMismatch(asset, decimals, actualDecimals);
         if (kind == AssetKind.LEVERAGED) {
             if (ILeveragedToken(asset).exchangeRate() == 0) revert ZeroExchangeRate(asset);
         }
