@@ -7955,3 +7955,100 @@ freshly compiled artifact at that commit:
 
 The last of these, `676fc02`, is the exact "before" figure section 26.6's table cites
 (19,569); its "after" figure (20,058) is the cross-curve drain fix on top of it.
+
+---
+
+# 27. SESSION OF 19 SEPTEMBER 2026 — LEVERAGED launches, registry side: the design decisions
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§26. Nothing above this line was
+deleted. This section records the decisions **before** the build that implements them,
+per instruction; the implementation itself, its numbers and its mutation proofs are
+recorded in the commit that follows this one, not here.
+
+## 27.1 Launch type is decided by the quote asset, not a createToken parameter
+
+**`AssetRegistry` gets `kind` (`STANDARD` | `LEVERAGED`), on the `AssetConfig` entry
+itself.** A curve's launch type is therefore whatever its `quoteAsset` already is — never
+a separate argument `createToken` accepts.
+
+⚠ **This SUPERSEDES the measured LaunchType build in `docs/SNIPE_TAX_SPLIT_AND_LAUNCHTYPE_REPORT.md`**
+(the report `ceb926b` committed), which added `LaunchType` as its own `createToken`
+parameter, independent of the quote asset. That shape allows a genuine contradiction — a
+`STANDARD` curve quoted in a leveraged token, or a `LEVERAGED` curve quoted in plain USDC
+— because the parameter and the asset each carry their own, potentially disagreeing,
+answer to "what kind of launch is this." Deciding it from the asset alone removes the
+contradiction structurally: there is only ever one source of truth, and it is the same
+one `_buildCurve` already reads for every other per-asset figure.
+
+## 27.2 LEVERAGED registry values are USD at 6dp, converted to LT units once, at createToken
+
+`initialVirtualReserve`, `defaultGraduationThreshold` and `creationFee` on a `LEVERAGED`
+entry are stored in **USD at 6 decimals — the same raw numbers a USDC entry would
+carry**, not the LT's own native units. `AssetRegistry.launchTerms()` converts them to the
+LT's native units using a **live** read of the LT's own `exchangeRate()`, and BXR1 calls
+`launchTerms()` exactly **once** per curve, at `createToken` — never again afterward.
+
+**Why fixed-at-launch, not live-forever:** a vault-backed leveraged token's NAV
+(`exchangeRate()`) is expected to be **keeper-posted**, not derived on-chain from a live
+market. If graduation depended on a live conversion instead of a fixed one, whoever
+controls the keeper could move the NAV to trigger — or block — a graduation at will, on
+every LEVERAGED curve, at any time. Fixing the curve's amounts in the LT's own raw units
+at the moment of creation removes that lever entirely: after launch, graduation happens
+**only** through trades crossing the curve's own fixed threshold, exactly like a
+`STANDARD` curve, and a later NAV move can do nothing to it.
+
+## 27.3 The economics hash pins the USD figures and `kind`, never the converted LT amounts
+
+`currentEconomicsHash` keeps reading the registry's raw `AssetConfig` (via `getAsset`,
+unchanged) and hashes the USD-denominated figures directly, plus the new `kind` field. It
+never hashes `launchTerms()`'s converted output.
+
+**This is not an oversight — hashing the converted amounts would make the pin
+worthless.** The converted amount changes every time the LT's `exchangeRate()` changes,
+which a keeper can do as often as it likes; no creator's pinned hash could then survive
+long enough to land in a block. Pinning the USD figures instead gives a LEVERAGED
+creator exactly the same guarantee a `STANDARD` creator already has: the **terms** cannot
+move underneath them between reading the hash and their transaction landing, even though
+the **converted amount** those terms produce is, by design, a function of the exchange
+rate at the moment of execution rather than the moment of quoting.
+
+`kind` is hashed alongside the USD figures for the same reason: flipping an asset between
+`STANDARD` and `LEVERAGED` changes which of those two readings its stored numbers mean,
+so it is as much a part of the terms a creator is agreeing to as the numbers themselves.
+
+## 27.4 Sells and fees on a LEVERAGED curve settle in the LT — current behaviour, unchanged
+
+`sell()` already pays out whatever `c.quoteAsset` is; if that asset is a LEVERAGED
+token, sell() pays LT, with **no special-casing added or needed** — this is the same
+genericity property `SecondAsset.test.js` already proved for a plain second stablecoin.
+Buy-side and sell-side fees accrue the same way, in the LT, via the existing
+`creatorFeesAccrued[creator][asset]` / `treasuryFeesAccrued[asset]` mappings.
+
+**USDC conversion is explicitly out of scope here and belongs in a future router.** A
+seller receiving LT rather than USDC, and a creator holding LT fee accrual rather than
+USDC, are both real, disclosed exposures under this design, not defects to close now:
+
+- **A router, not this registry change, is where LT-to-USDC conversion belongs**, with an
+  LT fallback path for whenever the vault's redemption idle is too thin to fill a
+  request immediately. Building that router is explicitly out of scope for this change
+  (see the instruction: "do NOT build the router or the vault").
+- **Creators carry LT exposure until they claim, and the frontend claims-then-redeems on
+  their behalf.** This must be disclosed to creators launching against a LEVERAGED
+  asset: their accrued fees are not USD-stable while unclaimed, and claiming does not by
+  itself convert them to USDC — a further redemption step against the vault does that,
+  which the frontend is expected to chain automatically but which this contract change
+  does not perform.
+
+## 27.5 Working rule: one hardhat process at a time
+
+**A contended concurrent `npx hardhat test` run in a recent session (the "23 minutes, 1
+failing" result investigated and corrected in section 26.6's cleanup) appears to have
+exercised pre-fix build artifacts while a second process was mid-recompile, and reported
+the result as if it were a genuine failure of current code.** Three clean, sequential
+re-runs afterward all came back green with no such failure, which is the actual evidence
+this was resource contention rather than a real defect.
+
+**Standing rule from here on: never run more than one `hardhat` process against this
+repo at the same time.** Compiling and testing share the same `artifacts/` and `cache/`
+directories, and a second process reading them mid-write is exactly the kind of failure
+that looks like a real bug, costs real time to chase, and is not one.
