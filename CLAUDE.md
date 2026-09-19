@@ -8108,3 +8108,170 @@ where it must produce `2160270019442430176948`). 10 passing, 2 failing.
 All three reproduce the identical failure signatures (same test names, same numbers)
 recorded when these mutations were first proved in the implementation session, confirming
 the proofs are stable and not an artifact of how or when they were run.
+
+---
+
+# 28. SESSION OF 19 SEPTEMBER 2026 — frontend/indexer decimal survey: still LFX1-only
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§27. Nothing above this line was
+deleted. **Report-only. No contract, `app/`, or `indexer/` file was changed.**
+
+## 28.1 Which contract do `app/` and `indexer/` read: LFX1, BXR1, or both?
+
+**LFX1 only, both sides. Zero references to BXR1 anywhere in either tree** — confirmed
+by grepping `app/src`, `app/api`, `app/scripts` and all of `indexer/` case-insensitively
+for `bxr1`/`BXR1`: no matches in any of them.
+
+**`app/`:**
+- Every ABI import is `lfx1Abi` / `lfx1TokenAbi` from `app/src/abi/lfx1.ts` /
+  `lfx1Token.ts` — eight import sites: `app/src/hooks/useBalances.ts:14`,
+  `app/src/hooks/useCurve.ts:11-12`, `app/src/routes/Create.tsx:35`,
+  `app/src/routes/TokenList.tsx:17`, `app/src/hooks/useQuote.ts:21`,
+  `app/src/components/token/TradePanel.tsx:17-18`.
+- The address is hardcoded and typed as LFX1 at `app/src/config.ts:11`:
+  `` export const FACTORY_ADDRESS: Address = "0xEDeed1F05D34421Add0F59b7340588ab2BbaC04b" ``,
+  with the line comment `/** LFX1 factory. Frozen, verified, 24,033 bytes. ... */`. The
+  same address is read at every call site that builds a `{ address: FACTORY_ADDRESS, abi:
+  lfx1Abi }` contract object (e.g. `app/src/routes/Create.tsx:93`,
+  `app/src/hooks/useCurve.ts:119`, `app/src/hooks/useQuote.ts:127`).
+- `app/src/config.ts:17` hardcodes `USDC_ADDRESS` (`0x3600...0000`) as a second, separate
+  constant — not read from any curve or registry, because LFX1 has exactly one quote
+  asset and the frontend already knows its address.
+
+**`indexer/`:**
+- `indexer/src/index.js:6`: `` const factoryAbi = require("./generated/lfx1Abi.json"); ``
+  — the only ABI the indexer loads. Two more callers of the same generated file:
+  `indexer/scripts/backfill-block-time.js:28`, `indexer/scripts/verify-trade-reserves.js:366`.
+- The address is `FACTORY_ADDRESS`, read from the environment (destructured at
+  `indexer/src/index.js:53`, validated at `:62`), instantiated at
+  `indexer/src/index.js:249`: `` const factory = new ethers.Contract(FACTORY_ADDRESS,
+  factoryAbi, provider); `` and used again for the log subscription at `:602`. Nothing in
+  the repo pins this env var's value, but `indexer/RUNBOOK.md` and CLAUDE.md's own
+  session log (§12.1, §23) describe it as the same LFX1 factory address as `app/`.
+
+## 28.2 Every 6-decimal-quote-asset assumption found
+
+**Confirmed both cited sites are exactly where the earlier survey (CLAUDE.md §25.7)
+said, by content — line numbers had drifted by one to three lines from later edits:**
+
+| site | now at | what it does |
+|---|---|---|
+| `app/src/routes/TokenPage.tsx:68-71` | `10 ** (LAUNCH_TOKEN_DECIMALS - USDC_ERC20_DECIMALS)` | scales the curve's raw reserve ratio into a USDC-per-token price |
+| `app/src/hooks/useCurve.ts:164-166`, `marketCapUsdc6` | `(curve.virtualUsdcReserves * totalSupply) / curve.virtualTokenReserves` | the function's own name embeds "6dp" — no explicit `1e12` literal here because the 18dp/18dp terms cancel, leaving the result implicitly in the 6dp scale of `virtualUsdcReserves` |
+| `indexer/migrations/003_list_page_columns.sql:214` | `... / 1000000.0` in the `market_cap_usdc` column | unchanged from the earlier survey |
+
+**Beyond those three, the assumption is pervasive, not incidental** — this is a
+comprehensively USDC-shaped codebase, not one with three isolated spots:
+
+- **`app/src/chain.ts:134`**: `export const USDC_ERC20_DECIMALS = 6;` — the single
+  hardcoded root every other site below imports from. **`app/src/chain.ts:144`**:
+  `export const LAUNCH_TOKEN_DECIMALS = 18;`, the launched token's own constant (this one
+  is correct regardless of quote asset — `BXR1Token` is always 18dp — and would not need
+  to change under a BXR1 port).
+- **Every formatting helper takes the 6dp assumption as given**, all importing
+  `USDC_ERC20_DECIMALS`: `app/src/i18n/format.ts:32,75,118` and `app/src/lib/format.ts:12,16,22`.
+- **`app/src/components/token/TradePanel.tsx:109`**:
+  `` parseUnits(input.trim(), side === "buy" ? USDC_ERC20_DECIMALS : LAUNCH_TOKEN_DECIMALS) ``
+  — the buy-side input box is parsed at a hardcoded 6dp.
+- **`app/src/lib/launchBuy.ts:89`**: `` BigInt(Math.round(n * 1_000_000)) `` — a literal
+  6dp scale-up with no named constant at all.
+- **`app/src/lib/quotes.ts:147-148`**: `1_000_000n` used as the probe-quote scale factor
+  for price-impact math (CLAUDE.md §1.3's `tokens-per-USDC` formula) — correct only
+  because the probe is denominated in the 6dp quote asset.
+- **UI labels hardcode the string `"USDC"` directly, never a symbol read from anywhere**:
+  `app/src/components/create/PreviewCard.tsx:61,67`,
+  `app/src/components/token/PriceAndProgress.tsx:56,63,67`,
+  `app/src/components/token/TradePanel.tsx:571,621,639`, `app/src/routes/Create.tsx:450`.
+  No literal `"$"` string exists anywhere in `app/src` — every currency label is the
+  literal word `"USDC"`.
+- **The indexer's `/1000000.0` pattern is not confined to line 214** — it recurs at
+  `indexer/migrations/000_base_schema.sql:155`,
+  `indexer/migrations/003_list_page_columns.sql:264,267,270,271`,
+  `indexer/migrations/004_trade_reserves_and_ohlc.sql:125`,
+  `indexer/migrations/006_candle_open_from_previous.sql:74`,
+  `indexer/migrations/008_one_second_candles.sql:24`, and mirrored again throughout
+  the generated `indexer/migrations/APPLY-ALL.sql`. The underlying column itself is
+  named `usdc_amount` (`indexer/migrations/000_base_schema.sql:65`), populated at
+  `indexer/src/index.js:499` directly from `log.args.usdcAmount` — LFX1's `Trade` event
+  names the field `usdcAmount` because LFX1 itself is USDC-only.
+- **No hit for**: `1e6` as a bare grep (only inside `1_000_000`-shaped literals above and
+  one unrelated `format.ts:40` compact-notation threshold, `if (n >= 1e6)`, which formats
+  any large number and is not quote-asset-specific), `power(10, ...)`, `USDC_DECIMALS`
+  (the actual constant is named `USDC_ERC20_DECIMALS`, already listed above), or any
+  `parseUnits(..., 6)` / `formatUnits(..., 6)` literal — every site routes through the
+  named `USDC_ERC20_DECIMALS` constant rather than a bare `6`, which is better style but
+  the same hardcoded assumption at its single point of definition.
+- **No notion of `quoteAsset`, `quoteDecimals` or `assetDecimals` exists anywhere in
+  `app/src`** — grepped, zero hits. The frontend has no per-token decimals concept to
+  even be wrong about; it is uniformly USDC-shaped by construction.
+
+## 28.3 How the indexer learns a token's quote asset: it cannot
+
+**Confirmed structurally, not just "doesn't currently" — there is no field to read.**
+LFX1's `TokenCreated` event carries exactly `(token, creator, name, symbol,
+metadataURI)` — read directly from the generated ABI
+(`indexer/src/generated/lfx1Abi.json`), no quote-asset argument at all. The indexer does
+call `curves(token)` — `indexer/src/index.js:334` (unpinned, current state) and `:410`
+(`readCurveAtBlock`, block-pinned) — but **LFX1's own `Curve` struct has no `quoteAsset`
+field either**: its members are `token, creator, virtualTokenReserves,
+virtualUsdcReserves, realUsdcReserves, tokenReserves, state, buyFeeBps, sellFeeBps,
+creatorBuyFeeBps, creatorSellFeeBps, graduationThresholdUsdc, creationBlock,
+creationTimestamp, snipeTaxTableVersion, snipeTaxTreasuryBps, maxCreatorLaunchBps,
+creatorLaunchWindow, lpRecipient, poolBoostEnabled, poolBoost, creatorLaunchPurchased` —
+every reserve field is named `*Usdc*`, because LFX1 has exactly one quote asset (the
+`usdc` immutable) and never needed a field to identify it.
+
+**This is not a gap in the indexer's logic; it is architecturally correct for the
+contract it reads.** A BXR1 port would need to add a source for this — BXR1's own
+`curves()` does carry `quoteAsset` (`contracts/bxr1/BXR1.sol`'s `Curve.quoteAsset`), so
+the field exists on the contract this survey was asked to check for, just not on the one
+`indexer/` actually points at today.
+
+## 28.4 Has any migration been applied to a real database?
+
+**Cannot be independently verified from this session, and the investigation was
+deliberately scoped to deploy config / CI / docs, not a live query** — per the task's own
+instruction, and consistent with this project's standing rule that a live database is
+effectful state a report-only survey should not touch.
+
+What the repo itself shows:
+- **No CI workflow exists at all** — `find .github -iname "*.yml" -o -iname "*.yaml"`
+  returned nothing. Nothing in this repo applies a migration automatically.
+- **`indexer/RUNBOOK.md:1-40`** describes a **manual** process — paste
+  `migrations/APPLY-ALL.sql` into the Supabase SQL Editor, verify with
+  `VERIFY-SCHEMA.sql`, then verify anon access with
+  `indexer/scripts/verify-anon-access.js` expecting **12/12**. This is instructions for
+  a human to run, not evidence the steps were executed.
+- **`indexer/fly.toml`** names a real, specific Fly app (`app = "ballista-indexer"`),
+  which is at minimum evidence a deployment target exists, not evidence a migration ran
+  against it.
+- **A local `indexer/.env` file is present on this machine** (dated 29 August 2026, not
+  read — it is gitignored and may hold live credentials), which is circumstantial
+  evidence someone ran the indexer against a real project at some point, but proves
+  nothing about which migrations that project currently has applied.
+- **CLAUDE.md's own earlier session log (§12.1, §23.4, §23.6-23.9)** describes migrations
+  000-008 as applied, `ballista-indexer.fly.dev/health` returning HTTP 200, and specific
+  Fly release deploys with real transaction hashes and gas figures. **This file's own
+  standing rule (see "HOW TO READ THIS FILE") is that it is a starting point to verify,
+  not ground truth**, and this session had no live Supabase or Fly credentials available
+  to re-confirm any of it. Recorded as reported-but-unverified, not as fact.
+
+## 28.5 Stop condition met — no Part B
+
+**Both `app/` and `indexer/` read only LFX1 (§28.1).** Per the task's explicit
+instruction, this means the 6-decimal assumption documented throughout §28.2 is
+**currently correct** — LFX1 is genuinely USDC-only, so hardcoding 6dp everywhere it
+touches a quote-asset amount is not a bug in the code that exists today. **The fix
+belongs in a BXR1 port of `app/`/`indexer/`, which has not been started and is a
+separate job.** No conversion helper, no migration, no test, and no `app/`/`indexer/`
+file was written for this task — the survey is the deliverable.
+
+⚠ **The task's final instruction specified an exact commit message,
+`"frontend/indexer: quote-asset decimals instead of 6dp"`, written assuming Part B would
+ship.** Using that message on a commit that contains only this survey section would
+misrepresent what the commit does, in a repository whose entire discipline (§5's
+mutation-proof rules, the running "no number goes into a file before its command has
+returned" rule, and multiple sections above scarred by exactly this class of mistake)
+is built around never letting a record claim more than what was actually done. The
+commit that carries this section uses a message describing what it actually contains
+instead.
