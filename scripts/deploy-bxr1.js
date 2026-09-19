@@ -97,16 +97,24 @@ async function main() {
     );
   }
 
-  // HARD STOP, before any transaction: BXR1_BOOTSTRAP_ROUTER must never reach Arc
-  // mainnet (chainId 5042). This is deliberately unconditional on network NAME --
-  // it checks what the provider itself reports, not hre.network.name, so a
-  // misconfigured --network flag pointing arcTestnet's name at a mainnet RPC (or any
-  // other mismatch) is still caught.
-  if (BOOTSTRAP_ROUTER && net.chainId === 5042n) {
+  // HARD STOP, before any transaction: BXR1_BOOTSTRAP_ROUTER is ALLOWLISTED, not
+  // merely denylisted against mainnet -- it is permitted ONLY on Arc testnet
+  // (5042002) or the local Hardhat network (31337, e.g. for this script's own guard
+  // tests), and refused on every other chainId, Arc mainnet (5042) included. An
+  // allowlist fails closed against any chain nobody thought to name here; a
+  // denylist of "just 5042" fails open against every OTHER chain the bootstrap
+  // path was never meant to reach. This is deliberately unconditional on network
+  // NAME -- it checks what the provider itself reports, not hre.network.name, so a
+  // misconfigured --network flag pointing a testnet-named network at some other
+  // chain's RPC (mainnet included) is still caught.
+  const BOOTSTRAP_ALLOWED_CHAIN_IDS = [5042002n, 31337n];
+  if (BOOTSTRAP_ROUTER && !BOOTSTRAP_ALLOWED_CHAIN_IDS.includes(net.chainId)) {
     throw new Error(
-      "BXR1_BOOTSTRAP_ROUTER is set and this network's chainId is 5042 (Arc MAINNET). " +
-      "Refusing to bootstrap a live, untimelocked router on mainnet -- this is a hard " +
-      "stop, not a warning. Unset BXR1_BOOTSTRAP_ROUTER, or deploy to arcTestnet."
+      `BXR1_BOOTSTRAP_ROUTER is set and this network's chainId is ${net.chainId}, ` +
+      `which is not allowlisted for it (only ${BOOTSTRAP_ALLOWED_CHAIN_IDS.join(", ")} ` +
+      "are -- Arc testnet and local Hardhat). Refusing to bootstrap a live, " +
+      "untimelocked router on any other chain, Arc mainnet (5042) included -- this is " +
+      "a hard stop, not a warning. Unset BXR1_BOOTSTRAP_ROUTER, or deploy to arcTestnet."
     );
   }
   if (BOOTSTRAP_ROUTER && !ethers.isAddress(BOOTSTRAP_ROUTER)) {
