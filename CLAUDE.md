@@ -8549,3 +8549,35 @@ full 24h wait → `activateRouter()`.
   no stray scratch files. The three throwaway smoke-test scripts
   (`scripts/_scratch_bxr1_*.js`) were deleted immediately after use and confirmed gone
   via `git status` before anything was staged.
+
+---
+
+# 31. PAUSED, 20 September 2026 — see `docs/PAUSE.md` for the full record
+
+⚠ **APPENDED, NOT A REWRITE**, same discipline as §12–§30. Nothing above this line was
+deleted. **The project is paused as of this section.** The full record — deployments,
+branch inventory, running infrastructure, open outreach threads, and the resume
+triggers — lives in `docs/PAUSE.md` and is not duplicated here; this section is the
+pointer and the one-paragraph summary a future session needs before opening that file.
+
+**Why:** Arc memecoin volume stayed roughly flat after the day-one spike (~$340M on
+DefiLlama, per the operator), several Arc projects exit-scammed, and sentiment turned.
+Resuming depends on the triggers in `docs/PAUSE.md` §7, left as empty placeholders for
+the operator to fill in.
+
+**State at pause, in one line per workstream** (all sourced in `docs/PAUSE.md` §2):
+LFX1 is a frozen control (byte-identical throughout the whole BXR1 pivot); BXR1's
+hardening is done and it is deployed + verified on Arc testnet (§30 above); the
+LEVERAGED registry side (`AssetKind.LEVERAGED`, §27) is done; the vault/router/keeper
+that a LEVERAGED asset actually needs is **NOT STARTED** — Phase 1's design report was
+produced as a chat-only report and never written to the repo; `app/` and `indexer/`
+remain entirely LFX1-only, confirmed by grep (`docs/PAUSE.md` §2) — the BXR1 port has
+not started.
+
+**Deployments, branches, infrastructure, outreach:** all in `docs/PAUSE.md` §3–§6,
+each with its own file:line or command-output citation. Not retyped here, to avoid this
+section silently drifting out of sync with the one place addresses are meant to live.
+
+**On resume:** read `docs/PAUSE.md` in full, starting with its §7 triggers and its §8
+note that CLAUDE.md's most recent literal "resume point" list (§24.6) predates this
+pivot and is stale as a literal to-do list.
